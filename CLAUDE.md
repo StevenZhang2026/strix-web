@@ -36,7 +36,7 @@
 - **写迁移执行器 / 配 ruff / 在容器里跑 pytest / 写"命中黑名单就报错"的断言** → 条 **32、34、35、36**
 - 想读写 `.env` / `.env.*`，或某个操作被 deny 挡住 → 条 13
 - **写任何带中文提示的 shell 脚本** → 条 14（`$VAR` 必须写成 `${VAR}`，否则 macOS bash 3.2 崩）
-- **要导出企业根 CA / 动 `STRIX_EXTRA_CA_FILE`（N2）/ 跑任何 docker 清理命令** → 读 `pitfalls/local-env.md`（**未跟踪**，只在本机）。**仓库是 public**，具名的内网信息（解密设备归属、本机另一个 compose 项目名）一律只放那里，不许搬回被跟踪的文件
+- **要导出企业根 CA / 动 `STRIX_EXTRA_CA_FILE`（N2）/ 跑任何 docker 清理命令** → 读 `pitfalls/local-env.md`（**未跟踪**，只在本机）。**仓库是 public**（`StevenZhang2026/strix-web`），具名的内网信息（解密设备归属、本机另一个 compose 项目名）一律只放那里，不许搬回被跟踪的文件；commit 身份是**仓库级**的 GitHub noreply 邮箱（刻意不用全局那个公司邮箱），别改回去
 
 **三层的归属**：建模块时**同时**建该目录的 `CLAUDE.md`，把本文件对应条目搬过去、只留一句结论 ——
 `strix_bridge/`(T13) 收 `agents.db` 非只追加 / 截图只留 3 张 / import 边界；
