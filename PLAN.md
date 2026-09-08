@@ -1,0 +1,1100 @@
+# Strix Web 控制台 — 实施计划
+
+## Context
+
+要做一个渗透测试平台，底层复用开源 AI 渗透测试 agent **Strix**（`strix-agent` 1.5.3, Apache-2.0）。
+Strix 只有命令行 + 一个 Go TUI，需要懂参数、懂 prompt、懂 Docker；它自带的 `strix view` Web 页面是
+**只读的**、**没有任何发起扫描的接口**、**不能选模型**，而且会向 `app.strix.ai` 发数据（邮箱验证门 + PDF 外发中继）。
+
+因此在 Strix 之上做一层 **Web 控制台（FastAPI + Next.js）**，交付四件事：
+
+1. **向导式发起扫描** — 填目标 + 选场景模板，不接触命令行和 prompt
+2. **实时进度可视化** — 子 agent 树、事件流、终端输出、浏览器截图、实时花费
+3. **人话版中文报告** — 分级 + 白话解释（是什么/什么后果/怎么修），可导出给领导
+4. **授权与安全护栏** — 强制授权确认、目标分类校验、云元数据地址永久禁扫、审计日志
+
+以及 **LLM 可切换、谁用谁的 Key**：使用者在界面选供应商+模型并粘贴自己的 API Key，
+Key **仅存活于内存与本次任务的子进程环境中，绝不落盘**。
+
+### 已确认决策
+
+| 维度 | 决策 |
+|---|---|
+| 部署形态 | 本地单机工具：`docker compose up` + 浏览器访问 `https://localhost`，只绑 loopback。**「本机」= 部署这套系统的那台机器**，浏览器始终在同一台机器上 —— 不做跨机器远程访问，故无登录体系的推理成立 |
+| 支持平台 | **macOS + Linux，均要求 Docker Desktop**。Windows 原生**不支持**（`C:\` 含冒号，同路径挂载不成立；请用 WSL2）。Docker Engine 待扩展，差异点见「待扩展：Docker Engine」 |
+| 机器规格 | **可变** —— 小笔记本到大服务器都要能跑。沙箱四个限额**不得硬编码**，由 `setup.sh` 按 `docker info` 的 `MemTotal`/`NCPU` 算出写进 `.env` |
+| **最小主机要求** | **Docker VM 内存 ≥ 4 GB**（推荐 8）、**Docker VM CPU ≥ 2 核**（推荐 4）、**数据目录可用空间 ≥ 10 GB**（推荐 20）、宿主物理内存 ≥ VM 配额 + 2 GB。低于阻断线 `setup.sh` 直接 `exit 1`，不给"要不要继续"的选项 —— 推导见下方「最小主机要求的推导」 |
+| 传输与证书 | nginx 反代终止 TLS，对外只开 `127.0.0.1:443`（**不监听 80**）；`openssl` 单张自签证书（**SAN + EKU=serverAuth**，10 年，私钥 0600）；信任由用户手动导入（macOS `security add-trusted-cert`；Linux `update-ca-certificates`），脚本**不**自动改信任库 |
+| **凭据形状** | **采纳 N1（2026-09-08 拍板）** —— `auth_shape` 是**独立于 provider 的一个维度**，不是它的属性；一个 handle 指向一**组**凭据（Bedrock SigV4 要 3 个值）。`POST /api/keys` 收 `auth_shape` + `secrets{env名→值}` + `params`；`/api/providers` 声明每家支持哪几种形状、每种要哪几个键；后端**只接受所选形状声明的键，多余的一律 `400 unexpected_secret_key`**。`auth_shape` 还决定模型名怎么拼（bearer 必须补 `invoke/`）。细则见 §N1 |
+| **企业 CA** | **采纳 N2（2026-09-08 拍板）** —— compose 上一对**可选**变量，运行期由操作者显式挂 CA bundle，默认关闭；**构建期烧进镜像永久禁止**。细则见 §N2 |
+| 登录 | **无登录体系** —— 单账号方案已定但**实现延后**，见文末「已决策但延后」 |
+| API Key | 仅会话内不落盘：浏览器只存 opaque handle（sessionStorage），明文 Key 只在后端内存 + 子进程 env |
+| 技术栈 | FastAPI 后端 + Next.js/React 前端 + nginx 反代，WebSocket 推增量（SSE 兜底）|
+| 易用性 | 上述四项全要 |
+
+### 本机环境（已核实）
+
+Docker Desktop `29.7.2` / Compose `v5.4.0` ✅ ｜ 宿主 Python 仅 `3.9.6`，无 brew/pipx/uv ｜ Node `v24.19.0`
+→ Strix 要求 `>=3.12`，**后端与 Strix 必须容器化**，挂 docker socket 让 Strix 创建兄弟沙箱容器（DooD）。
+
+---
+
+## Strix 集成面（已逐行读源码核实；clone 在 `/tmp/strix_src`，HEAD `0a6e8b01`, v1.5.3）
+
+### 硬约束，直接决定架构
+
+| 事实 | 出处 | 影响 |
+|---|---|---|
+| CLI **无 `--model`**，模型只能从 env 读（`STRIX_LLM`）| `cli_args.py` | 每任务独立子进程 + 独立 env 注入模型与 Key |
+| CLI **无 `--run-name`/`--output-dir`**，产物固定写 `$CWD/strix_runs/<自动名>/` | `core/paths.py:11-13` | 给每任务独立 CWD，则 `strix_runs/` 下唯一子目录即本次 run |
+| 大量模块级全局可变状态（`loader._cached`、`_SESSION_CACHE`、`report/state` 全局、`configure_sdk_model_defaults` 改 `os.environ`）| `config/loader.py:26`、`runtime/session_manager.py:34`、`config/models.py:604` | **一进程一次扫描**；同进程并发扫描会导致两个用户的 Key 互相污染 |
+| `-n` 模式下 `persist_current()` 把 **`LLM_API_KEY` 写进 `~/.strix/cli-config.json`**（0600）| `main.py:398` → `config/loader.py:56-74` | ⚠️ 直接违反"不落盘"，见下方缓解 |
+| 退出码 `0` 正常 / `1` 错误 / **`2` = 发现漏洞**（仅 `-n`）| `main.py` 尾部 | `2` 必须当成功 |
+| 失败是 `sys.exit(1)` + Rich 面板打到 stdout | `main.py`、`environment.py` | 抓 stdout/stderr，按面板标题映射成中文结构化错误 |
+| viewer 无启停接口；`POST /api/agents/steer` 仅 TUI 内进程可用 | `viewer/server.py` | v1 **不支持运行中干预** |
+
+### ⚠️ 两个未文档化但必须用的环境变量（最高风险项，已验证）
+
+**1. `STRIX_DOCKER_SANDBOX_NETWORK` —— DooD 能否正常工作的关键**
+`runtime/docker_client.py:54-66`：设了它就 `create_kwargs["network"]=<name>` 并 `pop("ports")`；
+同时 `StrixDockerSandboxSession._resolve_exposed_port`（同文件 `129-160`）改为返回**沙箱容器在该网络上的 IP**。
+**不设**它则 `ports={48080/tcp: ("127.0.0.1", None)}` 发布到 **Docker 宿主**的 loopback，
+而 SDK 默认解析返回 `127.0.0.1:<随机端口>` —— 从我们的后端容器看，`127.0.0.1` 是**它自己**，
+于是 `bootstrap_caido()` 打到死端口，**抓包代理能力静默降级**。
+→ compose 里建固定名网络 `strix_sandbox`，后端容器也加入，并设该变量。
+→ **已实测通过**（2026-09-08，M0 断言 4）：`Caido host endpoint resolved: http://172.19.0.4:48080`
+  —— 容器 IP，读源码得出的行为与实际一致。R1 关闭。**注意"后端容器也加入"是这个结论的前提**，
+  不是可选的优化；哪次重构把它丢了，这里就会静默退回 `127.0.0.1`。
+
+**2. `STRIX_RUN_ID` / `STRIX_RUN_TYPE` —— 孤儿容器回收的抓手**
+`docker_client.py:110-124` 会把它们打成容器 label `strix-run-id` / `strix-run-type`。
+我们设 `STRIX_RUN_ID=<我们的 scan_id>`，即可 `docker ps --filter label=strix-run-id=<id>` 定位回收。
+**必须回收**：`interface/cli.py` 的 SIGTERM handler 里 `sys.exit(1)` 会让 `SystemExit` 穿出 `asyncio.run`，
+`finally: await session_manager.cleanup(...)` **永远不会跑完** → **SIGTERM 会泄漏沙箱容器**。
+
+### Key 不落盘的缓解方案（已逐行验证）
+
+`persist_current()` 写的是 `_override or _DEFAULT_PATH`（`config/loader.py:59`）；`_override` 由 `--config`
+经 `apply_config_override()` 设置，调用点在 `parse_arguments()` 内（`cli_args.py:293`），
+**早于** `_bootstrap_scan()`（`main.py:445`）。所以传 `--config <tmpfs>/cli-config.json` 就能把 Key 重定向到 tmpfs。
+`validate_config_file()`（`interface/utils.py:1679-1706`）要求该文件**必须已存在、后缀 `.json`、含 `env` 对象**
+→ 预先写入 `{"env": {}}`。
+
+**但 `--config` 单独不够** —— 还有 5 处 `Path.home()/".strix"/*`：
+`update-check.json`、`viewer-auth.json`、`mcp-servers.json`、`subscription-auth.json`、telemetry `.seen`。
+**两层都做**：每任务独立 `HOME=<tmpfs>/scan-<id>/home` **且** 显式 `--config`（可审计、且能挡住未来新增的写路径）。
+
+另注：`config/models.py:625-641` 的 `_mirror_api_key_to_provider_env()` 会把 Key 再 `setdefault` 到
+`ANTHROPIC_API_KEY` 等供应商变量里 —— 影响 `/proc/<pid>/environ` 这一行的风险评估（见泄漏矩阵 #12）。
+
+### 可复用的只读投影层（**注意导入路径**）
+
+- `from strix.interface.tui.backend.live_view import TuiLiveView` —— **子类**，才有游标 API
+  `event_snapshot(limit=)` / `event_changes_since(cursor)`（`backend/live_view.py:120,124`）。
+  父类 `strix/interface/tui/live_view.py:20` **只有** `.agents` / `.events` / `hydrate_from_run_dir()`。
+- `from strix.interface.viewer.transcript import read_run_summary, read_vulnerabilities, read_report_markdown, severity_counts, primary_target`
+- **不要** import `strix.core.*` / `strix.runtime.*` 进 web 进程 —— 会连带把 agents SDK、litellm 和
+  `configure_sdk_model_defaults` 的 `os.environ` 改写拖进来。用 import-linter 契约强制。
+
+### ⚠️ `agents.db` 不是只追加的 —— 朴素游标增量会出错
+
+`core/sessions.py:101-153` 的 `_rewrite_session()` 先 `clear_session()` 再 `add_items(rebuilt)`，
+**行被删掉重新插入、id 重排**。触发者：
+- `llm/compaction.py` 上下文压缩 —— **默认开启**（`STRIX_CONTEXT_AUTO_COMPACT=True`）
+- `sessions.py::enforce_image_budget` —— 只保留最近 **3** 张截图（`STRIX_MAX_CONTEXT_IMAGES=3`），
+  更老的替换为字面量 `[older screenshot elided to bound context memory]`
+
+因为 `TuiLiveView` 的事件 id 是按读取顺序生成的，压缩后 **id 会重排、已推送的事件会被破坏性改写（截图消失）**。
+Strix 自己的 viewer 也有这个问题，只是它 500ms 全量重渲染盖过去了。
+→ 我们需要 **epoch + 重同步检测 + 自己的只追加镜像**（见"实时流"）。
+三个 elision 字面量在 `sessions.py:60-62`，用于识别"这是压缩而非乱序"。
+
+### ✅ 截图不用 docker cp
+
+`tui/live_view.py:507-527` 的 `_normalize_image_result()` / `_image_url_from_result()` 直接产出
+`{"type":"image","image_url":"data:image/png;base64,..."}`，**截图以 data URL 内联在事件里**。
+`/workspace/.agent-browser-screenshots/` 只是沙箱内部约定，无需从宿主访问。
+代价：只有最近 3 张 —— **首次见到就落地到我们自己的 media 目录**，压缩后依然能显示。
+
+### DooD 路径别名：完整触发点
+
+任何交给 `docker.containers.create(mounts=...)` 的路径必须在**宿主**上有效：
+
+| 触发点 | 路径来源 | 由什么触发 |
+|---|---|---|
+| `build_bind_mounts` | 解析后的本地目录 | `-t ./dir` |
+| `build_bind_mounts` | `$TMPDIR/strix_repos/<run>/` | `-t https://github.com/...` |
+| `_metadata_mounts` | `<tree>/.git` 等（只读覆盖）| 带 git 的本地目标 |
+| `stage_api_specs` | `$TMPDIR/strix_api_specs/<run>` | `-t ./openapi.yaml`、`postman://` |
+| `build_extra_file_bind_mounts` | `<cwd>/strix_runs/<run>/.state/extra_files/<i>/` | `--workspace-file` |
+
+→ 解法：**同路径挂载** `${STRIX_HOST_DATA_DIR}:${STRIX_HOST_DATA_DIR}`，且 `TMPDIR` 也指到该卷下。
+**不能用 named volume**（其宿主路径在 Docker Desktop VM 内，两侧不一致，会静默重现此 bug）。
+
+### 其他需要关掉的外联
+
+`STRIX_TELEMETRY=false`（PostHog `us.i.posthog.com` + Scarf）、`STRIX_NO_UPDATE_CHECK=1`（GitHub/PyPI）。
+遥测本身不发 Key（只发 model/scan_mode 等元数据），但本地工具应默认静默。
+`LITELLM_LOG=ERROR`；**绝不设 `STRIX_DEBUG`**（会把 `strix.log` 拉到 DEBUG，是泄漏面 #5）。
+
+### 运行产物（`strix_runs/<run>/`，每次有新发现整体重写，可实时读）
+
+`run.json`（status/targets/scan_mode/`llm_usage`含 cost/scan_results）、`penetration_test_report.md`、
+`vulnerabilities.json`（+`.csv`+ 单条 md）、`findings.sarif`、`coverage.json`（**"哪些没测"的依据，报告里很值钱**）、
+`strix.log`、`.state/agents.json`、`.state/agents.db`（SQLite WAL，表 `agent_messages`）。
+
+---
+
+## 架构
+
+```
+浏览器 https://localhost ── sessionStorage 只存 opaque vault_handle
+   │  REST + WebSocket(wss)；Key 只经 JSON POST body
+   ▼
+nginx (TLS 终止，只绑 127.0.0.1:443，不监听 80)
+   ├ /        ──▶ web (Next.js，不发布端口 —— Key 不经过它)
+   └ /api,/ws ─────────────────────▶  api (FastAPI, python:3.12 + docker-cli + strix-agent==1.5.3)
+                                       ├ KeyVault      内存 {handle→SecretStr}，TTL，绝不持久化
+                                       ├ TargetGuard   解析/规范化/DNS/分类/白名单（纯函数，好测）
+                                       ├ ScanLauncher  argv + env + tmpfs HOME + 预置 --config + cwd/TMPDIR
+                                       ├ ScanSupervisor asyncio 子进程，退出码→中文，优雅停止
+                                       ├ RunProjector  TuiLiveView 重投影 + epoch 重同步
+                                       ├ EventMirror   只追加镜像 + 截图落地到 media/
+                                       ├ LogTailer     strix.log + 子进程输出，脱敏
+                                       ├ Reaper        按 label 清理孤儿沙箱
+                                       ├ Translator    中文白话报告（用用户 Key，httpx 直连）
+                                       └ SQLite console.sqlite —— 任何表都没有 Key 字段
+   │ subprocess: strix -n -t <target> -m <mode> --max-budget-usd N --instruction-file F --config <tmpfs>
+   │ env: STRIX_LLM / LLM_API_KEY / STRIX_RUN_ID=<scan_id> / STRIX_TELEMETRY=false
+   │ cwd=$DATA/scans/<id>   HOME=<tmpfs>/scan-<id>/home   TMPDIR=$DATA/scans/<id>/tmp
+   ▼
+strix 进程 ──docker.sock──▶ 沙箱（宿主兄弟容器, strix-sandbox:1.3.0, NET_ADMIN/NET_RAW, Caido:48080）
+                              两者都在固定名网络 strix_sandbox 上 → api 可达沙箱 IP:48080
+```
+
+### 为什么选 subprocess CLI 而非内嵌 `run_strix_scan()`
+
+1. **内嵌的工作量远超签名所示**：`run_strix_scan` 不做目标推断、仓库克隆、spec 暂存、diff scope、
+   run 记录持久化、`ReportState` 接线 —— 要自己重实现 `build_targets_info` + `prepare_run` + `run_cli`
+   的 ReportState/signal/atexit 块，约 200 行 Strix 内部逻辑从此由我们维护。
+2. **一进程一扫描对内嵌是致命的**：全局状态 + `os.environ` 改写意味着同进程两个并发扫描
+   会**互相污染模型配置和 API Key** —— 这是跨用户密钥泄漏。最终还是要 fork，那就等于做了个更差的 `strix -n`。
+3. **Key 卫生更好**：Key 只在子进程 env 和堆里；uvicorn 进程从不 import litellm、从不设 `OPENAI_API_KEY`。
+4. 唯一真损失是**亚秒级 token 流**（`response.output_text.delta` 仅在内存、从不持久化）。
+   一个 40 分钟的渗透测试，整条消息级 ~1s 延迟完全够用。
+
+**v1 只支持 URL / 域名 / IP 目标。** 理由不是 DooD（同路径挂载已解决），而是本地目录被
+**读写**挂载进一个持有 `NET_ADMIN` 的自主 agent 容器（`session_manager.py:62` `read_only: False`）——
+交给非专业人员用是最大的脚下之雷。v2 开放白盒源码扫描时只需改 UI + 护栏，基础设施已就位。
+**例外**：API 场景允许上传 OpenAPI spec 走 `--workspace-file`（**只读**挂载，安全）。
+
+---
+
+## 仓库结构（全新创建）
+
+```
+Strix/
+├── README.md  Makefile  setup.sh          # setup.sh 校验并生成 .env（含路径合法性检查）
+├── docker-compose.yml  docker-compose.override.example.yml  .env.example
+├── docs/{SECURITY-zh.md,OPERATIONS-zh.md,STRIX-INTEGRATION.md,ARCHITECTURE.md}
+│   # ARCHITECTURE.md 是本文件的**简明提取**（架构图 / 数据流 / 目录职责），不引入新决策；冲突时以本文件为准
+├── pitfalls/history-pitfalls.md            # 二层：低频/特定场景的实测坑，按需读取，不被 @import
+│   # docs/ 是给人看的中文交付文档；pitfalls/ 是 agent 的工作记忆。受众不同，故分两个根
+├── backend/
+│   ├── Dockerfile              # python:3.12-slim + docker-cli + strix-agent==1.5.3 --only-binary=:all:
+│   ├── pyproject.toml  importlinter.ini
+│   └── app/
+│       ├── main.py  settings.py  db.py  models.py  logging_setup.py
+│       ├── migrations/{001_init.sql,002_report_translations.sql}
+│       ├── routes/{health,system,providers,keys,templates,targets,allowlist,scans,stream,reports,audit}.py
+│       ├── services/
+│       │   ├── key_vault.py        target_guard.py    allowlist.py
+│       │   ├── scan_launcher.py    scan_supervisor.py run_discovery.py
+│       │   ├── run_projector.py    event_mirror.py    log_tailer.py   channel.py
+│       │   ├── reaper.py           docker_probe.py    llm_client.py
+│       │   └── translator.py       exporter_html.py   exporter_docx.py  audit.py
+│       └── strix_bridge/           # 唯一允许 import strix.* 的地方（import-linter 强制）
+│           ├── projection.py  paths.py  catalogue.py
+│   └── tests/{test_target_guard,test_key_hygiene,test_scan_launcher,test_projector_resync,
+│              test_no_secret_columns,test_strix_contract}.py + fixtures/run_dirs/
+└── frontend/  (Next.js 15 + React 19 + Tailwind + zustand + react-query)
+    ├── messages/zh-CN.json         # 全部用户可见文案集中在此
+    └── src/{app,components/{wizard,live,findings,report,expert},lib}
+```
+
+`data` 目录**不放在仓库里** —— 放在 `.env` 指定的绝对宿主路径（同路径挂载要求）。
+`setup.sh` 拒绝 macOS 未共享的路径，也拒绝 `~/.config`、`~/.ssh`、`~/.aws`、`~/.docker`、`~/.kube`
+下的路径（`interface/utils.py:1413` 的 `check_mountable_dir` 会拒绝挂载这些）。
+
+---
+
+## Key 不落盘：泄漏矩阵
+
+| # | 泄漏面 | 对策 |
+|---|---|---|
+| 1 | 我们的 DB | **任何表都无 Key 字段**；`db.assert_no_secret_columns()` 启动时遍历 `PRAGMA table_info` 拒绝可疑列名；CI 有对应测试。测试账号密码**只**进 tmpfs 上的 instruction 文件，DB 只存 `instruction_sha256` |
+| 2 | `~/.strix/cli-config.json`（`persist_current()`）| 每任务 `HOME=<tmpfs>/scan-<id>/home` **且** `--config <同目录>/cli-config.json` 预置 `{"env":{}}`；tmpfs 为 `/run/strix`（`noexec,nosuid,size=16m,mode=0700`）；`finally` 里 `rmtree` |
+| 3 | 我们的应用日志 | 全程 `SecretStr`；脱敏挂在 **root handler 的 Formatter** 上：正则（`sk-`/`sk-ant-`/`AIza`/`PMAK-`/`AKIA`/`ASIA`/`ABSK`）**外加 KeyVault 中每个活跃凭据里的每一个值的精确子串**（一个 handle 可能有 2–3 个值，见 §N1）—— 覆盖我们不认识的供应商格式。**本行原写"root logger 挂 `RedactionFilter`"，2026-09-08 T2 实测证明那样静默无效**（logger 的 filter 不作用于子 logger 传播上来的记录，而我们的日志全是 `app.*`）；选 Formatter 而非 Filter 是因为它是唯一的序列化出口，`msg`+`args`+`formatException()` 的整条 traceback 一次覆盖。另需显式把 `uvicorn`/`uvicorn.error`/`uvicorn.access` 的 `propagate` 改回 `True` 并清掉它们自带的 handler，否则 uvicorn 打的东西完全不脱敏 |
+| 4 | uvicorn access log | Key **只**出现在 JSON POST body，绝不进 query/path；生产 `--no-access-log`；请求体大小上限防 413 回显 |
+| 5 | `strix.log` | `_NOISY_LIBS` 已被 Strix 压到 WARNING，除非设 `STRIX_DEBUG` → **绝不设**；此外 `LogTailer` 在推给前端和写镜像**之前**跑同一个脱敏过滤器 |
+| 6 | 遥测外发 | `STRIX_TELEMETRY=false`、`STRIX_NO_UPDATE_CHECK=1`；设置页只读展示"遥测：已关闭" |
+| 7 | litellm 调试 | `LITELLM_LOG=ERROR`；从不设 `set_verbose` |
+| 8 | 异常栈 / 500 body | 全局异常处理器返回 `{code, trace_id}`，traceback 走脱敏后再记；**Strix 的 `LLM CONNECTION FAILED` 文本也要脱敏后再展示**（litellm 的鉴权错误有时带 Key 尾部）|
+| 9 | 沙箱容器 env | **已验证安全**：`session_manager.create_or_reuse` 显式构造 `Environment`，只有 `PYTHONUNBUFFERED`/`HOST_GATEWAY`/代理变量/`NO_PROXY`/可选 UID-GID，**不转发任何 LLM env** → `docker inspect 沙箱` 干净（验收 step 9 实测）|
+| 10 | 我们容器的 env / compose | Key **绝不**进 compose、`.env`、镜像；只在运行时经 HTTP 到达内存与子进程 |
+| 11 | 前端持久化 | `POST /api/keys` 换回 opaque `vault_handle`，**只**把 handle 存 `sessionStorage`（关标签即失效）；不用 localStorage、不进 cookie、不进 URL；输入框 `type=password` + 随机 `name` 破自动填充；React state 在 POST 后 `finally` 清空 |
+| 12 | 子进程 `/proc/<pid>/environ` | **设计使然、不可消除**（Strix 只收 env，且 `_mirror_api_key_to_provider_env` 还会复制到供应商变量）。边界：仅该容器内 root 可读、`no-new-privileges`、进程随任务结束。**Key 不进 argv**（有断言测试，`ps` 干净）。写入 `docs/SECURITY-zh.md` 作为已知可接受属性 |
+| 13 | 网络传输 | 浏览器 → nginx **全程 TLS**（自签证书，SAN+EKU）；Key 只在 JSON POST body，绝不进 query/path。反代**不经 Next.js** → Node 进程不再持有 Key。**已知且接受的残余风险**：`nginx → api` 走 Docker 桥网**明文**，有 `docker.sock` 权限者（本机管理员）可被动抓包拿到 Key。判断依据：仅本机使用、其他本地账号非对抗性。**必须写进 `docs/SECURITY-zh.md`**，不得让人误以为"上了 HTTPS 所以 Key 全程加密" |
+| 14 | **TLS 私钥本身**（2026-09-08 T4 落地时发现，原矩阵漏项）| `${DATA}/tls/key.pem` 是 `0600`、以 `:ro` 挂进 nginx。**但残余风险不在 nginx 一侧**：`${DATA}` 整个目录以**读写**方式挂进以 `user: "0:0"` 运行的 `api` 容器 —— **`api` 被拿下即等于私钥泄漏**，而 `api` 恰恰是攻击面最大的那个容器（它跑 LLM 驱动的子进程）。不修的理由：能拿到 `api` 内 root 的人本来就已经能读 `docker.sock`（≈ 宿主 root），私钥不是那时最值钱的东西 —— 这是**风险不升级**，不是"私钥安全"。补偿：证书只签 `localhost`/`127.0.0.1`（SAN 里没有别的名字，偷去了也冒充不了任何真实域名）、`CA:FALSE`（不能拿它给别的域名签证书）。**写进 `docs/SECURITY-zh.md`；将来若把 `${DATA}` 收成只读或换非 root 用户，重新评估这一行** |
+| 15 | **nginx 的 error log**（同上，T4 实测）| `access_log` 用 `$uri` 只管住访问日志；**error log 会打完整 `$request` 与上游 URL（含 query），且格式不可配置**（`pitfalls` 条 30）。所以"敏感值不进日志"在这一层**没有**结构性保证，靠的是后端侧"Key 只经 JSON POST body、绝不进 query/path"这条约束。**验收 #11 扫日志必须把 `nginx` 的 stderr 一起扫**，只扫 `api` 是漏的 |
+
+**KeyVault 生命周期**：`IDLE_TTL=8h` / `HARD_TTL=24h` / 60s sweeper；`ref_count` 跟踪活跃扫描与报告任务；
+`DELETE /api/keys/{h}` 立即清除。`api` **必须 `--workers 1`**（vault 是进程内 dict，多 worker 会随机 404）——
+启动时校验 `WEB_CONCURRENCY`。不做 `mlock`（容器无 `IPC_LOCK` 会失败，且是虚假安全感）。
+
+**`api` 重启后**：所有 handle 消失。运行中的扫描继续（子进程已持有 Key），但**续跑与报告翻译需重新输入 Key** ——
+这是正确且诚实的行为。`POST /api/scans/{id}/resume` 必须带 `vault_handle`，失效则 `409 key_required`，
+UI 弹窗预填 provider/model、Key 框留空，文案说明"我们从不保存密钥"。
+
+---
+
+## M0 带出的两条产品需求（**N1 与 N2 均已于 2026-09-08 拍板采纳，并入 §已确认决策**）
+
+两条都不是"开发机不便"，而是**实测发现的设计缺口**。出处见 `pitfalls/history-pitfalls.md` 条 19。
+
+### N1. `vault_handle` 必须指向一**组**凭据，不是一个字符串　✅ **已采纳（2026-09-08）**
+
+> 本节原标题是 `key_handle`。**该字段已于 2026-09-08 全面改名为 `vault_handle`（DB 列与 HTTP 字段统一）** ——
+> `key_handle` 这个名字来自"一个供应商 = 一个 Key 字符串"，正是本节推翻的那个假设。
+> 顺带也解开了"黑名单必须含 `key`、又不许开豁免"的死结（见 §数据模型）。
+
+原设计假设"一个供应商 = 一个 Key 字符串"。**Bedrock 打破了这个假设，而且是打破两次** ——
+同一个供应商有**两种互斥的凭据形状**，所以形状不是 provider 的属性，是一个独立维度：
+
+| 形状 | 要注入的 env | 值的个数 | 模型名约束 |
+|---|---|---|---|
+| `single`（Anthropic / OpenAI / Gemini / DeepSeek…） | `LLM_API_KEY` | 1 | — |
+| Bedrock SigV4 | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION_NAME` | 3 | `bedrock/<model>` |
+| Bedrock API key（bearer） | `AWS_BEARER_TOKEN_BEDROCK` + `AWS_REGION_NAME` | 2 | **必须** `bedrock/invoke/<model>` |
+
+**最后一列不是可选项，是硬约束**：bearer token 在 litellm 里的支持是**分路由的**。
+converse 路由（`bedrock/<model>`）在 `converse_handler.py:334` 无条件先取 SigV4 凭据、
+再把 `credentials.access_key` 塞进 rust bridge，只给 bearer 时那里是 `None` → 直接崩，
+**走不到**认 bearer 的 `_sign_request`。invoke 路由（`bedrock/invoke/<model>`）不碰 credentials，
+签名走的正是认 bearer 的那条。已实测（详见 `pitfalls` 条 22），且 `completion_cost`
+对两条路由算出**完全一样**的值 —— 预算护栏不受影响，但**任何换路由的改动都必须重验这一点**。
+→ 所以 `auth_shape` 不只决定"要哪几个 secret 键"，还决定**模型名怎么拼**。
+   `ScanLauncher` 组 argv 时按 shape 补 `invoke/` 段，不要求用户自己记。
+
+**而 `invoke/` 段又反过来强制一个 env**：Strix 的 prompt caching 只在 converse 路由上成立
+（它注入的 `cache_control_injection_points` 带 `{"location":"tool_config"}`，只有
+`converse_transformation.py` 消费；invoke 路由原样塞进请求体 → Bedrock `400`）。
+Strix 自己**想**防住（`core/inputs.py:265-282` 的 docstring 明写"未映射的 Bedrock 模型一个注入点都不给"），
+但 `config/models.py:857` 的 `_prompt_cache_name_candidates` 只剥 `litellm/` 和 `bedrock/`、**不剥 `invoke/`**，
+第 2、3 个候选名照样命中缓存能力表 → 判定返回 `True`、注入照旧。已实测，详见 `pitfalls` 条 23。
+出路是 Strix 自带的一等公民开关 **`STRIX_PROMPT_CACHE=false`**（`config/settings.py:51`，默认 `true`），
+不需要打补丁。关掉后 `extra_args` 只剩 `{'timeout': …}`，无 converse 专用参数残留；
+成本计算**逐位相同**（`report/state.py:699` 的候选名最后一个天然剥掉 `invoke/`），预算护栏不受影响。
+→ **判据是路由，不是 auth_shape**：`ScanLauncher` 按"模型名里含 `invoke/`"决定是否注入这个 env，
+   而不是按"用的是 bearer"。SigV4 用户若自己指定了 invoke 路由，同样要关。
+
+两种 Bedrock 形状**必须二选一**：`litellm/llms/bedrock/base_aws_llm.py:1554-1564` 先取
+`AWS_BEARER_TOKEN_BEDROCK`，有值就发 `Authorization: Bearer …` 并**整段跳过 SigV4**。
+同时给两套会让 litellm 静默忽略一套，失败时归因不了 —— UI 必须让人明确选一种，不能两个框都摆着。
+
+Strix 侧帮不上忙：`_mirror_api_key_to_provider_env`（`config/models.py:590-592`）只填名字以
+`_API_KEY` 结尾的变量，`AWS_*` 四个都不符合。好在 `LLM_API_KEY` 对 Strix 是**可选**的
+（`interface/environment.py:43-44` 进的是 `missing_optional_vars`，只有 `STRIX_LLM` 必填），
+直接喂 `AWS_*` env 就能跑（M0 已实测 SigV4 路径打到 AWS 真实响应）。
+顺带排除一个虚惊：`config/models.py:712` 的 `api_key=llm.api_key or "not-needed"` 在
+`_register_openai_client_with_headers` 里，只有设了 `extra_headers` 才会走到，不碰 Bedrock 路径。
+
+后果，逐条落到实现上：
+
+- `POST /api/keys` 的 body 从 `api_key: SecretStr` 改为 `auth_shape: str` +
+  `secrets: dict[str, SecretStr]`（键就是要注入子进程的 env 变量名）+ 非机密的
+  `params: dict[str, str]`（区域等）。**每个供应商声明它支持哪几种 auth_shape、每种要哪几个键**，
+  由 `/api/providers` 一并返回，前端据此渲染 1／2／3 个输入框。
+  后端只注入所选 shape 声明的那几个键，**多余的键一律拒绝**（`400 unexpected_secret_key`）——
+  否则用户把 bearer 和 SigV4 都填上，会撞进上面那个静默忽略。
+- `RedactionFilter` 必须把这一组里的**每个值**都注册为精确子串 —— 只注册"主 Key"会漏掉 secret。
+- `label` 的脱敏展示要按值分别算（`AKIA…7Q4F` / `…` 各一条），不能只显示一条。
+- 泄漏矩阵每一行的判定对象从"Key"变成"这一组值"；M0 的探测脚本已按
+  `SEC_HARD`（真机密）/ `SEC_SOFT`（半公开标识符，如 `AKIA…`）分级扫描，两级都要报。
+- `db.assert_no_secret_columns()` 的列名黑名单不变（本来就是按名字拦），但要确认
+  `aws`/`access`/`credential` 这类词也在名单里，否则 `aws_access_key_id` 列能溜过去。
+- **成本要如实告知，而且现在有数字了**（M0 第 3 次运行实测）：bearer 形状被迫走 invoke 路由、
+  进而被迫关掉 prompt caching。实测 13 次请求就烧掉 `$2.0572`，`cached_tokens: 0` /
+  `cache_write_tokens: 0`，输入 603K token（每次约 45K，同一份 system prompt + 历史重发 13 遍），
+  **在 juice-shop 上一无所获**。Bedrock 缓存读取是原价的 1/10 → 开着缓存这笔钱大致是 1/4～1/6。
+  → **SigV4 不是"也行"，是便宜 4～6 倍。** UI 在选 Bedrock API key 形状时必须给出这个量级对比，
+    并说明 SigV4 保留缓存。这是真实取舍，不许悄悄替用户决定；也不许只说"可能更贵"这种没信息的话。
+  → 同时意味着**默认预算 $2 对 bearer 形状是不够的**，向导的预算默认值要按形状区分。
+
+### N2. 运行期由操作者挂载 CA bundle —— **绝不**烧进镜像　✅ **已采纳（2026-09-08）**
+
+本网络实测：`api.anthropic.com` / `api.openai.com` / `openrouter.ai` / `api.deepseek.com`
+**四家全被同一台企业防火墙解密**，容器内没有那张企业根 CA，TLS 握手就失败，与凭据无关。
+这不是本开发机的怪癖 —— **任何处在企业 TLS 检查后面的用户都会撞上，且现有设计下无解**。
+
+所以要留一个口子：`docker-compose.yml` 上一对**可选**变量，
+`STRIX_EXTRA_CA_FILE`（宿主 PEM 绝对路径，默认空）→ 以 `:ro` 挂进 `api` 容器，
+并设 `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` 指向它。默认关闭；`setup.sh` 不自动探测、不自动填。
+
+**边界必须写清，否则这个口子会变成条 15 那个被否掉的方案**：
+
+- 只允许**运行期由操作者显式挂载**。构建期把任何 CA 烧进镜像 = 把一张能签任意域名的证书
+  焊进交付物，**永久禁止**（条 15 的裁定不变）。运行期挂载与构建期烧进去是两件不同的事。
+- 启用它意味着"凭据与全部 LLM 流量明文过一遍企业解密设备"。这必须在 UI 上**显式警示**并
+  写进 `docs/SECURITY-zh.md` 的已知风险，不能只当一个安静的配置项。
+- 系统自检（`GET /api/system/status`）要报出"额外 CA：已启用/未启用"，让人一眼看见自己在哪种模式。
+
+### 由此确定的开发期取舍（不是产品需求，只是本机怎么干活）
+
+本网络未被解密的只有 **AWS Bedrock** 与 **Google Gemini**。开发与 M0 走 Bedrock ——
+它后面就是 Anthropic Claude，Strix 的 system prompt 与 ~90 个 skill 都是按 Claude 调的，
+行为最接近设计意图。已用**假凭据**实测到 AWS 返回真实 HTTP 响应
+（`BedrockException Invalid Authentication - security token … is invalid`），
+证明 TLS 与请求投递都通，只差真凭据。
+
+---
+
+## 实时流设计（epoch + 重同步 + 只追加镜像）
+
+每个扫描一个 `ScanChannel`（**一个轮询器、N 个 WebSocket 订阅者**，因为重投影是 O(整条 transcript)）：
+
+```
+每 tick:
+  1. stat() run.json / .state/agents.json / .state/agents.db / vulnerabilities.json
+     四者 (mtime,size) 都没变 → 整轮跳过（空闲时约 4 次系统调用）
+  2. view = backend.live_view.TuiLiveView(); view.hydrate_from_run_dir(run_dir)
+  3. agents 差分 → 4. events 差分（见下） → 5. read_run_summary → status/cost
+  6. read_vulnerabilities 按 id 差分 → 7. read_report_markdown 变了才推
+```
+
+**差分与重同步**（应对 `agents.db` 重写）：维护 `_sent{event_id→fingerprint}`、`_order[]`、`_epoch`。
+`shrank`（变短）/ `reordered`（前缀不稳定）/ `mutated`（fingerprint 变而 `version` **没**递增）任一成立
+→ `_epoch += 1` 并整体 `events.snapshot`。
+`version` **递增**且 `data.status` 从 `running→completed/failed` 是**正常更新**，发 `event.update`。
+识别 `sessions.py:60-62` 那三个 elision 字面量 → 发 `compaction_notice` 而非吓人的全量重同步，
+**并继续从镜像提供那张截图**，用户不会眼前一黑。这是我们比 Strix 自带 viewer 强的地方。
+
+**EventMirror（只追加真源）**：每个 snapshot/delta/update 写 `scan_events(scan_id, epoch, seq, ...)`；
+`data:image/...;base64` 解码一次落到 `<data>/scans/<id>/media/<sha256>.png`，事件里改写成
+`/api/scans/{id}/media/<sha>.png`。收益：WS 帧小、截图能抗 elision、报告可内嵌、重连可从镜像回放。
+
+**自适应轮询**：running 且近 3 tick 有变化 → 250ms；空闲 ×2 退避到 2s 上限；
+`read_run_summary(...)["finished"]` 为真且子进程已退出 → 停。
+
+**日志**：按字节偏移续读 `strix.log`，按 `telemetry/logging.py:47` 的格式解析成
+`{ts, level, agent_id, logger, msg}`；`--resume` 是 append 模式所以偏移跨续跑仍有效；默认只推 `INFO+`。
+**用户看到的"终端"其实不是 `strix.log`**，而是 `tool_name == exec_command` 事件的 `args.command` / `result`
+—— 复用 `tui/backend/projection.py::sanitize_terminal_text` 去 ANSI/控制字符。
+
+**WS 信封**：`{v, epoch, seq, type, ts, payload}`，`type ∈ phase|agents|event.add|event.update|
+events.snapshot|vuln.add|summary|log|report|report.progress|compaction_notice|error|done`。
+客户端 `{"type":"hello","resume_from":{epoch,seq}}`，epoch 匹配则从镜像回放，否则给新 epoch 的全量快照。
+
+---
+
+## 向导 → CLI 映射
+
+UI 与帮助全中文；`--instruction` 正文用**英文**（Strix 的 system prompt 与 ~90 个 skill 都是英文）。
+模板存 `config/templates/*.yaml`，改模板不用改代码。因为 `scan_config["skills"]` 虽被引擎读取但
+CLI 从不填充（`interface/cli.py` 构造 `scan_config` 时没有 `skills` 键），改为在指令里点名 skill，
+由 agent 自己的 `load_skill` 工具加载。
+
+所有模板追加统一尾巴：要求每个 finding 的 `description`/`impact`/`remediation_steps`
+**中英双写（中文在前）**，并禁止 DoS / 资源耗尽 / 数据破坏 / 账号锁定类测试。
+（注意：护栏**不能**依赖 prompt 文本 —— 权威 scope 由 `build_scope_context` 注入，用户指令
+按 `_compose_root_instructions_override` 明确"不得扩大或削弱授权目标约束"。）
+
+| 模板 | `-m` | 预算/轮数 | 指令要点 |
+|---|---|---|---|
+| 快速体检 | `quick` | $5 / 60 | 限时分诊；只测 6 类高影响可直接利用的问题；跳过子域枚举与目录爆破 |
+| 全面体检（推荐）| `standard` | $25 / 200 | 先枚举功能与角色，再系统性走 OWASP Top 10 全入口；边走边记 coverage |
+| 深度审计 | `deep` | $80 / 500 | 按功能域派生子 agent；把发现串成完整攻击链而非孤立原语 |
+| 只测登录与权限 | `standard` | $15 / 120 | 登录/注册/找回/改邮箱/MFA/会话/JWT/水平与垂直越权；**不**花轮数在 XSS 与注入上；只用自建账号，绝不锁死真实账号（UI 收集测试账号并附到指令）|
+| API 接口测试 | `standard` | $25 / 200 | 上传 OpenAPI/Swagger/Postman → `--workspace-file <staged>:specs/<name>`（只读）；枚举 spec 每个 operation；额外报告"spec 里有但不可达"与"未文档化但存在"的接口 |
+| 上线前复检 | `standard` | $12 / 100 | 针对改动说明做回归；已报问题要**实测**是否真修好（v2 加 `--scope-mode diff --diff-base`）|
+
+**预算强制**：Strix 的 `--max-budget-usd` 本是可选（默认无限）。我们**强制必填**，
+`ScanLauncher` 缺它就拒绝构造 argv，`CONSOLE_MAX_BUDGET_CEILING_USD`（默认 100）兜底。
+Strix 在预算/轮数的 70/85/95% 会提醒 agent 收尾（`core/hooks.py:26-29`），所以上限是**优雅收尾不是硬杀**
+—— UI 要写清"不会中途丢失结果"。
+
+"高级模式"折叠面板暴露：scan_mode 覆盖、预算、轮数、`STRIX_REASONING_EFFORT`、追加自由文本、
+以及按 skill 勾选自组场景 —— 全部汇入同一个 argv 构造器。
+
+---
+
+## 护栏
+
+**解析规范化**（`target_guard.py`，纯函数好测）：拒绝含空白/`;`/反引号/`$(`/不可打印字符；
+无 scheme 补 `https://`；只接受 http/https；**拒绝带 `user:pass@`**（Strix 的 `infer_target_type`
+会把它重分类成 *repository*！）；拒绝 `.git` 结尾路径（`_is_http_git_repo` 会发真实网络请求）；
+host 小写 + IDNA 编码（让 `例子.中国` 变 punycode，同形字攻击可见）；
+`getaddrinfo` 解析 A+AAAA 并对**每个**地址分类，主机名与解析结果一起入审计（这是 DNS rebinding 的可见记录）。
+
+**分类与策略**（不是一张平铺黑名单）：
+
+| 类别 | 例子 | 策略 |
+|---|---|---|
+| `metadata` | `169.254.169.254`、`fd00:ec2::254`、`metadata.google.internal`、`100.100.100.200`（阿里云）| **永久硬拦，不可覆盖** |
+| `loopback` | `127.0.0.0/8`、`::1`、`localhost` | 默认拦；勾"测试本机服务"可放行。UI 必须解释：Strix 会把它改写成 `host.docker.internal`（`scan_setup.py:51`），测的是**你这台电脑**，不是容器内部 |
+| `private` | RFC1918、`fc00::/7`、`.local`/`.internal`/`.lan`、单标签主机名 | **可覆盖 —— 这是常见的合法场景**，硬拦会砸掉主要用例。需勾选内网确认 + 标准授权声明，并留痕 |
+| `carrier/reserved` | `100.64.0.0/10`、`192.0.2.0/24`、组播、广播 | 拦，只能从白名单文件放行（UI 不给） |
+| `public` | 其余 | `enforce` 模式下**必须**命中白名单 |
+| `mixed` | 同一主机名同时解析到公网和内网 | 拦，`code: split_horizon`（这就是 rebinding 的形状）；要测须直接填字面 IP |
+
+**白名单** `${DATA}/config/allowlist.yaml`，按 mtime 热重载，Pydantic 校验，UI 可编辑且每次编辑入审计：
+`mode: enforce|advisory`、条目含 `label/owner/authorization_ref/expires/hosts（单层通配）/cidrs/
+allow_private/allow_loopback/max_budget_usd/forbidden_paths`。最长后缀优先，显式主机胜过通配。
+未命中 → `409 not_in_allowlist` + 一键"添加到授权清单"。
+
+**强制授权声明**（向导第 4 步，不可跳过、不可预填）：
+1. 展示**规范化后**的目标与解析出的 IP（punycode 与 split-horizon 因此可见）
+2. **三个独立必勾**复选框：拥有或已获书面授权 / 非他人生产系统或已知情同意 / 理解会真实发起攻击性请求
+3. **逐字输入**注册域名（或字面 IP）；规范化后比对；**期望字符串灰显在输入框旁边而不是 placeholder 里**
+   （某些浏览器 placeholder 可被复制，放里面就失去意义）；多目标另加"以上 N 个均已授权"
+4. 操作人姓名 + `authorization_ref`（命中白名单时从条目预填）
+5. 授权记录在**启动子进程之前**、与 `scans` 行同一事务写入 `authorizations` + `audit_log`；
+   `scans.authorization_id` 是 **NOT NULL** —— 这条 DB 约束让"误扫"在结构上不可能，而不是靠 UI 自觉
+
+**服务端全部重校验**（UI 不可信），并在启动时**重新解析 DNS** 与声明时的结果比对，变了就 `409 dns_changed`。
+
+**并发上限** `CONSOLE_MAX_CONCURRENT_SCANS` 默认 **1**（一次扫描就是一个 Kali 沙箱，笔记本吃不住三个）。
+
+**审计**：`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 镜像（DB 丢了也在、可 grep）。
+事件含 `allowlist.changed`/`target.rejected`/`authorization.affirmed`/`scan.launched`（**含完整 argv 与
+env 变量名，值脱敏**）/`scan.stopped`/`scan.finished`/`report.exported`/`key.registered`（仅掩码标签）/
+`key.forgotten`/`override.private_used`/`override.loopback_used`。UI 只读展示 + CSV 导出。
+
+---
+
+## 人话版中文报告
+
+`finished` 变真时自动触发，或 `POST /api/scans/{id}/report/zh {vault_handle}` 手动触发。
+用用户**同一个** `strix_llm` 路由与 `api_base`，但用 **httpx 直连**（不把 litellm import 进 web 进程）——
+为要支持的几个供应商各写约 60 行适配器 + 一个通用 OpenAI 兼容分支。`Semaphore(4)` 并发，JSON 修复重试。
+
+每条 finding 产出：`{title_zh(8-20字), what_zh, impact_zh, fix_zh, severity_zh_label,
+severity_reason_zh, effort_zh, who_fixes_zh, confidence_zh, layman_analogy_zh?}`。
+Prompt 要点：读者是不懂安全的业务/管理人员；**禁止未翻译术语**（给定词表：IDOR→越权访问、
+SSRF→服务端请求伪造、RCE→远程命令执行、SSTI→模板注入、CSRF→跨站请求伪造、BFLA→接口权限缺失、
+mass assignment→参数批量赋值）；**禁止编造输入里没有的事实**；`severity_reason_zh` 必须引用
+`cvss`/`cvss_breakdown`/`confidence_rationale`。
+把 `counterevidence` 与 `assumptions` 一并喂进去，让中文如实写出"需人工确认"——
+对一份管理层报告，可信度比漂亮话重要。
+
+再一次 executive 调用（输入 `penetration_test_report.md` + `severity_counts()` + `coverage.json`）
+→ `{summary_zh(≤300字), risk_verdict_zh, top3_actions_zh[], scope_zh, coverage_zh, not_tested_zh[]}`。
+**`not_tested_zh` 很关键且很便宜** —— `coverage.json` 现成，一份说清"哪些没测"的报告远更站得住。
+
+**缓存**：`report_translations` 主键 `(scan_id, finding_id, input_hash, model, lang)`，
+`input_hash = sha256(canonical_json(finding子集))`；新发现只翻新增的，换模型重翻但不丢旧的。
+UI 单独显示"报告生成费用 $0.14"（花的是用户自己的 Key，应当可见）。
+
+**导出**，按优先级：
+1. **打印 CSS HTML（主力）** —— `GET .../report/print?lang=zh` 返回**自包含**单文件（内联 CSS、
+   图片内联为 data URL 取自镜像所以截图不丢）、`@page {size:A4; margin:18mm 16mm}`、
+   `.finding{break-inside:avoid}`、`font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC"`。
+   点"导出 PDF"新开页并 `window.print()`。**零依赖、中文与断行完美、用户用自己系统的 PDF 引擎。**
+2. **DOCX** —— 用**标准库 `zipfile`** 手写最小 WordprocessingML（约 250 行，6 种元素），
+   `w:rFonts w:eastAsia="PingFang SC"`。**不用 `python-docx`**（为 6 种元素拖进 lxml C 扩展）；
+   **不用 reportlab 出中文**（`viewer/report_pdf.py:69` 自述只用 Helvetica，中文会是豆腐块；
+   换 CID 字体后 reportlab 的 CJK 断行与混排度量也很差）。
+3. Markdown / `vulnerabilities.csv` / `findings.sarif` 直通下载（免费）。
+
+**不复用** `viewer/report_pdf.py::build_encrypted_report` —— 它是为 `/api/report/send` 外发中继而生的。
+
+---
+
+## 专家模式：**不代理 Strix 自带 SPA，自己做一个 tab**
+
+1. **它会外联且有邮箱门**：`/api/runs` 与任何非本次 run 的数据都要 `auth.is_verified()` 打
+   `STRIX_APP_URL`（默认 `https://app.strix.ai`）；`POST /api/report/send` 会把客户渗透测试结果的
+   加密 PDF **上传到 Strix 的中继**；`POST /api/event` → PostHog；打开就 `posthog.viewer_opened()`。
+   对一个主打"本地、数据不出机器"的工具，挂一个"把报告邮件发给我"按钮接第三方中继是不可接受的。
+2. **token→cookie 握手过代理很脆**：cookie 名是 `strix_viewer_session_<绑定端口>`
+   （因为浏览器 cookie 不按端口隔离），两个 run 的 viewer 经同一 origin 代理会产生两个不同名 cookie ——
+   能用，但重启后端口撞车或用户开两个 run 跨过邮箱门就出问题。约 150 行去守一个我们不控制的 UI。
+3. **不需要**：`transcript.build_run_state` 本质就是
+   `TuiLiveView().hydrate_from_run_dir(); return {"agents":…, "events":…}` —— 专家 tab 要的东西
+   已经全在我们的 WS 流和镜像里了。
+
+**所以专家 tab 用自己的 store 渲染**：原始事件 JSON（带复制按钮）、完整 agent 拓扑与每个 agent 的
+status/error、不过滤的 `strix.log`（含 DEBUG）、`run.json`/`vulnerabilities.json`/`findings.sarif`/
+`coverage.json` 原文与下载、`llm_usage` 的**按 agent** token 与费用明细（`report/usage.py::to_record`
+给了 `agents[].{agent_id,agent_name,model,cost,...}`）、以及本次启动的 argv 与脱敏 env。
+比 Strix 自带 viewer 展示得**更多**，且零外联。
+
+**廉价而诚实的逃生门**：设置页一个"在 Strix 原生查看器中打开"按钮，
+`docker compose exec -T api strix view <run> --host 0.0.0.0 --port 47800 --no-open`，
+打印带 token 的 URL 并中文警示"此界面为 Strix 官方所有，可能访问 app.strix.ai"。
+仅当 `CONSOLE_ENABLE_NATIVE_VIEWER=1` 时发布该端口。
+
+---
+
+## 数据模型（SQLite，`${DATA}/console.sqlite`，WAL）
+
+> **任何表都没有存放 API Key / secret / token / password 的列。** `scans.vault_handle` 是内存中的
+> opaque UUID，`api` 重启后即失去意义；`scans.env_var_names_json` 只存**变量名**；`audit_log` 只存掩码标签。
+> **不存在 `scan_credentials` 表** —— 向导收集的测试账号只进 tmpfs 上的 instruction 文件（0600，随任务目录删除），
+> DB 只留 `instruction_sha256`。启动时 `db.assert_no_secret_columns()` 校验，CI 有 `test_no_secret_columns.py`。
+
+- `authorizations(id PK, created_at, operator_name, authorization_ref, targets_json, resolved_ips_json, typed_confirmation, affirmations_json, overrides_json, allowlist_entry_id, allowlist_snapshot, user_agent, client_ip)`
+- `scans(id PK, created_at, started_at, finished_at, status, phase, **authorization_id NOT NULL REFERENCES authorizations(id)**, template_id, targets_json, scan_mode, scope_mode, max_budget_usd NOT NULL, max_turns, reasoning_effort, provider, **auth_shape NOT NULL**（§N1 采纳后补：续跑要靠它决定重新索要哪几个凭据键、UI 渲染几个输入框；`api` 重启后 `vault_handle` 失效，这一列是唯一线索）, strix_llm, api_base, vault_handle, cwd, run_dir, strix_run_name, pid, argv_json, env_var_names_json, instruction_sha256, exit_code, exit_meaning, error_code, error_message, cost_usd, count_critical, count_high, count_medium, count_low, agent_count, event_count, resume_available, strix_version, sandbox_image, current_epoch)`
+- `scan_events(scan_id, epoch, seq, strix_id, kind, agent_id, ts, version, fingerprint, data_json, PK(scan_id,epoch,seq))` — 只追加镜像
+- `scan_agents(scan_id, agent_id, name, parent_id, status, error_message, created_at, updated_at, PK(scan_id,agent_id))`
+- `scan_findings(scan_id, finding_id, severity, title, cvss, cwe, cve, endpoint, method, confidence, finding_class, first_seen_at, raw_json, input_hash, PK(scan_id,finding_id))`
+- `scan_media(scan_id, sha256, mime, bytes, rel_path, first_agent_id, first_seen_at, PK(scan_id,sha256))`
+- `audit_log(id PK AUTOINCREMENT, at, event, scan_id, authorization_id, actor, detail_json, client_ip, user_agent)`
+- `report_translations(scan_id, finding_id, input_hash, model, lang, payload_json, cost_usd, input_tokens, output_tokens, created_at, PK(scan_id,finding_id,input_hash,model,lang))`
+
+---
+
+## 后端接口（要点）
+
+```
+GET  /api/health · GET /api/system/status      # docker/镜像/网络挂载自检/同路径自检/遥测状态/孤儿数
+POST /api/system/pull-image  ·  POST /api/system/reap  ·  POST /api/system/native-viewer
+
+GET  /api/providers                            # 模型目录 + 每家要哪几个凭据键（见 §N1）
+POST /api/keys  {provider, auth_shape, strix_llm, api_base?, secrets:{env名→SecretStr}, params:{区域等}, verify=true}
+     # auth_shape 必填（§N1 采纳后补）—— 少了它就无法执行"只收该形状声明的键、多余的 400 unexpected_secret_key"，
+     # 而那条正是防住"bearer 与 SigV4 都填上被 litellm 静默忽略一套"的唯一手段
+     → 201 {vault_handle, labels:["sk-ant-…4f2c"], verified, verify_latency_ms}   # 一组值 → 一组脱敏标签
+     → 400 key_verify_failed        # 发一次 1-token 请求，1 秒内就知道 Key 错，而不是烧到 60 秒后
+GET/POST-touch/DELETE /api/keys[/{h}]
+
+GET  /api/scan-templates
+POST /api/targets/validate  {raw:[…], overrides:{allow_private,allow_loopback}}
+     → 每个目标 {ok, normalized, kind, resolved_ips, ip_class, allowlist_entry,
+                 registrable_domain, code?, overridable?, note_zh?}
+GET/PUT /api/allowlist  ·  POST/DELETE /api/allowlist/entries[/{id}]
+
+POST /api/scans   {vault_handle, template_id, targets[], overrides, scan_mode?, max_budget_usd(必填),
+                   max_turns, reasoning_effort?, extra_instruction?, credentials?[], spec_upload_id?,
+                   authorization:{operator_name, authorization_ref, typed_confirmation,
+                                  affirmed:[3项], resolved_ips_seen}}
+     → 202 {scan_id, status:"starting", ws, argv_preview(无 Key), budget_usd}
+     → 403 blocked_metadata | 409 not_in_allowlist|dns_changed|key_required|concurrency_limit
+            |missing_typed_confirmation|docker_unavailable|budget_exceeds_ceiling
+GET  /api/scans · GET /api/scans/{id} · DELETE /api/scans/{id}
+POST /api/scans/{id}/stop {mode:graceful|force}   ·  POST /api/scans/{id}/resume {vault_handle}
+GET  /api/scans/{id}/{events,findings,artifacts,artifacts/{name},log,media/{sha}.png}
+WS   /ws/scans/{id}   ·  WS /ws/system   ·  GET /api/scans/{id}/stream (SSE 兜底)
+
+POST /api/scans/{id}/report/zh {vault_handle, force}  ·  GET /api/scans/{id}/report/zh
+GET  /api/scans/{id}/report/{print,docx,markdown,sarif}
+GET  /api/audit  ·  GET /api/audit/export.csv
+```
+
+**错误响应只有一种形状：`{code, trace_id, params}`，框架自己产出的那些也不例外**（T2 已落地）。
+Starlette 默认的 404 是 `{"detail": "Not Found"}` —— 没有 `code`，而前端被要求"按码分支、
+不得匹配文案"（`CLAUDE.md` §错误与文案），两种形状就意味着前端要写两个解析器。
+更糟的是它只在"出了意料之外的事"时出现（重构后请求了一个拼错的路径），那正是最需要看到
+明确错误码的时刻，而那时前端只会显示一片空白。所以 `main.py` 覆盖了
+`StarletteHTTPException` 的处理器：**404 → `not_found`，405 → `method_not_allowed`**
+（两个码分开：405 几乎总是前端写错了动词，404 通常是路径拼错或前端版本过旧，合成一个码会让
+前者伪装成后者），其余 4xx→`invalid_request` / 5xx→`internal_error` 兜底。
+响应状态码保留框架原值（只修正响应体形状，不改 HTTP 语义），并转发 `exc.headers` 以保住
+405 的 `Allow`。已实测经真链路：`404 {"code":"not_found",…}` / `405 allow: GET` +
+`{"code":"method_not_allowed",…}`，且 `trace_id` 与 `X-Trace-Id` 一致。
+
+**退出码映射**（`ScanSupervisor`）：`0`→已完成（未发现漏洞）；`2`→已完成（发现漏洞）；
+`1`→失败；`-15`/`-9`→已手动停止。
+
+`1` 的归因**不能只看 Rich 面板标题** —— M0 实测：TLS 被中间设备解密、凭据无效、
+凭据形状与模型路由不匹配、**以及路由不接受 Strix 注入的某个参数**，这**四**种毫不相干的
+故障，Strix 打的是**同一个** `LLM CONNECTION FAILED` 面板。只按标题分类会把后三种都报成
+"连不上"，把用户送去查网络而不是查凭据或参数。所以**先匹配正文里的异常类名，标题只做兜底**
+（判据顺序已在 `scripts/m0_probe_inner.sh` 实测通过，T3 直接照搬）：
+
+| 正文特征（优先级从高到低） | 机器码 |
+|---|---|
+| `CERTIFICATE_VERIFY_FAILED` / `SSLCertVerificationError` | `llm_tls_intercepted` |
+| `object has no attribute 'access_key'` | `bedrock_route_rejects_bearer`（指引：模型名改成 `bedrock/invoke/<model>`，见 §N1） |
+| `cache_control_injection_points` | `prompt_cache_unsupported_on_route`（指引：`invoke/` 路由要 `STRIX_PROMPT_CACHE=false`，见 §N1）。**必须排在 `ValidationException` 之前**，否则被归成 `model_access_denied`，把人送去 AWS 控制台申请模型权限 |
+| `AuthenticationError` / `security token included in the request is invalid` / `Incorrect API key` / `Invalid API Key` | `invalid_api_key` |
+| `AccessDenied` / `not authorized to perform` / `ValidationException` | `model_access_denied` |
+| `NotFound` / `model_not_found` / `MODEL NOT FOUND` | `model_not_found` |
+| `MISSING REQUIRED ENVIRONMENT VARIABLES` | `missing_required_env` |
+| `docker` + `permission denied` | `docker_permission_denied` |
+| 只剩面板标题 `LLM CONNECTION FAILED` | `llm_connection_failed`（兜底） |
+| `DOCKER NOT INSTALLED` / `FAILED TO PULL IMAGE` / `SCAN PREPARATION FAILED` | 同名机器码 |
+
+`llm_tls_intercepted` 的中文指引必须指向"你在企业 TLS 解密后面"这条真因与 CA bundle 挂载口子
+（见 §M0 带出的两条产品需求），而不是笼统的"检查网络"。
+**与 `run.json.status` 交叉校验，冲突时以 run 记录为准**（子进程可能在写完终态后才被 SIGKILL）。
+
+⚠️ **退出码 `0` 不代表扫描跑完了 —— 这条已实测，是产品级安全要求，不是防御性冗余。**
+M0 第 3 次运行：预算耗尽被掐死（`run.json.status = "stopped"`），strix 仍**退出 0**、
+面板写 `Vulnerabilities 0 (No exploitable vulnerabilities detected)` —— 而目标是 juice-shop，
+一个**故意塞满漏洞**的靶场。原因是退出码的唯一来源 `interface/main.py:494-497` 只判
+"`report_state.vulnerability_reports` 是否非空"，**完全不携带"扫描是否完成"的信息**：
+
+| 实际发生的事 | 退出码 | `run.json.status` |
+|---|---|---|
+| 跑完了，目标确实干净 | `0` | `completed` |
+| **预算/轮次耗尽，什么都没查到** | `0` | `stopped` |
+| 找到漏洞（无论是否跑完） | `2` | `completed` / `stopped` |
+
+→ **只凭退出码 0 展示"未发现漏洞"是发布阻断项。** 必须读 `run.json.status`
+（取值域 `core/agents.py:25`：`running/waiting/completed/stopped/crashed/failed/budget_paused`），
+`stopped` 时中文结论固定为**「扫描因预算耗尽提前结束，结论不完整」**，机器码 `scan_incomplete`。
+一个渗透测试控制台在钱花光时报"目标干净"，比不报任何结论危险得多。
+
+**预算的真实语义（同次实测，UI 文案必须照这个写，不许自己编）**：
+`--max-budget-usd` 是**软上限** —— 给 `2` 实花 `$2.0572`（超 2.9%），因为
+`core/hooks.py:55` 的 `cost >= max_budget_usd` 是**每轮结束后**才判，必然超一轮的量。
+另有一道 **90% 子代理保留线**（`_SUBAGENT_BUDGET_RESERVE = 0.90`，`core/hooks.py:29`）：
+子代理花到 90% 就停，留给 root agent 收尾。所以是**子代理 90% 停 / root 100% 停 / 再超一轮**。
+UI **不许**承诺"绝不超过 $X"，只能说"达到 $X 后停止"。
+
+---
+
+## Compose 设计要点
+
+```yaml
+name: strix-console
+x-console-env: &console-env
+  CONSOLE_DATA_DIR: "${STRIX_HOST_DATA_DIR}"          # 容器内外同一绝对路径
+  CONSOLE_EPHEMERAL_HOME_ROOT: "/run/strix"           # tmpfs：每任务 HOME + --config
+  STRIX_DOCKER_SANDBOX_NETWORK: "strix_sandbox"       # ← DooD 关键
+  STRIX_IMAGE: "ghcr.io/usestrix/strix-sandbox:1.3.0"
+  STRIX_TELEMETRY: "false"
+  STRIX_NO_UPDATE_CHECK: "1"
+  STRIX_RUN_TYPE: "console"                            # RUN_ID 每任务单独设
+  STRIX_SANDBOX_MEM_LIMIT: "6g"   # 以下均为 docker_client.py:66-107 的真实变量
+  STRIX_SANDBOX_CPUS: "4"
+  STRIX_SANDBOX_SHM_SIZE: "1g"
+  STRIX_SANDBOX_PIDS_LIMIT: "2048"
+  LITELLM_LOG: "ERROR"
+  # STRIX_DEBUG 故意不设 —— 它会把 strix.log 拉到 DEBUG（泄漏面 #5）
+services:
+  api:
+    volumes:
+      - "${STRIX_HOST_DATA_DIR}:${STRIX_HOST_DATA_DIR}"   # ${X}:${X} 就是全部诀窍
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs: ["/run/strix:rw,noexec,nosuid,nodev,size=16m,mode=0700"]
+    networks: [default, strix_sandbox]
+    user: "0:0"                       # 需写 docker socket；Docker Desktop 的 socket 属主不可移植
+    security_opt: ["no-new-privileges:true"]
+    init: true                        # PID 1 收割 strix 子进程与 docker-cli 僵尸
+    stop_grace_period: 45s            # > ScanSupervisor 的 30s 优雅窗口
+    expose: ["8000"]                  # 不发布端口，只经 nginx 访问
+  web:
+    expose: ["3000"]                  # 不发布端口，只经 nginx 访问
+    read_only: true
+    tmpfs: ["/tmp:size=64m", "/app/.next/cache:size=256m"]
+  nginx:
+    image: nginx:1.27-alpine          # 唯一发布端口的服务；只做 TLS 终止 + 反代，不跑业务
+    ports: ["127.0.0.1:${CONSOLE_WEB_PORT:-443}:443"]     # 绑 loopback；不监听 80
+    volumes:
+      - "./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - "${STRIX_HOST_DATA_DIR}/tls:/etc/nginx/tls:ro"    # setup.sh 生成，私钥 0600，.gitignore
+    read_only: true
+    tmpfs: ["/var/cache/nginx:size=64m", "/var/run:size=1m"]   # 见下方「为什么是 64m」
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [api]                 # T5 落地 web 之后补成 [api, web]；web 不存在时写它 compose 直接报错
+networks:
+  strix_sandbox:
+    name: strix_sandbox               # 固定名：Strix 拿这个字面串传给 containers.create(network=…)
+```
+
+刻意的三个"不做"：
+- **不用 named volume** —— 其宿主路径在 Docker Desktop VM 内，两侧不一致，会静默重现路径别名 bug
+- **不用 docker-socket-proxy** —— Strix 需要 `containers/create` 带 mounts/cap_add/extra_hosts/
+  log_config/network，加上 images/pull、exec、archive、inspect、networks/inspect，几乎是全部权限；
+  放开这些本就等价于 root，只换来表演性安全和排查噩梦。改为在 `docs/SECURITY-zh.md` 里如实写明
+  **本工具具有等同宿主 root 的能力，只应在自己机器上运行，不要暴露到局域网**
+- **只有 `nginx` 发布端口** —— `api` 与 `web` 都只 `expose`，防火墙配错也暴露不出扫描发起接口
+
+**`nginx.conf` 有四处必须显式写对**（Caddy 是默认行为，nginx 不是；漏任何一条都会**静默**破坏实时流）：
+
+| # | 指令 | 漏了会怎样 |
+|---|---|---|
+| 1 | `map $http_upgrade $connection_upgrade` + `proxy_set_header Upgrade/Connection` | WebSocket 握手失败，实时流全灭 |
+| 2 | `proxy_buffering off;`（`/api/scans/*/events` 与 `/ws`）| 默认缓冲响应 → **SSE 兜底通道卡死** |
+| 3 | `proxy_read_timeout 3600s;` | 默认 60s → 扫描安静超过 1 分钟即被 nginx 掐断（拉镜像阶段常态） |
+| 4 | `client_max_body_size 16m;` | 默认 1MB → 截图/报告类请求被 413 拒 |
+
+**为什么 `/var/cache/nginx` 是 64m 而不是 16m**（本文档原写 16m，2026-09-08 T4 实测改正）：
+`client_max_body_size` 本身就是 16m，而请求体一旦超过 `client_body_buffer_size` 就会落
+`/var/cache/nginx/client_temp` 下的临时文件。tmpfs 与上限同大时，**一次刚好 16 MB 的合法上传正好
+把 tmpfs 撑爆**，表现是 500 而不是"磁盘满"，排查方向会被完全带偏。tmpfs 按实际占用吃内存，
+64m 只是上限、不预留，代价为零。这两个数字必须一起改：**改 `client_max_body_size` 就要重算它。**
+
+**`access_log` 用 `$uri` 只管住访问日志。** 已实测：nginx 的 **error log 会打完整 `$request` 与上游
+URL（含 query string），且格式不可配置**，级别提到 `crit` 才压得住，但那会连 502/504 的归因一起丢掉。
+所以「query 里不出现敏感值」**是后端必须自己守的约束，不是 nginx 提供的保证** —— 写进
+`docs/SECURITY-zh.md`，并且验收 #11 扫日志时要把 `nginx` 的 stderr 一起扫。
+
+选 nginx 而非 Caddy 的理由：20 年生产史、任何人都能读 `nginx.conf`、排障资料多一个量级。
+代价就是上面这四条（Caddy 的自动证书能力我们用不上 —— 证书走 `openssl` 自签，见「已确认决策」）。
+
+---
+
+## 里程碑
+
+**M0 — 契约实测（半天）。写任何业务代码之前必须做。**
+先起靶场 —— OWASP 官方故意漏洞靶场，自己机器上，授权链天然成立，**不需要另找目标**。
+**必须把靶场接进 `strix_sandbox` 网络并用容器 DNS 名寻址**：
+```
+docker run -d --name m0-juice-shop \
+  --network strix_sandbox --network-alias juice-shop \
+  -p 127.0.0.1:13000:3000 \
+  --label strix-run-type=console --label strix-console-role=m0-target \
+  bkimminich/juice-shop:latest
+```
+⚠️ **目标 URL 不能写 `http://localhost:13000`**（本节原稿的写法，已实测是错的）：扫描发生在
+**沙箱容器内**，那里的 `localhost` 就是沙箱自己，宿主的发布端口根本不在那个 netns 里。
+2026-09-08 从 `strix_sandbox` 上实测：
+
+| 目标 URL | 结果 |
+|---|---|
+| `http://juice-shop:3000` | ✓ → `172.19.0.3` HTTP 200 —— **采用这个** |
+| `http://host.docker.internal:13000` | ✓ → `192.168.65.254` HTTP 200，但**仅 Docker Desktop 有**，Linux Engine 无此 DNS |
+| `http://localhost:13000` | ✗ 解析到 `127.0.0.1`，连接失败 |
+
+选容器 DNS 而不是 `host.docker.internal` 的理由：后者是 Desktop 注入的，而本项目承诺支持 Linux，
+把它写进流程会让流程本身不可移植。容器 DNS 在两边行为一致，且不占宿主端口，
+顺带还练到了 `authorization_id` 复解析要走的同一条 DNS 路径。`-p 127.0.0.1:13000` 只为人工眼验保留。
+
+构好 `api` 镜像（派发清单 T0），容器内手跑一次：
+```
+HOME=/run/strix/probe TMPDIR=$CONSOLE_DATA_DIR/scans/probe/tmp STRIX_RUN_ID=probe \
+strix -n -t http://juice-shop:3000 -m quick --max-budget-usd 2 --max-turns 20 \
+      --config /run/strix/probe/.strix/cli-config.json      # 预置 {"env":{}}
+```
+Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`validation_alias=AliasChoices("LLM_API_KEY","OPENAI_API_KEY")`），
+**绝不用 `docker exec -e`** —— 那会把 Key 写进宿主 `docker` 客户端的 argv。见 `scripts/m0_probe.sh`。
+逐条断言：
+1. `strix_runs/<slug_hex>/` 出现在该任务 cwd 下
+2. `grep -r "$KEY" $CONSOLE_DATA_DIR/` → **0 命中**；`grep -r "$KEY" /root/` → 0；
+   而 `/run/strix/probe/.strix/cli-config.json` **里有** Key（证明重定向生效），`rm -rf` 后消失
+3. `docker inspect $(docker ps -q --filter label=strix-run-id=probe) | grep -i "$KEY"` → 0
+4. `strix.log` 里 `Caido host endpoint resolved:` 是**容器 IP**（`172.*`/`10.*`）**而不是 `127.0.0.1`**
+   —— 这是全计划最高风险的未知项。
+   出处 `runtime/session_manager.py:180`，是 `logger.debug(...)`。**不需要也绝不许设 `STRIX_DEBUG`**：
+   已核实 `telemetry/logging.py:152` 的 file handler 恒为 `DEBUG`、`:166` 把 tracked logger 也设成 `DEBUG`，
+   `STRIX_DEBUG` 只改 `:158` 的 **stderr** handler 级别。所以 `strix.log` 本来就有这行。
+   **推论（安全）**：`strix.log` 恒为 DEBUG 级、且由 Strix 子进程自己写 —— 我们的 `RedactionFilter`
+   在那个进程里并不存在。所以它是一块常驻的落盘泄漏面，断言 2 的全目录 grep 是**实打实的门**，不是形式。
+5. 跑完 `docker ps` 无残留沙箱
+
+**过不了第 4 条就走 R1 的 Plan B/C，不要继续往下建。**
+
+**第 6 条断言（2026-09-08 补，血的教训）：strix 自己的退出码必须 ∈ {0, 2}。**
+上面五条**全部成立，也可能只是因为什么都没发生** —— 已真实出现过一次：五条断言全绿、
+探测脚本打印"M0 达成"并退出 0，而 strix 退出 1、**零个 LLM 轮次完成**。原因是断言 2
+（凭据卫生）本就不依赖扫描是否跑起来，而 1/3/5 在早期失败时会因为"目录没建 / 没有沙箱 /
+因此也没有残留"而各自成立。**"所有检查都通过"和"被检查的东西真的发生了"是两个命题。**
+`scripts/m0_probe_inner.sh` 已加这第二道独立的门（不满足则退出 4）。
+
+**实测进度（2026-09-08，两次真凭据运行）**：
+- 断言 1 ✓（`juice-shop-3000_9c0d`，5 个文件，落在任务 cwd）
+- 断言 2 ✓（四小条全过）。⚠️ **但通过的原因不是本条设计得好，是我们恰好测了唯一不落盘的那个形状。**
+  `persist_current()` 在 `interface/main.py:404` **无条件调用**（预置 config 从 11 字节被写到 223 字节
+  就是证据），它把凭据明文写进 `cli-config.json` —— 只是 `AWS_*` 四个变量都不在 Strix 的 alias 表里。
+  **`LLM_API_KEY` 在**（`config/settings.py:27-31`），所以 `single` 形状（Anthropic / OpenAI / Gemini /
+  DeepSeek，即**大多数**供应商）**一定会明文落盘**。已用假凭据实测，详见 `pitfalls` 条 25。
+  → **本节原稿"`cli-config.json` 里**有** Key"是对的**；tmpfs HOME + 显式 `--config` + `finally: rmtree`
+    对 `single` 形状而言不是纵深防御，**是唯一一道防线**，三样谁都不许简化。
+  → **断言 2 必须按 auth_shape 各跑一遍**，`test_key_hygiene` 要参数化。一次实测只证明被测的那个配置。
+- 断言 3 ✓（沙箱 label `strix-run-id` + `strix-run-type` 都在，Reaper 前提成立；inspect 无凭据）
+- **断言 4 ✓ —— `Caido host endpoint resolved: http://172.19.0.4:48080`，容器 IP。
+  R1 关闭，Plan B/C 不需要了。全计划最高风险的未知项已清。**
+- 断言 5 ✓（无残留）
+- 断言 6 ✓（第 3 次运行，2026-09-08：`bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+  + 自动 `STRIX_PROMPT_CACHE=false`，strix 退出 0，13 次 LLM 请求，96 秒，`$2.0572`）
+
+**→ M0 六条断言全部实测通过。可以开工。**
+
+但这次运行带出两条**改变设计**的发现，都已并入本文档（详见 `pitfalls` 条 24、25）：
+
+1. **退出码 0 不代表扫描跑完了。** 本次是被预算掐死的（`run.json.status = "stopped"`，
+   `strix.log`：`Token budget of $2.00 exceeded (spent $2.0572)`），可 strix 退出 **0**、
+   面板写 `Vulnerabilities 0 (No exploitable vulnerabilities detected)` —— 在 juice-shop 上。
+   退出码的唯一来源是 `interface/main.py:494-497`，**只看有没有找到漏洞**。
+   → 见下方 §后端接口的 `run.json.status` 交叉校验；那条不是冗余，是唯一真相来源。
+2. **凭据卫生的结论按 auth_shape 而定**（见上方断言 2）。
+
+| # | 目标 | 天 |
+|---|---|---|
+| M1 | 骨架：compose + 两个 Dockerfile + `setup.sh` 校验器；FastAPI 工厂/设置/脱敏日志/迁移 + 无密钥列断言；`/api/system/status` 含**同路径主动探测**（写哨兵文件 → `docker run --rm -v <p>:<p> alpine cat`）与网络挂载自检；Next.js 外壳 + 全中文文案表；**TLS 全套**：`setup.sh` 生成自签证书（SAN+EKU，私钥 0600）+ 校验 443 未被占用 + 打印 `security add-trusted-cert` 指引、`nginx.conf`（四条必须指令）、compose 加 `nginx` 并把 `web` 改 `expose` | 3 |
+| M2 | KeyVault（TTL sweeper、`--workers 1` 校验）；`POST /api/keys` 真实验活；TargetGuard 全分类 + ~80 用例（punycode、split-horizon、`user:pass@`、`.git`、各种元数据地址、IPv6）；白名单加载/校验/热重载/编辑 | 2 |
+| M3 | ScanLauncher（argv+env+tmpfs HOME+预置 config+cwd/TMPDIR+RUN_ID）；ScanSupervisor（退出码→中文、优雅停止、`finally` 清 tmpfs）；RunDiscovery（glob+超时+启动失败分类）；Reaper（启动/定时/每次停止后）；镜像预拉取带 WS 进度；`POST /api/scans` 全套授权不变式；6 个模板的黄金 argv 测试 | 3 |
+| M4 | RunProjector（epoch/重同步）、EventMirror（截图落地）、LogTailer、ScanChannel、WS+SSE、重连回放；**现在就造压缩夹具**（用 `STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发）；前端实时面板 | 3 |
+| M5 | 五步向导（含授权步：三勾选 + 逐字输入、期望串显示在框**旁边**）、6 模板、测试账号收集、高级面板、费用预估；发现 tab；服务端重校验 + DNS 变更检查 | 3 |
+| M6 | Translator（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）；**先只出打印 CSS HTML 导出**；报告 tab；md/csv/sarif 直通 | 3 |
+| M7 | 专家 tab（复用同一 store）；审计 UI + CSV；系统诊断页（M3 每个失败模式都有中文修复指引）；原生 viewer 按钮（开关后） | 2 |
+| M8 | DOCX 导出；续跑（重新索要 Key）；并发队列；留存清理任务；`test_strix_contract.py`（**升级预警线**）；`README.md` + `docs/` 四份文档；`make verify-e2e` | 2 |
+
+单人约 **21 个工作日**（M1 因 TLS 从 2 天增至 3 天）。**M0 永远第一。**
+
+---
+
+## 派发清单（`agent-rules.md` §二.5 要求的五要素）
+
+**模板**：`1`=普通 subagent｜`2`=Superpowers 自助闭环｜`3`=Superpowers 先上报方案｜`自`=不可派发，必须手动做。
+
+**判据（2026-09-08 重校一遍时定的，之前是凭感觉标的，错了 5 处）**——
+不要按"任务难不难"分，按**改错的代价**和**规格明不明确**分：
+
+| 标 | 判据（一句话） | 反问自己 |
+|---|---|---|
+| **3** | **本任务定的约定会被下游多个任务继承**，或**改动表结构**，或**是前端页面** | "后面有几个任务要照着这个写？" ≥2 就是 3。方案阶段改一句话，实现阶段改就是几十个调用点 |
+| **2** | 规格已明确，但**失败模式隐蔽**、自测本身需要动脑设计 | "我能不能现在就写出可执行的验收断言？能，但断言得设计" |
+| **1** | 规格已被上游任务钉死，本任务是**照着写** | "这里面有没有选型？"没有才是 1 |
+| **自** | **需要真凭据或真扫描** | 派发规则第 3 条禁止把 Key 给子 agent，所以这类任务结构上不可派发 |
+
+**两条容易搞反的**：
+- **破坏性操作要往上抬，不要按逻辑复杂度往下压。** `Reaper`（T11）逻辑上就是"按 label 过滤 + 定时"，
+  看着像模板 1，但它**删容器**，而本机还跑着别人的项目 —— 后果不对称，所以是 2 且 prompt 必须写死
+  label 精确过滤 + `--dry-run` 先打印。留存清理（T28）同理。
+- **`agent-rules.md` §四 明写"前端页面开发必须用模板 3"，这是硬规则，不许因为"这个页面简单"就降。**
+
+| # | 任务 | 前置 | 涉及文件 | 模板 |
+|---|---|---|---|---|
+| T0 | 最小 `api` 镜像 + compose 骨架（`strix-agent==1.5.3` 精确 pin + `--only-binary=:all:` + hash lock + 同路径挂载 + `strix_sandbox` 网络）| — | `backend/Dockerfile` `backend/pyproject.toml` `docker-compose.yml` `.env.example` `setup.sh` | **3** |
+| T1 | **M0 契约实测** —— ✅ **6 条断言 2026-09-08 全部实测通过**（第 3 次运行）。断言 2 只覆盖 `bedrock-apikey` 形状，`single` 形状要在 T7 复跑一遍 | T0 | 无（只跑命令）| **自** |
+| T2 | FastAPI 骨架 + `assert_no_secret_columns()` + `RedactionFilter` + 建表迁移 | T1 | `app/{main,settings,db,models,logging_setup}.py` `migrations/001_init.sql` | **3** —— ✅ **2026-09-08 交付并由我独立复核通过**。`make lint` 干净，`make test` 99 passed。我复跑并确认的：脱敏挂在 **Formatter** 上（子 logger `litellm.utils` 实测被脱敏）／`uvicorn.access` 是**静音**不是接管（否则静默作废 `--no-access-log`，pitfalls 条 33）／五条结构不变式真的会拦（FK、`authorization_id NOT NULL`、`max_budget_usd > 0`、`json_valid(targets_json)`、`json_array_length(affirmations_json) = 3`，且全部回滚干净）／**投毒验证**：给 `scans` 加一列 `api_key` 后 api 退出码 3 报 `SecretColumnError`，已回滚／41 列零凭据列。<br>**三处由我补**：① `docker-compose.yml` 的 `target: runtime`（Dockerfile 里 `test` 是最后一个阶段，不写 target 时生产镜像会带上 pytest/ruff/tests —— 已实测 `import pytest` 现在 rc=1）；② `logging_setup.py` 的 `converter = staticmethod(time.gmtime)`（`formatTime()` 默认用 localtime，那行时间戳缀的 `Z` 是假的；容器里 TZ 恰好未设所以测不出来，pitfalls 条 37），配 `test_ts_is_really_utc_even_under_a_non_utc_tz`（自己改进程时区，否则这条测试恒真）；③ **404 / 405 的响应形状**（下方独立一段） |
+| T3 | `/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检 | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 |
+| T4 | TLS 全套：证书生成（SAN+EKU）、`nginx.conf` 四条必须指令、compose 加 `nginx` | T0 | `setup.sh` `nginx/nginx.conf` `docker-compose.yml` `env.example` | 2 —— ✅ **2026-09-08 交付并由我独立复核通过**。验收 23（80 不通）／24（不带 CA `http_code=000`）／证书 SAN+EKU+`CA:FALSE`+密钥成对／唯一发布端口 `127.0.0.1:443`／`api` 8000 宿主不可达／N2 默认关闭，均已复跑。`setup.sh` 332→613 行，新增 C17c 端口占用（只查不占，绝不杀进程）、C17d 证书三态机（`ok` 态**永不覆盖**，`STRIX_REGEN_CERT=1` 才重签且先备份）、C17e N2 校验（真 `docker run` 挂一次，防 Docker Desktop File sharing 未覆盖时静默给空文件）。带出 `pitfalls` 条 26–31 与本文档泄漏矩阵 #14／#15。**`target: runtime` 由我补**（见 T2 行） |
+| T5 | **前端视觉方向**（定一次，产出项目设计约定）+ Next.js 外壳 + 全中文文案表 | T2 | `frontend/messages/zh-CN.json` `frontend/src/app/*` `frontend/Dockerfile` `docker-compose.yml`(只加 `web`) | **3 + frontend-design**。prompt 必须写死三条：① **构建链只用 Next.js 自带的（Turbopack/webpack），不许引入 Vite / Rollup / esbuild 作为独立构建层** —— 那是第二套互斥的构建体系，违反 §编码哲学 第 4 条；② **不许 `next export` / `output: 'export'`** —— 静态导出会废掉服务端组件与 `/scans/[id]` 的 SSR，而 nginx 的 `location /` 是 `proxy_pass` 到 `web:3000` 的**运行中 Node 进程**，不是发静态文件；③ `web` 只写 `expose: ["3000"]`，**绝不写 `ports`**，并补 `nginx` 的 `depends_on` 成 `[api, web]` |
+| T6 | `target_guard.py` 纯函数全分类 + ~80 用例（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
+| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处 |
+| T8 | 白名单加载/校验/热重载 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
+| T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
+| T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
+| T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（2026-09-08 复核：**曾误判"逻辑简单，模板 1 够了"，错**。它删容器，而本机还跑着别人的项目 —— 判据是后果不对称，不是逻辑复杂度）。prompt 必须写死：`label=strix-run-type=console` 精确过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删 |
+| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** |
+| T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3**（原标 2，2026-09-08 上调 —— **本次校对最主要的错标**）：**T14 / T15 / T16 / T21 / T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界。本文件自己都写着"全项目最难的一块"，却是唯一没让它先上报方案的地方 |
+| T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 |
+| T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自**（原和 T15b 合并标 2，2026-09-08 拆开）—— **要真凭据、真扫描，而派发规则第 3 条禁止把 Key 给子 agent。这类任务结构上不可派发** |
+| T15b | 重同步测试（吃 T15a 的夹具）| T15a | `tests/test_projector_resync.py` | 2 |
+| T16 | WS + SSE 路由、重连回放 | T14 | `routes/stream.py` | 2 |
+| T17 | 前端实时面板（子 agent 树 / 事件流 / 终端 / 截图 / CostMeter）| T5 T16 | `frontend/src/components/live/*` | **3**（读 T5 的约定，**不再开** frontend-design）|
+| T18 | 五步向导（授权步：三勾选 + 逐字输入，期望串显示在框**旁边**）| T5 T12 | `frontend/src/components/wizard/*` | **3** |
+| T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3**（原标 1，2026-09-08 上调 —— **原标违反 `agent-rules.md` §四"前端页面开发必须用模板 3"**。且"费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表）。读 T5／T18 的约定，**不再开** frontend-design |
+| T20 | 发现 tab | T17 | `frontend/src/components/findings/*` | **3** |
+| T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3**（原标 2，2026-09-08 上调）—— 含**新建迁移 = 表结构设计**，`agent-rules.md` §四 明列在模板 3；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |
+| T22 | `exporter_html.py` 打印 CSS + 报告 tab | T21 T5 | `services/exporter_html.py` `frontend/src/components/report/*` | **3** |
+| T23 | md/csv/sarif 直通导出 | T21 | `routes/reports.py` | 1 |
+| T24 | 专家 tab（复用同一 store，**不代理 Strix 自带 SPA**）| T17 | `frontend/src/components/expert/*` | **3** |
+| T25 | 审计 UI + CSV 导出 | T12 | `services/audit.py` `routes/audit.py` **`frontend/src/app/audit/*`** | **3**（原标 2 且**涉及文件列漏了前端路径**，2026-09-08 修 —— 任务名带"UI"而文件列只有后端，是本清单的内部矛盾。前端页面 → 模板 3） |
+| T26 | 系统诊断页（T3/T10 每个失败模式都有中文修复指引）| T3 T10 | `frontend/src/app/diagnostics/*` | **3** |
+| T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
+| T28 | 续跑（重新索要 Key）+ 并发队列 + 留存清理任务 | T10 | `routes/scans.py` `services/scan_supervisor.py` | **2 —— ⚠️ 破坏性操作**（留存清理会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run、绝不递归删 `${DATA}` 下其他任何目录 |
+| T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1**（原标 2，2026-09-08 **下调** —— 全清单唯一一条下调）：断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
+| T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 |
+| T30b | `make verify-e2e`（26 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2**（原与 T30a 合并标 1，2026-09-08 拆开并上调）—— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18（`grep 2>/dev/null \|\| echo 通过` 会把"文件不存在"报成"通过"）、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
+
+**可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。
+其余全部串行 —— T2 与 T13 是两个瓶颈，几乎所有东西挂在它们后面。同时在跑的 subagent **≤3**。
+**T15a 是「自」，不占 subagent 名额**，但它卡着 T15b。
+
+**每个模板 2/3 的 prompt 必须写死**（缺一不发）：
+1. **Superpowers 只作用于本子任务** —— 不得触发新一轮 Plan、不得再派生任何子 agent（§六.3/§六.4）
+2. 边界：只许改「涉及文件」列里的路径；不许 `git commit`/`push`、不许改 `PLAN.md`/`CLAUDE.md`/`agent-rules.md`。
+   **依赖（2026-09-08 修）**：原文写的是"不许装依赖"，但 T2 实测发现镜像里连 `fastapi` 都没有 ——
+   那条规则与任务定义本身冲突，按字面执行则 T2 不可能完成。改为：**新增依赖必须先上报并经批准，
+   且只能走 `make lock` 进 hash lock**；**绝不许**子 agent 自行 `pip install`、绕过 hash lock、
+   或放宽 `strix-agent==1.5.3` 的 pin。改 lock 的代价要一并报（重建镜像约 6–15 分钟，见 `pitfalls` 条 10/11/15）
+3. **API Key、真实目标、授权信息绝不进 prompt**；需要密钥的验证一律留给手动步骤
+4. 返回格式 + 可执行验收命令；**我会自己再跑一次验收**，不盲信子 agent 的结论
+5. 相关安全不变式原文抄进 prompt（子 agent 看不到 `CLAUDE.md`）
+
+---
+
+## 主要风险
+
+| # | 风险 | 级 | 对策 |
+|---|---|---|---|
+| ~~R1~~ | ~~**`STRIX_DOCKER_SANDBOX_NETWORK` 行为不如所读**（未文档化、零测试、全仓仅一处）→ 每次扫描 Caido 代理都是死的，抓包类能力静默降级~~ | ~~高~~ | **已关闭（2026-09-08 实测）**：M0 第 4 条通过 —— `Caido host endpoint resolved: http://172.19.0.4:48080`，容器 IP 而非 `127.0.0.1`。Plan B（扫描进程也进兄弟容器）与 Plan C（接受降级 + 明确提示）**均不需要**。⚠️ 前提是 `api` 容器本身也加入 `strix_sandbox`；这条前提写在 §Strix 集成，别在后续重构里丢掉 |
+| R2 | Key 从我没找到的路径落盘 | 高 | 五层：tmpfs HOME + 重定向 `--config` + 无密钥列 DB + 脱敏过滤器 + `test_key_hygiene.py`（每次 E2E 后 grep 整个数据目录、DB 文件、容器日志、`docker inspect` 输出）。CI 用假 Key 跑；**任何命中都是发布阻断项** |
+| R3 | `agents.db` 重写（压缩/图片淘汰）搞坏实时视图：事件重复或消失、截图丢失 | 高 | epoch + 三信号重同步 + 识别 elision 字面量 + 只追加镜像；强制压缩夹具是 M4 的交付物而非事后补 |
+| R4 | Strix 1.5.4+ 破坏我们（依赖 `tui.backend.live_view`、`viewer.transcript`、`core.paths`、run 目录布局、`agents.db` 结构、Rich 面板标题、退出码、两个未文档化 env）| 高 | `strix-agent==1.5.3` 精确 pin + `--only-binary=:all:` + hash lock（**已核实 1.5.3 有 x86_64 与 aarch64 两个 manylinux wheel，无需 Go 工具链**；sdist 的 hatch 钩子缺 Go 1.24 会硬失败）；`test_strix_contract.py` 导入真实包断言每个符号/签名/env 名；import-linter 禁止 `app.*` 越过 `strix_bridge` |
+| R5 | 挂 docker.sock ≈ 宿主 root | 高 | 无法在 Strix 用 docker-py 的前提下消除。`web` 只绑 `127.0.0.1`、`api` 不发布端口、`no-new-privileges`、单一用途镜像；在 README 与 `docs/SECURITY-zh.md` 显著声明 |
+| R6 | 护栏之外仍发生未授权扫描（声明后 DNS rebinding、通配太宽、用户就是撒谎）| 高 | `authorization_id NOT NULL`；启动时重解析 DNS 不一致就拒；只允许单层通配；条目 `expires`；元数据地址不可覆盖；审计留操作人姓名与授权编号。**如实承认残余：工具只能记录声明，无法验证授权** —— UI 里就这么写 |
+| R7 | 若有人日后去掉同路径挂载或改用 named volume，路径别名 bug 复现 | 高 | `/api/system/status` 做**主动**同路径探测，失败就拒绝启动任何扫描；compose 那行卷挂载写注释说明为什么 |
+| R8 | SIGTERM 泄漏沙箱容器（已确认：`run_cli` 信号处理器的 `sys.exit(1)` 跳过 `session_manager.cleanup`）| 中 | Reaper 在启动时、每 5 分钟、以及每次停止后按 label 清扫；`/api/system/status` 暴露 `orphan_sandboxes`；`make reap` |
+| R9 | 费用失控（大应用 + 贵模型的 deep 扫描可以烧掉几百美元）| 中 | 预算强制必填 + 全局上限；向导显示预估区间与生效上限；实时 CostMeter；80% 软告警带一键停止；并发 1。Strix 自身在 70/85/95% 会引导收尾，所以上限是优雅降级 |
+| R10 | 中文翻译幻觉出一个漏洞、或把真问题说轻了 | 中 | Prompt 禁止新增事实；喂 `counterevidence`/`assumptions`/`confidence_rationale` 让"需人工确认"如实呈现；**每张发现卡都有「查看原文」切到英文 `vulnerabilities/<id>.md`**；报告页脚注明"中文说明由 AI 依据扫描原始结果生成，技术细节以原文为准"；**绝不翻译** `poc_script_code`/`evidence`/`endpoint`/`code_locations` |
+| R11 | 扫描中 `api` 重启 → 子进程被孤立、WS 悬空、key handle 失效 | 中 | 启动时 `ScanSupervisor.recover()` 扫 `status IN (starting,running)` 的行，重新发现 run 目录并挂只读 RunProjector（无子进程也能工作），标 `orphaned_running`；`run.json` 到终态就正常收尾；若 15 分钟不动且无对应沙箱容器则标 `interrupted` 并提供续跑（需新 Key）|
+| R12 | `localhost` 有三种含义（用户的 Mac / `api` 容器 / 沙箱）导致误解 | 中 | loopback 放行流程用中文讲清 Strix 的 `host.docker.internal` 改写；`/api/targets/validate` 返回 `note_zh`；常见问题给完整例子 |
+| R13 | Docker Desktop 资源耗尽 | 低 | 上面那组 `STRIX_SANDBOX_*` 限额；并发 1；状态页显示剩余磁盘，低于 20GB 告警（沙箱镜像 + run 目录 + 截图很快堆起来）|
+| R14 | base64 截图撑爆 WS 帧与 DB | 低 | EventMirror 首见即抽取到 `media/` 并改写为 URL；`scan_media` 记账；留存清理优先删 media |
+| R15 | **TLS 装了但静默失效** —— 三种真实模式：证书缺 SAN/EKU（Chrome 直接 `ERR_CERT_COMMON_NAME_INVALID` 拒连）｜证书未被信任（每次弹警告页，用户被训练成无脑点过）｜`nginx.conf` 漏了 `proxy_buffering off`/`proxy_read_timeout` 导致 SSE 卡死或 WS 60 秒被掐 | 中 | 验收 22（SAN+EKU 断言）与 25（wss + 长时空闲）为**发布阻断**；26 断言 SSE 首字节延迟；`/api/system/status` 暴露 `tls.cert_trusted` 与证书剩余天数，未信任时给中文修复指引（`security add-trusted-cert` 原样命令可复制）|
+
+---
+
+## 端到端验收（`make verify-e2e`；6–11 是 Key 卫生安全门，22 与 25 是 TLS 阻断项，全绿才能发布）
+
+**准备**：自己有权测试的靶场 —— `docker run --rm -d -p 13000:3000 bkimminich/juice-shop`，
+（**用 13000 不用 3000** —— 本机 3000 已被占用且监听在所有网卡上，`make verify-e2e` 会起不来；端口在验收脚本里参数化）
+目标填 `http://localhost:13000`（一次跑通 loopback 放行 **和** `host.docker.internal` 改写两条路径）。
+
+1. `./setup.sh` → `docker compose up -d --build` → `/api/health` 返回 ok
+2. `/api/system/status`：断言 `docker.reachable`、`network.present && api_attached`、
+   `data_dir.identical_path_ok`、`telemetry.strix_telemetry == false`、`sandbox_image.present`
+3. **护栏矩阵**：`169.254.169.254` 与 `metadata.google.internal` → `blocked_metadata, overridable:false`；
+   `10.20.1.5` → 需内网放行；`http://localhost:13000` → 需 loopback 放行 + `note_zh`；
+   `https://admin:pw@example.com` → 拒绝（否则会被 Strix 当成仓库）；`例子.中国` → punycode 且标记；
+   同时解析到公网与内网的主机名 → `split_horizon`
+4. **授权强制**：缺 `authorization` → 422；`typed_confirmation` 写错 → 409；只勾 2 项 → 422；
+   `enforce` 下目标不在白名单 → 409；**直接 `INSERT` 一行 `authorization_id=NULL` → DB 拒绝**
+5. **Key 注册**：垃圾 Key → 400 且 2 秒内中文报错、无 DB 行；真 Key → 201 带掩码标签；
+   `grep -r "$TEST_KEY" $DATA/` → **0 命中**
+6. **发起**：把 `localhost` 加入白名单（`allow_loopback:true`）后发起快速体检、预算 $3。
+   `argv_preview` 含 `-n -t http://localhost:13000 -m quick --max-budget-usd 3 …` 且**无 Key**
+7. **实时流**：90 秒内依次看到 `phase: pulling_image|starting_sandbox` → `setting_up_proxy` →
+   `agents` 出现 Root Agent → `event.add` 的 chat/tool → `log` → `summary` 且 `cost_usd` 递增；
+   几分钟内至少一个 `exec_command` 事件渲染到终端面板，且至少一张截图经 `/api/scans/{id}/media/…` 显示
+8. **argv 干净**：`docker compose exec api sh -c 'ps -ww -eo args' | grep -c "$TEST_KEY"` → **0**
+9. **沙箱容器干净**：`docker inspect $(docker ps -q --filter label=strix-run-id=<id>) | grep -ic "$TEST_KEY"`
+   → **0**；同时断言有 `NET_ADMIN`/`NET_RAW`、在 `strix_sandbox` 网络上、**无发布端口**
+10. **Caido 解析（R1 的证据）**：`grep "Caido host endpoint resolved" <run_dir>/strix.log`
+    → 必须是 `172.*`/`10.*` 容器 IP，**不是 `127.0.0.1`**
+11. **扫描中 Key 卫生大扫除**，以下全部为 0：
+    `grep -rI "$TEST_KEY" $DATA/`（含 run 目录、`strix.log`、`run.json`、审计 NDJSON）；
+    `strings $DATA/console.sqlite`（含 `-wal`）；`docker compose logs api web nginx`；
+    `docker inspect` 两个容器；仓库目录内 grep（compose/.env 卫生）。
+    **且应恰好有一处命中以证明containment 生效**：
+    `docker compose exec api grep -rl "$TEST_KEY" /run/strix/` → 只有那个预置的 `--config` 文件
+12. **优雅停止 + 回收**：45 秒内 WS 收 `done{exit_meaning:stopped}`；`run.json.status ∈ {stopped,interrupted}`；
+    `docker ps -a --filter label=strix-run-id=<id>` → 空；容器内 `/run/strix/<该任务目录>` → 已删；
+    `orphan_sandboxes: 0`
+13. **跑到自然结束**：退出码 `2`、`exit_meaning: completed_with_findings`（juice-shop 必有发现）；
+    `vulnerabilities.json` 非空；`findings.sarif` 合法 JSON；`severity_counts` 与 `scan_findings` 行数一致
+14. **压缩韧性（R3 验收）**：注入 `STRIX_MAX_CONTEXT_IMAGES=1` + `STRIX_CONTEXT_BUFFER_TOKENS=1` 重跑。
+    断言 WS 至少发出一次 `compaction_notice` 或 epoch 递增的 `events.snapshot`；`scan_events` 保留**所有** epoch；
+    **截图画廊仍显示每一张截图**，尽管 `agents.db` 里已变成 `[older screenshot elided…]`
+15. **中文报告**：每条 finding 的 `title_zh/what_zh/impact_zh/fix_zh/severity_reason_zh` 均非空；
+    无词表里的未翻译术语；`not_tested_zh` 非空（来自 `coverage.json`）；重复 POST → `translated_findings: 0`（命中缓存）
+16. **导出**：`report/print?lang=zh` 在 Chrome 里 `⌘P` → A4 PDF 中文正常、发现卡不跨页断裂、截图内嵌；
+    `report/docx` 在 Word/Pages 打开中文无豆腐块
+17. **Key 生命周期**：`DELETE /api/keys/{h}` → 204；用死 handle 请求报告 → 409 `key_required`；
+    重启 `api` → 所有 handle 消失，可续跑的扫描点"继续扫描"会预填 provider/model 且 Key 框为空
+18. **续跑**：中途停止后续跑，断言 argv 用**同一个 cwd**、`--resume <strix_run_name>`、
+    **显式 `-m <持久化的模式>`**（否则会静默回落到默认 `deep`）、**且无 `-t`**（Strix 会报错）；
+    transcript 是接续而非重来；`strix.log` 是**追加**（老行还在）
+19. **审计**：CSV 含 `authorization.affirmed`/`scan.launched`/`override.loopback_used`/`scan.stopped`/
+    `report.exported`/`key.registered`（掩码）/`key.forgotten`；对 CSV `grep -c "$TEST_KEY"` → **0**
+20. **重启恢复**：扫描中 `docker compose restart api` → 标 `orphaned_running`、WS 重连并从镜像续流、
+    `run.json` 到终态后正常收尾
+21. **拆除**：`docker compose down` → `docker ps -a --filter label=strix-run-type=console` 为空；
+    `$DATA` 仍保有 DB 与 run 目录（持久化正常）；`/run/strix` 随容器消失（tmpfs 生效）
+22. **证书正确性（发布阻断）**：`openssl x509 -noout -text -in $DATA/tls/cert.pem` 同时含
+    `Subject Alternative Name`（`localhost`/`127.0.0.1`/`::1`）与 `TLS Web Server Authentication`；
+    缺任一 Chrome 直接拒连 —— TLS 等于白做。同时断言私钥权限为 `600`
+23. **无 80 端口**：`nc -z 127.0.0.1 80` 失败（我们刻意不监听）；`docker compose ps` 中仅 `nginx` 有发布端口，
+    `api` 与 `web` 的 `PORTS` 列为空
+24. **TLS 生效且未退化成"随便信任"**：`curl --cacert $DATA/tls/cert.pem https://localhost/api/system/status`
+    → `200`；**不带** `--cacert` 时 curl 报证书校验失败（若这条通过了，说明信任链被放宽了，是缺陷）
+25. **wss 与长连接（发布阻断）**：实时流走 `wss://localhost/ws`；启动一次扫描后**空闲 90 秒不发任何消息**，
+    连接仍存活（证明 `proxy_read_timeout` 已改，默认 60s 会掐断）；`ws://` 明文端点不存在
+26. **SSE 未被缓冲**：关掉 WS 走 SSE 兜底，首字节延迟 < 2s（证明 `proxy_buffering off` 生效；
+    默认缓冲下这里会挂到超时）
+
+---
+
+## 已决策但延后：单账号登录
+
+**结论：方案已定，M1–M8 不实现。** 出现"多人要碰这台机器"的需求时再做，届时按下述方案直接落地，不重新讨论。
+
+**为什么需要它**（原推理链是错的，必须纠正）：原决策写"绑 `127.0.0.1` 所以不需要登录"。
+但 macOS 上 loopback 是**全机共享**的，不是每用户隔离 —— 本机另外两个账号（`itadmin` 501、`macadmin` 503）
+登录后可直接访问以 `szhang` 身份绑在 `127.0.0.1` 的控制台，**发起扫描、花你的预算、以你的授权编号署名**。
+只是这两个账号是公司 IT 下发的管控账号、平时无人登录，所以该威胁为**理论性**，才允许延后。
+
+**方案**（三条取舍都是刻意的，不要"顺手优化"回去）：
+
+| 决定 | 理由 |
+|---|---|
+| 凭据存 `${DATA}/auth.json`（权限 0600），**不进 SQLite** | 不给 `db.assert_no_secret_columns()` 开豁免。`password_hash` 列名会被它拦下，而给它加白名单等于承认这条不变量有例外，之后每个人都会想加自己的例外 —— 它是本项目最硬的结构性不变量 |
+| `hashlib.scrypt`（标准库），**不引 `argon2-cffi`** | 后者是 C 扩展，违反"依赖是负债"（先例：为避开 lxml 手写了 250 行 WordprocessingML）。scrypt 抗 GPU 特性与 argon2 同级，够用 |
+| **单向哈希**，不是可逆加密 | 需求原话是"密码在后台加密"，但能解出明文密码的设计是缺陷不是功能。每用户随机 salt |
+
+**它挡什么、不挡什么**（写进 `docs/SECURITY-zh.md`，不许含糊）：挡的是"另一个账号顺手打开浏览器"这种
+非对抗性访问。`itadmin`/`macadmin` 是**本地管理员**，能读进程内存、`docker.sock`、SQLite 文件 ——
+**登录页对拥有管理员权限的本地账号不构成边界**。把它宣传成安全边界就是自欺。
+
+会话机制、失败限流、初始凭据生成流程留到实现时再定（它们依赖登录本身，现在定了也是空谈）。
+
+---
+
+## 最小主机要求的推导
+
+数字不是拍的。常量集中在 `setup.sh` 顶部的 `REQ_*` / `REC_*`，C17 校磁盘、C17b 校内存与 CPU；
+**要改门槛改那里，不要只改文档** —— 文档与常量不一致时，以 `setup.sh` 为准并回头修本节。
+
+| 资源 | 阻断线 | 推荐值 | 推导 |
+|---|---|---|---|
+| Docker VM 内存 | **4 GB** | 8 GB | 单个沙箱下限 `2048 MB`（浏览器 + Caido 抓包代理 + 各类扫描器**同时**在跑）+ api 容器约 `512 MB` + VM 自身开销。低于此线沙箱会被 OOM kill，而 Strix 的报错指向"agent 崩了"而不是"内存不够"，**极难归因** —— 这正是要在 `setup.sh` 里用一个数字挡住的原因 |
+| Docker VM CPU | **2 核** | 4 核 | 沙箱下限 2 核。VM 恰好 2 核时沙箱会吃满，api 容器与 daemon 只能和它抢，扫描期间界面卡死 |
+| 数据目录可用空间 | **10 GB** | 20 GB | 镜像合计约 8 GB，见下表；再加扫描产物（单次量级见下方实测，量级很小，不是本项的主要压力） |
+| 宿主物理内存 | — | VM 配额 + 2 GB | 浏览器与 Docker Desktop 本体跑在 VM **之外** |
+
+**"Docker VM 内存"是 `docker info` 的 `MemTotal`，不是宿主物理内存。** 这是最容易看错的一项：
+本开发机宿主 18 GB，而 Docker VM 只有 7.75 GB。所有限额计算的分母都是后者。
+
+镜像体积（**三项均已实测落盘**，2026-09-08 M0 首次拉取后回填）：
+
+| 镜像 | 压缩下载量 | 落盘实测 | 原估值 |
+|---|---|---|---|
+| `ghcr.io/usestrix/strix-sandbox:1.3.0` (arm64) | **1.31 GB / 35 层**（最大单层 722 MB） | **5.83 GB** | 4–6 GB ✓ |
+| `strix-console/api:0.1.0` | 178 MB | **768 MB** | 1–1.5 GB（高估） |
+| `bkimminich/juice-shop:latest` | 114 MB | **518 MB** | 约 1 GB（高估） |
+| **合计** | | **7.12 GB** | 约 8 GB ✓ |
+
+落盘倍率**实测 ≈4.3–4.5×**（三个镜像分别 4.45× / 4.3× / 4.5×），原先按 `python:3.11-slim` 推的
+≈4.8× 略高但同量级 —— 方法是对的。**10 GB 阻断线维持不变**：实测合计 7.12 GB，留给扫描产物 2.9 GB。
+
+**单次扫描产物（M0 第 3 次运行实测回填，2026-09-08）—— 这是个下限，不是典型值**：
+
+| 文件 | 大小 | 说明 |
+|---|---|---|
+| `.state/agents.db` | **128 KB** | 主体。T13 的增量镜像与 epoch 检测都围着它 |
+| `strix.log` | 32 KB | 恒为 DEBUG 级，是泄漏面（见断言 2 的推论） |
+| `run.json` | 12 KB | 含 `request_usage_entries` —— **每次 LLM 请求一条，随轮次线性增长** |
+| `.state/{agents,notes,todos}.json` | 各 4 KB | |
+| `findings.sarif` | 318 B | 本次 0 漏洞，非空时会大得多 |
+| **合计** | **188 KB** | |
+
+**必须按下限读**：本次只跑了 13 次 LLM 请求（96 秒，预算耗尽提前结束），且**没有 `media/` 目录**
+—— 压根没走到截图那一步。所以"截图只保留最近 3 张 → 首次见到就落地"那条设计**尚未被实测触发过**，
+T13 不能拿这次的产物当夹具就算验证完了。`run.json` 随轮次线性增长这点也要留意：
+默认 `max_turns=500`（`config/settings.py` 的 `DEFAULT_MAX_TURNS`）时它会比这里大一到两个数量级。
+产物本身量级很小，**磁盘阻断线的压力全在镜像上，不在扫描产物上**。
+
+本次运行的产物留在 `${DATA}/scans/probe/strix_runs/juice-shop-3000_3d9a/`（已验无凭据），
+可作 T13 的第一份真实夹具素材；但 M4 的压缩夹具仍需一次**跑到截图与上下文压缩**的运行，那次才算齐。
+
+⚠️ **量取口径**：`docker image inspect --format '{{.Size}}'` 给的是**压缩态内容大小**，
+`docker images` 的 SIZE 列和 `docker system df -v` 给的才是**解包后落盘**大小，两者差 4 倍多。
+本表"落盘实测"一列取后者。看错这一列会把镜像成本低估 4 倍。
+
+## 待扩展：Docker Engine（无 Desktop）
+
+v1 的 `setup.sh` 检测 `docker info` 的 `Operating System` 是否含 `Docker Desktop`，**不是**则直接阻断。
+理由：与其现在写一套没法在本机测试的分支，不如把差异点记清、明确拒绝。三条差异都是真实的，不是提示文案问题：
+
+| # | 差异 | 现在的做法 | 扩展时要改 |
+|---|---|---|---|
+| 1 | Linux 原生**没有 File sharing 概念** | `setup.sh` C16 用真实 `docker run -v "$D:$D"` 探测 | 探测本身仍然有效（同路径挂载在原生 Linux 上天然成立），但失败时的中文指引要换 —— 不能再让人去 Settings → Resources 里找 |
+| 2 | **没有 `host.docker.internal`** | 刻意不加 `extra_hosts`（Desktop 下自动可解析） | 必须加 `extra_hosts: ["host.docker.internal:host-gateway"]`，否则向导里"扫本机靶场"这类目标全部不可达 |
+| 3 | `docker.sock` 属主是 `root:docker`（GID 因发行版而异） | `user: "0:0"` 直接以容器内 root 运行 | 可以改成非 root + `group_add: [<宿主 docker GID>]`，比 Desktop 下更干净。但 GID 要从宿主探测后注入 |
+
+另有一条**不打算**扩展：Windows 原生。`C:\Users\x:C:\Users\x` 在 compose 卷语法里无法解析（冒号是分隔符），且 Linux 容器内不可能存在名为 `C:\Users\x` 的挂载点。放弃同路径挂载就等于重现 Strix 的路径别名 bug —— 代价不可接受。Windows 用户走 WSL2，此时宿主路径是 `/home/...`，等价于 Linux。
+
+---
+
+## 合规声明（README 与 UI 首屏都要有）
+
+Strix 会**真实攻击**你指向的目标。仅限对**自己拥有或已获书面授权**的系统使用，并严格遵守约定范围。
+未授权测试在多数司法辖区违法。授权与合规责任完全由使用者承担。
+本工具只能**记录**你的授权声明，**无法验证**授权真实性。

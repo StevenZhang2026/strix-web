@@ -1,0 +1,93 @@
+[project]
+name = "strix-console-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # 精确 pin，绝不放宽成 >= / ~=。理由见 PLAN.md R4：我们依赖
+    # tui.backend.live_view / viewer.transcript / core.paths / run 目录布局 /
+    # agents.db 结构 / Rich 面板标题 / 退出码 / 两个未文档化 env。
+    # 升级预警线是 tests/test_strix_contract.py（T29）。
+    "strix-agent==1.5.3",
+
+    # T2 新增。为什么是精确 pin 而不是 >=：与 strix-agent 同一个理由的弱化版 ——
+    # lock 是 hash lock，任何版本浮动都要重跑 make lock，那就不如显式写死。
+    #
+    # 已核实 fastapi 0.141.1 的 requires_dist 全部被现有 pin 满足：
+    #   starlette>=0.46.0        现有 1.6.0        ← 上界开放，不会把 starlette 降级
+    #   pydantic>=2.9.0          现有 2.13.5
+    #   typing-extensions>=4.8.0 现有 4.16.0
+    #   typing-inspection>=0.4.2 现有 0.4.4
+    # 这一点很重要：starlette 若被降级会连带撞 mcp 与 sse-starlette 的下界。
+    # wheel 是 py3-none-any，与架构无关。
+    "fastapi==0.141.1",
+]
+
+[project.optional-dependencies]
+# 只在 Dockerfile 的 test stage 里安装 —— 生产镜像不含 pytest/ruff（攻击面 + 体积）。
+# 锁在 backend/requirements-dev.lock，由 `make lock-dev` 生成。
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.6",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 显式列出，不用自动发现：否则 tests/ 也会被当成包，pip-compile 取元数据时撞上
+# "Multiple top-level packages discovered" 而无法生成 lock。
+packages = ["app"]
+
+# =============================================================================
+# ruff —— 只在 test stage 里存在（见 Dockerfile）。`make lint` 跑它。
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# tests/fixtures/ 里以后会放 Strix 的真实 run 目录夹具（T15），不是我们的代码。
+extend-exclude = ["tests/fixtures"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade
+    "B",             # flake8-bugbear
+    "ANN",           # flake8-annotations —— CLAUDE.md 要求"完整类型标注"
+    "ASYNC",         # flake8-async —— async 函数里的同步阻塞 IO
+    "S",             # flake8-bandit
+    "RUF",
+]
+# E501 由 formatter 管；ANN401（禁 Any）我们靠人工 review + 注释理由，见 CLAUDE.md
+#
+# RUF001/002/003（ambiguous-unicode-character）必须关掉，这不是妥协：
+# 它们把中文标点（，（）——）全部报成"可能是误输入的 ASCII 同形字符"。
+# 本项目的注释与 docstring 一律中文（CLAUDE.md §错误与文案：UI 与文档全中文），
+# 实测开着它们会产生 845 条噪音，而其中真阳性为 0 —— 一个 100% 假阳性的规则
+# 唯一的作用是让人学会忽略 lint 输出。
+# 代价：真正的同形字符攻击（西里尔 а 冒充 a）不再被 lint 拦住。这个风险落在
+# 代码审查上；本项目没有从外部摄入源码的路径，所以不构成新的攻击面。
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里 assert 是本职工作（S101），而"硬编码的假密钥"正是被测对象（S105/S106）。
+"tests/*" = ["S101", "S105", "S106", "ANN401"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# =============================================================================
+# pytest
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 让 `import app.db` 在测试里可用。
+# 必须显式写：`app` 不是 pip 安装的（Dockerfile 只 COPY app ./app），而 pytest 的
+# 控制台入口**不会**把 cwd 放进 sys.path（只有 `python -m pytest` 会）。
+# 靠 `python -m pytest` 是一个隐式约定 —— 谁直接敲 `pytest` 就会得到 ImportError。
+pythonpath = ["."]
+# 禁止真实网络与真实 Docker 是 CLAUDE.md 的硬要求，但那靠 review 与夹具保证，
+# 不靠插件 —— 我们刻意没有引入 pytest-socket 之类的依赖。
+addopts = "-q --strict-markers --strict-config"
+xfail_strict = true

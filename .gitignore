@@ -1,0 +1,44 @@
+# =============================================================================
+# 首要目的是**密钥卫生**，不是整洁。
+# 数据目录本身不在这里列 —— setup.sh 的 C12 已经从结构上保证它不在仓库内。
+# =============================================================================
+
+# setup.sh 生成的实际配置（含宿主绝对路径）。
+# 示例文件叫 env.example（无前导点，不匹配下面的模式，天然进版本库）—— 原因见
+# pitfalls/history-pitfalls.md 条 13。
+.env
+.env.*
+
+# TLS 私钥与证书（T4 生成）。私钥进仓库是发布阻断项。
+certs/
+*.pem
+*.key
+*.crt
+*.csr
+
+# 这里**故意不忽略** backend/pins.txt 与 backend/requirements.lock，两者都要进版本库：
+#   - pins.txt 是依赖变更的**可评审面** —— 84 行 name==version 带 `# via` 溯源，
+#     人能看懂；requirements.lock 那 2084 行哈希没人审得动。
+#   - lock-check 靠 pins.txt 与 lock 对账，新克隆的仓库必须无需联网就能跑这条断言。
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next.js（T5 之后）
+node_modules/
+.next/
+frontend/.env*.local
+
+# macOS
+.DS_Store
+
+# Claude Code 的本机权限配置（每台机器不同，不该进版本库）
+.claude/settings.local.json
+
+# 本机特有的内网事实（解密设备归属、企业根 CA 位置、本机另一个 compose 项目）。
+# 仓库是 public，具名内网信息不以实名发布 —— 见 pitfalls/local-env.md 顶部说明。
+pitfalls/local-env.md
