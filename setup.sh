@@ -52,6 +52,12 @@ REQ_SANDBOX_CPUS=2      # 单个沙箱容器的核数下限
 CERT_DAYS=3650          # 10 年
 CERT_MIN_DAYS_LEFT=30   # 剩余天数低于此值即判定证书需要重签
 
+# 控制台登录口令的长度下限（C17f）。
+# 与 backend/app/services/auth.py 的 MIN_PASSWORD_LENGTH 是同一个数字，**两处都要有**：
+# 这里是为了让用户当场重输（体验），那里是为了让"绕过本脚本直接调那个模块"也拦得住
+# （不变量）。两边不一致时坏的方式是良性的 —— 容器侧会拒绝，本脚本会如实报错。
+AUTH_MIN_PASSWORD_LEN=12
+
 die()  { printf '\033[31m✗ 阻断\033[0m  %s\n' "$1" >&2; BLOCKED=1; }
 fatal() { printf '\033[31m✗ 阻断\033[0m  %s\n' "$1" >&2; exit 1; }
 warn() { printf '\033[33m! 警告\033[0m  %s\n' "$1" >&2; }
@@ -412,6 +418,11 @@ case "${CERT_STATE}" in
     # 子 shell 里改 umask，别污染后续步骤。两个文件先都是 0600，再把公开的证书放宽。
     (
       umask 077
+      # ⚠️ 下面那行 SAN 只含 localhost / 127.0.0.1 / ::1。这**不只是** Chrome 兼容性
+      # 要求，它是一条安全控制：DNS rebinding（攻击者域名先解析到自己的服务器、再改
+      # 成 127.0.0.1）在这里过不了 TLS 校验，因为证书对不上攻击者的域名。
+      # **不许为了"方便"往里加本机主机名、`*.local` 或局域网 IP** —— 那会打开
+      # rebinding 路径。真要局域网访问，先去 PLAN.md 改 §已确认决策 的部署形态。
       openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days "${CERT_DAYS}" \
         -keyout "${KEY_FILE}" -out "${CERT_FILE}" \
         -subj "/O=Strix Console/CN=localhost" \
@@ -491,6 +502,164 @@ fi
 docker run --rm "${PROBE_IMAGE}" test -s /etc/ssl/certs/ca-certificates.crt \
   || fatal "基础镜像里没有 /etc/ssl/certs/ca-certificates.crt。docker-compose.yml 用它当 SSL_CERT_FILE 的兜底值，缺失会让容器内 TLS 静默失去全部根证书。请同步修改 compose 里的兜底路径。"
 ok "容器内系统根证书 bundle 存在"
+
+echo
+
+# ---------------------------------------------------------------------------
+# C17f：控制台登录账号（T4b）
+#
+# 编号继续按执行顺序插在 C17e 之后，**刻意不重排 C18 及之后** ——
+# PLAN.md 与 pitfalls 里都按编号引用，重排会让那些引用全错（同 C17c 的注释）。
+#
+# 三态机，与 C17d（TLS 证书）同一套语义：
+#   1) 不存在        → 交互式创建（用户名 + 口令输两遍）
+#   2) 存在且可解析  → 打一行 ok，**什么都不改，也不问口令**
+#   3) 存在但坏了    → 阻断，打印原因和"手动删除后重跑"的指引
+# **绝不静默覆盖**：覆盖等于把用户的登录口令悄悄换掉，而症状是"我的口令不管用了"，
+# 没人会把它联想到"我刚跑了一次 setup.sh"。
+#
+# 口令散列必须在容器里算：宿主 Python 是 3.9.6 且链接 LibreSSL 2.8.3，
+# `hasattr(hashlib, "scrypt")` 为 **False**；宿主 openssl 是 LibreSSL 3.3.6，
+# 没有 `kdf` 子命令。也就是说**宿主根本算不了 scrypt**，容器不是为了整洁。
+#
+# 口令只经 **stdin** 进容器，绝不用 `docker run -e` 或 argv：
+#   那两条路的值都会进**宿主** docker 客户端的进程参数，`ps aux` 全机可见；
+#   而 `docker inspect` 还能从**已退出**的容器里读回 `Config.Cmd` / `Config.Env` ——
+#   也就是说它不止暴露一瞬间，是留了个副本。
+#   `printf` 是 shell 内建命令，所以管道左边这一段也不会出现在 `ps` 里。
+#
+# 散列由 `app/services/auth.py` 的 `python3 -m` 入口算，校验由**同一个模块**的
+# `AuthRecord.load()` 做 —— 于是"坏了"的定义精确等于"api 进程读不出它"，
+# 而不是本脚本另写一遍格式判断然后跟产品代码慢慢漂移。
+# ---------------------------------------------------------------------------
+AUTH_FILE="${DATA_DIR}/auth.json"
+
+# 读文件权限位。macOS 是 BSD stat，Linux 是 GNU stat，参数完全不同。
+auth_file_mode() {
+  if [ "${OS_KIND}" = "macos" ]; then
+    stat -f '%Lp' "$1"
+  else
+    stat -c '%a' "$1"
+  fi
+}
+
+# 用产品自己的 loader 校验。成功时 stdout 只有用户名；失败时把原因留在输出里。
+# `-i` 是必需的：`docker run` 不带 `-i` 时 stdin 不连通，heredoc 会静默空跑并退 0
+# （pitfalls 条 29）。
+auth_file_probe() {
+  docker run --rm -i \
+    -v "${REPO_ROOT}/backend:/work:ro" \
+    -v "${AUTH_FILE}:${AUTH_FILE}:ro" \
+    -w /work "${PROBE_IMAGE}" python3 - "${AUTH_FILE}" 2>&1 <<'AUTHPROBEEOF'
+import pathlib
+import sys
+
+sys.path.insert(0, "/work")
+from app.services.auth import AuthFileError, AuthRecord
+
+try:
+    print(AuthRecord.load(pathlib.Path(sys.argv[1])).username)
+except AuthFileError as exc:
+    sys.stderr.write(f"{exc}\n")
+    sys.exit(1)
+AUTHPROBEEOF
+}
+
+AUTH_STATE=missing
+AUTH_REASON=""
+AUTH_USERNAME=""
+if [ -e "${AUTH_FILE}" ]; then
+  AUTH_STATE=broken
+  AUTH_MODE="$(auth_file_mode "${AUTH_FILE}")"
+  if [ ! -s "${AUTH_FILE}" ]; then
+    AUTH_REASON="文件为空"
+  elif [ "${AUTH_MODE}" != "600" ]; then
+    # 权限位不对也算"坏了"而不是"顺手 chmod 修好"：0644 的散列文件意味着同机的其它
+    # 账号已经能读到它，改回 600 不能撤销那件事。要让人知道发生过什么。
+    AUTH_REASON="权限位是 ${AUTH_MODE}，必须是 600（同机其它账号可能已经读过它）"
+  elif ! AUTH_USERNAME="$(auth_file_probe)"; then
+    AUTH_REASON="api 进程读不出它 —— ${AUTH_USERNAME}"
+    AUTH_USERNAME=""
+  else
+    AUTH_STATE=ok
+  fi
+fi
+
+case "${AUTH_STATE}" in
+  ok)
+    ok "控制台登录账号已存在（用户名 ${AUTH_USERNAME}），保持不变"
+    info "  忘了口令？删掉 ${AUTH_FILE} 再跑一次 ./setup.sh 重设（这会作废旧口令）。"
+    ;;
+  broken)
+    fatal "${AUTH_FILE} 不可用：${AUTH_REASON}。本脚本不会静默覆盖它（那等于悄悄换掉你的登录口令）。确认要重设账号就手动删除该文件，再跑一次 ./setup.sh。"
+    ;;
+  missing)
+    [ -t 0 ] || fatal "还没有控制台登录账号，需要交互式创建，但当前 stdin 不是终端。请在终端里直接运行 ./setup.sh（不要用管道或 CI 任务）。"
+    info "还没有控制台登录账号。现在创建一个 —— 之后打开控制台要用它登录。"
+    info "  它只挡住「本机另一个账号顺手打开浏览器」和「浏览器里的其它标签页」。"
+    info "  本机管理员能读进程内存与 docker.sock，登录页对他不构成边界。"
+
+    AUTH_TRIES=0
+    while : ; do
+      AUTH_TRIES=$(( AUTH_TRIES + 1 ))
+      [ "${AUTH_TRIES}" -le 5 ] || fatal "连续 5 次未能设置口令，已放弃。请重新运行 ./setup.sh。"
+
+      printf '用户名 [admin]: '
+      read -r AUTH_USER || fatal "读取用户名失败。"
+      AUTH_USER="${AUTH_USER:-admin}"
+
+      # `read -rs` 关回显。两次输入必须一致 —— 打错的口令会让人以为"登录坏了"。
+      printf '口令（至少 %s 位，不回显）: ' "${AUTH_MIN_PASSWORD_LEN}"
+      read -rs AUTH_PASS || fatal "读取口令失败。"
+      printf '\n'
+      printf '再输一次: '
+      read -rs AUTH_PASS2 || fatal "读取口令失败。"
+      printf '\n'
+
+      if [ "${AUTH_PASS}" != "${AUTH_PASS2}" ]; then
+        # 只说"不一致"，绝不回显任何一次输入的内容。
+        warn "两次输入的口令不一致，请重来。"
+        continue
+      fi
+      if [ "${#AUTH_PASS}" -lt "${AUTH_MIN_PASSWORD_LEN}" ]; then
+        warn "口令至少要 ${AUTH_MIN_PASSWORD_LEN} 位，请重来。"
+        continue
+      fi
+      break
+    done
+
+    # 子 shell 里改 umask，别污染后续步骤（同 C17d 的写法）。
+    # 临时文件 + mv：中途失败（容器起不来、磁盘满）时不会留下半截的 auth.json ——
+    # 那种文件下一次跑会被判成 broken，而真正的原因是上次写崩了。
+    AUTH_TMP="${AUTH_FILE}.tmp.$$"
+    if ! (
+      umask 077
+      printf '%s\n%s\n' "${AUTH_USER}" "${AUTH_PASS}" \
+        | docker run --rm -i \
+            -v "${REPO_ROOT}/backend:/work:ro" \
+            -w /work "${PROBE_IMAGE}" python3 -m app.services.auth > "${AUTH_TMP}"
+    ); then
+      rm -f "${AUTH_TMP}"
+      unset AUTH_PASS AUTH_PASS2
+      fatal "计算口令散列失败（容器内 python3 -m app.services.auth 非零退出）。上面一行是它的错误信息。"
+    fi
+    unset AUTH_PASS AUTH_PASS2
+
+    chmod 600 "${AUTH_TMP}"
+    mv "${AUTH_TMP}" "${AUTH_FILE}"
+
+    # 写完立刻回读验证，而不是"我按对的参数写了所以它一定对"（同 C17d 的回读）。
+    AUTH_MODE="$(auth_file_mode "${AUTH_FILE}")"
+    [ "${AUTH_MODE}" = "600" ] \
+      || fatal "刚写出的 ${AUTH_FILE} 权限位是 ${AUTH_MODE} 而不是 600。请检查数据目录所在文件系统是否支持 Unix 权限位。"
+    AUTH_USERNAME="$(auth_file_probe)" \
+      || fatal "刚写出的 ${AUTH_FILE} 读不回来：${AUTH_USERNAME}。请上报。"
+    grep -q '"hash_b64"' "${AUTH_FILE}" \
+      || fatal "刚写出的 ${AUTH_FILE} 里没有 hash_b64 字段，格式异常，请上报。"
+    ok "已创建控制台登录账号（用户名 ${AUTH_USERNAME}，scrypt 散列，0600）"
+    info "  口令**只有散列**落盘，明文既没进磁盘也没进 docker 的参数与环境变量。"
+    ;;
+esac
 
 echo
 

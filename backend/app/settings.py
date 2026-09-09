@@ -148,6 +148,16 @@ class Settings(BaseSettings):
         return self.console_data_dir / "config"
 
     @property
+    def auth_path(self) -> Path:
+        """单账号登录的口令散列文件（0600），由 `./setup.sh` 的 C17f 创建。
+
+        为什么在数据目录里而不是 SQLite 里：`password_hash` 这个列名会被
+        `db.assert_no_secret_columns()` 拦下，而给那个断言开豁免等于承认它有例外。
+        见 CLAUDE.md §安全不变式「单账号登录」。
+        """
+        return self.console_data_dir / "auth.json"
+
+    @property
     def migrations_dir(self) -> Path:
         # 迁移 SQL 随包发布（Dockerfile 的 COPY app ./app 带上它），
         # 所以按本模块位置定位，而不是按 cwd。

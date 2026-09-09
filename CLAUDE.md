@@ -3,7 +3,7 @@
 全局调度规则（Plan 约束、任务拆分、三套派发模板、Skill/Superpowers 开关、人工干预边界）见：
 @agent-rules.md
 
-**`PLAN.md` 是设计的唯一权威**（765 行，含事实出处 `file:line`、泄漏矩阵、里程碑、**T0–T30 派发清单**、26 条端到端验收）。
+**`PLAN.md` 是设计的唯一权威**（1140 行，含事实出处 `file:line`、泄漏矩阵、里程碑、**T0–T30 派发清单**、28 条端到端验收）。
 本文件只放长期稳定、每轮都需要的项目事实。两者冲突时以 `PLAN.md` 为准，并回头修本文件。
 
 ## 规则分流（记录任何新规则/新坑之前先读这一节）
@@ -47,9 +47,10 @@
 
 在 Strix（`strix-agent` 1.5.3, Apache-2.0）之上做 Web 控制台：向导式发起扫描、实时进度可视化、中文人话报告、授权护栏。核心约束：**LLM 可切换、谁用谁的 Key、Key 绝不落盘。**
 
-**已完成：T0（构建/编排骨架）· T1（M0 契约实测，六条断言全过）· T2（后端骨架）· T4（TLS 全套）。** 非 git 仓库。
+**已完成：T0（构建/编排骨架）· T1（M0 契约实测，六条断言全过）· T2（后端骨架）· T4（TLS 全套）· T4b（单账号登录后端）。** git 仓库，remote `StevenZhang2026/strix-web`（**public**）。
 逐条验收记录在 `PLAN.md` 的派发清单对应行与 §里程碑，归因在 `pitfalls`。
-**现在可以跑**：`make lint`、`make test`（99 passed）、`docker compose -p strix-console up -d api nginx` → `https://127.0.0.1/api/health`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
+**现在可以跑**：`make lint`、`make test`（161 passed）、`docker compose -p strix-console up -d api nginx` → `https://127.0.0.1/api/health`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
+**T4b 之后 `api` 起不来除非 `${DATA}/auth.json` 存在** —— 缺它就拒绝启动（否则删掉该文件即绕过登录）。跑一次 `./setup.sh` 的 C17f 建账号。
 `make verify-e2e` / `make reap` 仍是计划中的接口（T30）。
 已就绪：`strix_sandbox` 网络 + 靶场 `m0-juice-shop`（接入该网络，别名 `juice-shop`）。
 **扫描目标 URL 必须写 `http://juice-shop:3000`，不是 `localhost:13000`** —— 后者在沙箱内指向沙箱自己，已实测失败。
@@ -104,6 +105,8 @@
 - 每任务 `HOME=<tmpfs>/scan-<id>/home` **且** 显式 `--config <同目录>/cli-config.json`（预置 `{"env":{}}`）；tmpfs `/run/strix` 为 `noexec,nosuid,size=16m,mode=0700`；`finally` 里 `rmtree`。**这三样对 `single` 形状是唯一防线，不是纵深防御** —— `persist_current()` 无条件调用且把 `LLM_API_KEY` 明文写进该文件（条 25）
 - 全程 `SecretStr`；脱敏挂在 **root handler 的 Formatter** 上（正则 + KeyVault 中每个活跃凭据里**每一个值**的精确子串 —— 一个 handle 可能装 2–3 个值，Bedrock 就要 id + secret，见 `PLAN.md` §N1）。**挂 root logger 是静默无效的**，uvicorn 的三个 logger 还要单独收口 —— 已实测，理由见 `PLAN.md` 泄漏矩阵 #3
 - 前端只把 opaque `vault_handle` 存 **`sessionStorage`**；不用 localStorage、不进 cookie、不进 URL
+- **单账号登录**（2026-09-08 拍板实现，T4b/T5b）：`hashlib.scrypt` + 每用户随机 salt，散列存 `${DATA}/auth.json`(0600)，**不进 SQLite、不给 `assert_no_secret_columns()` 开任何豁免**；会话是进程内存里的不透明 id + `HttpOnly; Secure; SameSite=Strict` cookie，**不用 JWT**（`pyjwt` 在 lock 里只是 `mcp` 的传递依赖，我们不 import）；全局路由依赖，只豁免 `/api/health`。**不做多用户、不加 owner 列**
+- **永远不许装 `CORSMiddleware`。** 现在挡住"任意网页跨域打我们 API"的正是「没有 CORS」+「FastAPI 只把 `application/json` body 喂给 Pydantic」（已实测：另三种 CORS 安全名单类型全 422）+「证书 SAN 只含 localhost 挡住 DNS rebinding」。`allow_origins=["*"]` 一次作废前两条。判据表见 `PLAN.md` §单账号登录 理由三
 - `scans.authorization_id` **NOT NULL**；启动前重解析 DNS 与声明时比对，不一致即拒
 - 云元数据地址（`169.254.169.254`、`metadata.google.internal`、`100.100.100.200` 等）**永久硬拦、不可覆盖**
 - `--max-budget-usd` **强制必填**，缺它 `ScanLauncher` 拒绝构造 argv
@@ -151,7 +154,7 @@
 
 - `./setup.sh` —— 环境校验 + 生成 `.env`（**已实现**；T4 再加自签证书与信任指引）
 - `make lock` —— 在一次性 Linux 容器里生成 hash lock（**已实现**）；`docker compose up -d --build`
-- `make verify-e2e`（26 条验收，6–11 是 Key 卫生门、22/25 是 TLS 阻断项）、`make reap`（按 label 清孤儿沙箱）—— **均待 T30**
+- `make verify-e2e`（28 条验收，6–11 是 Key 卫生门、22/25 是 TLS 阻断项、27/28 是登录阻断项）、`make reap`（按 label 清孤儿沙箱）—— **均待 T30**
 
 ## 禁区
 

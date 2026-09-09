@@ -64,6 +64,19 @@ class ConsoleError(Exception):
         """
         return {"code": self.code, "trace_id": trace_id, "params": self.params}
 
+    def response_headers(self) -> dict[str, str]:
+        """要附加到错误响应上的 HTTP 头。默认没有。
+
+        为什么需要这个口子：`429` 按 RFC 9110 §15.6.4 应当带 `Retry-After`，而那是
+        一个**头**，塞不进 `{code, trace_id, params}` 那三个字段里。让前端从 params
+        里读一个自己拼的 `retry_after` 也行，但那就等于我们发明了一个平行于 HTTP 的
+        约定，代理和浏览器都看不懂它。
+
+        只有 `AuthLockedError` 覆盖它。刻意做成方法而不是 `__init__` 参数：
+        头的内容由错误类型决定（是它语义的一部分），不该由每个抛出点各自决定。
+        """
+        return {}
+
 
 # =============================================================================
 # 框架级 —— 这四个在 T2 阶段就真的被用到（main.py 的四个异常处理器）
@@ -198,6 +211,65 @@ class DockerUnavailableError(ConsoleError):
     status = 409
 
 
+# =============================================================================
+# 单账号登录（T4b：services/auth.py、routes/auth.py）—— PLAN.md §单账号登录
+# =============================================================================
+class UnauthenticatedError(ConsoleError):
+    """没带会话 cookie，或会话已失效（进程重启 / 空闲超时 / 绝对超时）。
+
+    401 而不是 403：这里的语义是"我不知道你是谁"，前端应当跳登录页。403 会让前端
+    以为"已登录但没权限"，而本项目没有权限模型 —— 那条分支永远不该出现。
+
+    ⚠️ 这个错误也会在 **WebSocket 握手**上产出。已实测：全局依赖抛出它时，
+    握手返回真正的 `401` + 本响应体 + `content-type: application/json`
+    （ASGI WebSocket Denial Response 扩展），而不是一个没有正文的 403。
+    """
+
+    code = "unauthenticated"
+    status = 401
+
+
+class InvalidCredentialsError(ConsoleError):
+    """用户名或口令错误。**两种情况共用这一个码，刻意的。**
+
+    分成 `user_not_found` 与 `wrong_password` 会免费告诉攻击者用户名对不对，
+    而单账号系统里那正是他要猜的一半。响应时间也一并拉平了
+    （见 `AuthRecord.burn_equivalent_work`）—— 只统一码而不统一耗时是自欺。
+    """
+
+    code = "invalid_credentials"
+    status = 401
+
+
+class AuthLockedError(ConsoleError):
+    """连续失败达到阈值，登录暂时锁定。
+
+    `Retry-After` 是**批准发送**的：攻击者本来就能靠计时测出锁定窗口，藏起来只对
+    正常用户有害（界面只能显示"稍后再试"而说不出稍后是多久）。
+    """
+
+    code = "auth_locked"
+    status = 429
+
+    def response_headers(self) -> dict[str, str]:
+        retry_after = self.params.get("retry_after")
+        if isinstance(retry_after, int) and not isinstance(retry_after, bool):
+            return {"Retry-After": str(retry_after)}
+        return {}
+
+
+class OriginMismatchError(ConsoleError):
+    """WebSocket 握手的 `Origin` 与 `Host` 不一致。
+
+    **这是纵深防御，不是唯一防线**：`SameSite=Strict` 已经让跨站发起的 WS 握手带不上
+    会话 cookie，所以真正的攻击在到这一步之前就没有身份了。这条检查存在的意义是
+    "cookie 属性哪天被人改松了"时还有一层 —— 别把它当成可以放心改 SameSite 的理由。
+    """
+
+    code = "origin_mismatch"
+    status = 403
+
+
 # 手写扁平登记表。见模块 docstring「刻意不做的事」第 1 条。
 # 顺序与上方定义顺序一致，方便对读。
 ALL_ERRORS: tuple[type[ConsoleError], ...] = (
@@ -216,6 +288,10 @@ ALL_ERRORS: tuple[type[ConsoleError], ...] = (
     UnexpectedSecretKeyError,
     ConcurrencyLimitError,
     DockerUnavailableError,
+    UnauthenticatedError,
+    InvalidCredentialsError,
+    AuthLockedError,
+    OriginMismatchError,
 )
 
 

@@ -20,14 +20,14 @@ Key **仅存活于内存与本次任务的子进程环境中，绝不落盘**。
 
 | 维度 | 决策 |
 |---|---|
-| 部署形态 | 本地单机工具：`docker compose up` + 浏览器访问 `https://localhost`，只绑 loopback。**「本机」= 部署这套系统的那台机器**，浏览器始终在同一台机器上 —— 不做跨机器远程访问，故无登录体系的推理成立 |
+| 部署形态 | 本地单机工具：`docker compose up` + 浏览器访问 `https://localhost`，只绑 loopback。**「本机」= 部署这套系统的那台机器**，浏览器始终在同一台机器上 —— 不做跨机器远程访问。（**注意**：这条推不出"不需要登录" —— loopback 在 macOS 上是全机共享的，见 §单账号登录）|
 | 支持平台 | **macOS + Linux，均要求 Docker Desktop**。Windows 原生**不支持**（`C:\` 含冒号，同路径挂载不成立；请用 WSL2）。Docker Engine 待扩展，差异点见「待扩展：Docker Engine」 |
 | 机器规格 | **可变** —— 小笔记本到大服务器都要能跑。沙箱四个限额**不得硬编码**，由 `setup.sh` 按 `docker info` 的 `MemTotal`/`NCPU` 算出写进 `.env` |
 | **最小主机要求** | **Docker VM 内存 ≥ 4 GB**（推荐 8）、**Docker VM CPU ≥ 2 核**（推荐 4）、**数据目录可用空间 ≥ 10 GB**（推荐 20）、宿主物理内存 ≥ VM 配额 + 2 GB。低于阻断线 `setup.sh` 直接 `exit 1`，不给"要不要继续"的选项 —— 推导见下方「最小主机要求的推导」 |
 | 传输与证书 | nginx 反代终止 TLS，对外只开 `127.0.0.1:443`（**不监听 80**）；`openssl` 单张自签证书（**SAN + EKU=serverAuth**，10 年，私钥 0600）；信任由用户手动导入（macOS `security add-trusted-cert`；Linux `update-ca-certificates`），脚本**不**自动改信任库 |
 | **凭据形状** | **采纳 N1（2026-09-08 拍板）** —— `auth_shape` 是**独立于 provider 的一个维度**，不是它的属性；一个 handle 指向一**组**凭据（Bedrock SigV4 要 3 个值）。`POST /api/keys` 收 `auth_shape` + `secrets{env名→值}` + `params`；`/api/providers` 声明每家支持哪几种形状、每种要哪几个键；后端**只接受所选形状声明的键，多余的一律 `400 unexpected_secret_key`**。`auth_shape` 还决定模型名怎么拼（bearer 必须补 `invoke/`）。细则见 §N1 |
 | **企业 CA** | **采纳 N2（2026-09-08 拍板）** —— compose 上一对**可选**变量，运行期由操作者显式挂 CA bundle，默认关闭；**构建期烧进镜像永久禁止**。细则见 §N2 |
-| 登录 | **无登录体系** —— 单账号方案已定但**实现延后**，见文末「已决策但延后」 |
+| **登录** | **单账号登录，实现（2026-09-08 用户拍板，撤销原「延后」）** —— 一个用户名 + 口令；散列存 `${DATA}/auth.json`(0600)、**不进 SQLite**；会话是服务端不透明 id，存 api 进程内存、**不用 JWT**；cookie `HttpOnly; Secure; SameSite=Strict`。**不做**多用户、不做数据隔离（`scans`/`authorizations` 不加 owner 列）。细则见 §单账号登录 |
 | API Key | 仅会话内不落盘：浏览器只存 opaque handle（sessionStorage），明文 Key 只在后端内存 + 子进程 env |
 | 技术栈 | FastAPI 后端 + Next.js/React 前端 + nginx 反代，WebSocket 推增量（SSE 兜底）|
 | 易用性 | 上述四项全要 |
@@ -864,7 +864,9 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T2 | FastAPI 骨架 + `assert_no_secret_columns()` + `RedactionFilter` + 建表迁移 | T1 | `app/{main,settings,db,models,logging_setup}.py` `migrations/001_init.sql` | **3** —— ✅ **2026-09-08 交付并由我独立复核通过**。`make lint` 干净，`make test` 99 passed。我复跑并确认的：脱敏挂在 **Formatter** 上（子 logger `litellm.utils` 实测被脱敏）／`uvicorn.access` 是**静音**不是接管（否则静默作废 `--no-access-log`，pitfalls 条 33）／五条结构不变式真的会拦（FK、`authorization_id NOT NULL`、`max_budget_usd > 0`、`json_valid(targets_json)`、`json_array_length(affirmations_json) = 3`，且全部回滚干净）／**投毒验证**：给 `scans` 加一列 `api_key` 后 api 退出码 3 报 `SecretColumnError`，已回滚／41 列零凭据列。<br>**三处由我补**：① `docker-compose.yml` 的 `target: runtime`（Dockerfile 里 `test` 是最后一个阶段，不写 target 时生产镜像会带上 pytest/ruff/tests —— 已实测 `import pytest` 现在 rc=1）；② `logging_setup.py` 的 `converter = staticmethod(time.gmtime)`（`formatTime()` 默认用 localtime，那行时间戳缀的 `Z` 是假的；容器里 TZ 恰好未设所以测不出来，pitfalls 条 37），配 `test_ts_is_really_utc_even_under_a_non_utc_tz`（自己改进程时区，否则这条测试恒真）；③ **404 / 405 的响应形状**（下方独立一段） |
 | T3 | `/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检 | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 |
 | T4 | TLS 全套：证书生成（SAN+EKU）、`nginx.conf` 四条必须指令、compose 加 `nginx` | T0 | `setup.sh` `nginx/nginx.conf` `docker-compose.yml` `env.example` | 2 —— ✅ **2026-09-08 交付并由我独立复核通过**。验收 23（80 不通）／24（不带 CA `http_code=000`）／证书 SAN+EKU+`CA:FALSE`+密钥成对／唯一发布端口 `127.0.0.1:443`／`api` 8000 宿主不可达／N2 默认关闭，均已复跑。`setup.sh` 332→613 行，新增 C17c 端口占用（只查不占，绝不杀进程）、C17d 证书三态机（`ok` 态**永不覆盖**，`STRIX_REGEN_CERT=1` 才重签且先备份）、C17e N2 校验（真 `docker run` 挂一次，防 Docker Desktop File sharing 未覆盖时静默给空文件）。带出 `pitfalls` 条 26–31 与本文档泄漏矩阵 #14／#15。**`target: runtime` 由我补**（见 T2 行） |
+| T4b | **单账号登录 —— 后端**：`auth.py`（`hashlib.scrypt` + 随机 salt + `hmac.compare_digest`）、`${DATA}/auth.json`(0600) 读写、会话 = 进程内存不透明 id、`POST /api/auth/{login,logout}` + `GET /api/auth/me`、**全局路由依赖**（唯一豁免 `/api/health` 与三个 auth 路由本身）、失败限流、`setup.sh` 建初始账号（口令经 `read -rs`）、`audit_log.actor` 落真实用户名 | T2 T4 | `app/services/auth.py` `app/routes/auth.py` `app/main.py` `setup.sh` `tests/test_auth.py` | **3** —— 定的约定被**每一个后续路由任务继承**（全局依赖一旦定错形状，T3/T7/T8/T12/T16/T23/T25 全要改），且**碰安全不变式**。prompt 必须写死四条：① 散列**绝不进 SQLite**，不许给 `assert_no_secret_columns()` 开任何豁免；② **不许引 `argon2-cffi`／`passlib`／`python-jose`／`pyjwt`**（`pyjwt` 虽在 lock 里但是 `mcp` 的传递依赖，不是我们的）；③ **不许装 `CORSMiddleware`** —— 理由见 §单账号登录 理由三的表；④ 会话**不签名、不自包含**，就是一个查内存 dict 的随机串 |
 | T5 | **前端视觉方向**（定一次，产出项目设计约定）+ Next.js 外壳 + 全中文文案表 | T2 | `frontend/messages/zh-CN.json` `frontend/src/app/*` `frontend/Dockerfile` `docker-compose.yml`(只加 `web`) | **3 + frontend-design**。prompt 必须写死三条：① **构建链只用 Next.js 自带的（Turbopack/webpack），不许引入 Vite / Rollup / esbuild 作为独立构建层** —— 那是第二套互斥的构建体系，违反 §编码哲学 第 4 条；② **不许 `next export` / `output: 'export'`** —— 静态导出会废掉服务端组件与 `/scans/[id]` 的 SSR，而 nginx 的 `location /` 是 `proxy_pass` 到 `web:3000` 的**运行中 Node 进程**，不是发静态文件；③ `web` 只写 `expose: ["3000"]`，**绝不写 `ports`**，并补 `nginx` 的 `depends_on` 成 `[api, web]` |
+| T5b | **单账号登录 —— 前端**：登录页 + 未登录重定向 + 401 统一拦截（复用 `key_required` 那套交互，因为会话与 KeyVault 同生共死）+ 登出。文案进 `zh-CN.json` | T4b T5 | `frontend/src/app/login/*` `frontend/src/lib/api.ts` `frontend/messages/zh-CN.json` | **3**（`agent-rules.md` §四：前端页面必须模板 3。读 T5 的约定，**不再开** frontend-design）。prompt 必须写死：口令框 `type=password` + 随机 `name`；**会话 id 由 cookie 承载，前端一行都不许碰它** —— 不读、不存 `sessionStorage`、不放 URL（与 `vault_handle` 刻意相反，理由见 §单账号登录 方案表最后一行）|
 | T6 | `target_guard.py` 纯函数全分类 + ~80 用例（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
 | T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处 |
 | T8 | 白名单加载/校验/热重载 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
@@ -891,7 +893,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T28 | 续跑（重新索要 Key）+ 并发队列 + 留存清理任务 | T10 | `routes/scans.py` `services/scan_supervisor.py` | **2 —— ⚠️ 破坏性操作**（留存清理会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run、绝不递归删 `${DATA}` 下其他任何目录 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1**（原标 2，2026-09-08 **下调** —— 全清单唯一一条下调）：断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 |
-| T30b | `make verify-e2e`（26 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2**（原与 T30a 合并标 1，2026-09-08 拆开并上调）—— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18（`grep 2>/dev/null \|\| echo 通过` 会把"文件不存在"报成"通过"）、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
+| T30b | `make verify-e2e`（28 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2**（原与 T30a 合并标 1，2026-09-08 拆开并上调）—— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18（`grep 2>/dev/null \|\| echo 通过` 会把"文件不存在"报成"通过"）、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
 
 **可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。
 其余全部串行 —— T2 与 T13 是两个瓶颈，几乎所有东西挂在它们后面。同时在跑的 subagent **≤3**。
@@ -932,7 +934,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 
 ---
 
-## 端到端验收（`make verify-e2e`；6–11 是 Key 卫生安全门，22 与 25 是 TLS 阻断项，全绿才能发布）
+## 端到端验收（`make verify-e2e`；6–11 是 Key 卫生安全门，22 与 25 是 TLS 阻断项，27 与 28 是登录阻断项，全绿才能发布）
 
 **准备**：自己有权测试的靶场 —— `docker run --rm -d -p 13000:3000 bkimminich/juice-shop`，
 （**用 13000 不用 3000** —— 本机 3000 已被占用且监听在所有网卡上，`make verify-e2e` 会起不来；端口在验收脚本里参数化）
@@ -999,31 +1001,71 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
     连接仍存活（证明 `proxy_read_timeout` 已改，默认 60s 会掐断）；`ws://` 明文端点不存在
 26. **SSE 未被缓冲**：关掉 WS 走 SSE 兜底，首字节延迟 < 2s（证明 `proxy_buffering off` 生效；
     默认缓冲下这里会挂到超时）
+27. **登录真的是门，不是装饰（发布阻断）**：不带 cookie 请求 `/api/scans`、`/api/keys`、`/api/audit`、
+    `/ws` 全部 `401`；**`/api/health` 仍 `200`**（否则 compose healthcheck 会把容器判成不健康）。
+    这条必须**逐个路由枚举**跑，不许只测一个就宣布通过 —— 全局依赖漏挂某个 router 是最典型的失败模式
+28. **口令散列不落 DB、不可逆（发布阻断）**：`auth.json` 权限为 `600`；
+    `sqlite3 $DATA/console.sqlite '.dump' | grep -ci <口令>` 与 `grep -c <散列>` 均为 `0`；
+    （**文件名是 `console.sqlite`**，不是 `console.db` —— 写错的话 sqlite3 会去建一个空库然后
+    `grep -c` 返回 0，整条断言变成永远通过的假绿。出处 `settings.py:136`）
+    `assert_no_secret_columns()` 仍在跑且 41 列零凭据列（即"加登录"没有顺手给它开豁免）
 
 ---
 
-## 已决策但延后：单账号登录
+## 单账号登录
 
-**结论：方案已定，M1–M8 不实现。** 出现"多人要碰这台机器"的需求时再做，届时按下述方案直接落地，不重新讨论。
+**2026-09-08 用户拍板：实现。** 原文"我认为应该有登录认证,虽然是本机使用,但也应该有账号登录"。
+撤销此前的"方案已定但延后"。**范围限定为单账号** —— 不做多用户、不做数据隔离。
 
-**为什么需要它**（原推理链是错的，必须纠正）：原决策写"绑 `127.0.0.1` 所以不需要登录"。
-但 macOS 上 loopback 是**全机共享**的，不是每用户隔离 —— 本机另外两个账号（`itadmin` 501、`macadmin` 503）
-登录后可直接访问以 `szhang` 身份绑在 `127.0.0.1` 的控制台，**发起扫描、花你的预算、以你的授权编号署名**。
-只是这两个账号是公司 IT 下发的管控账号、平时无人登录，所以该威胁为**理论性**，才允许延后。
+### 为什么需要它（两条真实理由，第三条是我一度夸大的，已纠正）
 
-**方案**（三条取舍都是刻意的，不要"顺手优化"回去）：
+**理由一：loopback 在 macOS 上是全机共享的，不是每用户隔离。**
+原决策写"绑 `127.0.0.1` 所以不需要登录"，这条推理是错的。本机另外两个账号
+（`itadmin` 501、`macadmin` 503）登录后可直接访问以 `szhang` 身份绑在 `127.0.0.1` 的控制台，
+**发起扫描、花你的预算、以你的授权编号署名**。这两个账号是公司 IT 下发的管控账号、平时无人登录，
+所以是非对抗性场景 —— 但"平时无人登录"不是一个可依赖的安全属性。
+
+**理由二：`audit_log.actor` 现在填不出东西来。**
+该列已在库里（`backend/app/migrations/001_init.sql:319`），无登录时只能填 `local`。
+一个渗透测试控制台的审计日志说不出是谁发起的扫描，那审计就是装饰。
+
+**理由三（纠正）："任何网页都能调这个 API" —— 不成立，但依赖四条隐式行为。**
+我一度断言未认证的 localhost API 对浏览器里每个标签页都开放。**实测否证**：
+
+| 攻击路径 | 现状 | 靠什么挡住 |
+|---|---|---|
+| 跨域 `application/json` POST | 被浏览器拦 | 我们**没有**装任何 CORS 中间件（已核实 `backend/app/` 无 `CORSMiddleware`），预检拿不到 `Access-Control-Allow-Origin` |
+| 跨域简单请求 POST（无预检） | **422** | FastAPI 只在 content-type 是 `application/json` 时才把 body 喂给 Pydantic。**已实测**（`api` 容器内 TestClient）：`text/plain` / `x-www-form-urlencoded` / `multipart/form-data` 三种 CORS 安全名单类型全部 422 |
+| DNS rebinding | TLS 握手失败 | 证书 SAN 只有 `DNS:localhost,IP:127.0.0.1,IP:::1`（`setup.sh:418`），攻击者域名过不了校验；且**不监听 80**，没有明文降级路径 |
+| 跨域 GET | 能发出、读不到响应 | 同源策略。**前提是没有任何 GET 带副作用** |
+
+结论：当前**不可利用**，但这份安全性寄托在四条从未被测试断言过的隐式行为上 —— 其中"证书 SAN 只含
+localhost"此前被当成 Chrome 兼容性措施记录，实际上**它是一条安全控制**。
+登录 + `SameSite=Strict` 让这四条是否成立都不再要紧，这才是它真正的收益。
+**推论（写进代码约束）**：永远不许为了"方便调试"加 `CORSMiddleware`；`allow_origins=["*"]` 会一次性
+作废上表第一行和第二行。
+
+### 方案（六条取舍都是刻意的，不要"顺手优化"回去）
 
 | 决定 | 理由 |
 |---|---|
-| 凭据存 `${DATA}/auth.json`（权限 0600），**不进 SQLite** | 不给 `db.assert_no_secret_columns()` 开豁免。`password_hash` 列名会被它拦下，而给它加白名单等于承认这条不变量有例外，之后每个人都会想加自己的例外 —— 它是本项目最硬的结构性不变量 |
+| 散列存 `${DATA}/auth.json`（0600），**不进 SQLite** | 不给 `db.assert_no_secret_columns()` 开豁免。`password_hash` 列名会被它拦下（黑名单含 `password`），而给它加白名单等于承认这条不变量有例外，之后每个人都会想加自己的例外 —— 它是本项目最硬的结构性不变量 |
 | `hashlib.scrypt`（标准库），**不引 `argon2-cffi`** | 后者是 C 扩展，违反"依赖是负债"（先例：为避开 lxml 手写了 250 行 WordprocessingML）。scrypt 抗 GPU 特性与 argon2 同级，够用 |
-| **单向哈希**，不是可逆加密 | 需求原话是"密码在后台加密"，但能解出明文密码的设计是缺陷不是功能。每用户随机 salt |
+| **单向哈希**，不是可逆加密 | 需求原话曾是"密码在后台加密"，但能解出明文口令的设计是缺陷不是功能。每用户随机 salt，`hmac.compare_digest` 比对 |
+| 会话 = **服务端不透明随机 id**，存 api 进程内存，**不用 JWT** | JWT 的卖点是服务端无状态；我们要的恰好相反 —— 状态必须由服务端持有**且只在内存里**。自包含 token 等于在客户端留一份可离线验证的副本。`pyjwt` 虽在 lock 里（`# via mcp`，strix-agent 传递依赖）但**我们不 import 它** |
+| 会话与 KeyVault **同生共死** | 两者都是进程内 dict，api 重启一起蒸发。这不是缺陷，是"Key 绝不落盘"的直接后果；前端已有 `key_required` 分支在处理同一类事，登录失效复用同一种交互 |
+| cookie `HttpOnly; Secure; SameSite=Strict; Path=/`，**不存 sessionStorage** | 与 `vault_handle` 刻意相反：`vault_handle` 要被 JS 读出来放进 POST body，会话 id 不需要，那就别让 JS 碰得到（防 XSS 提权成会话窃取）。`SameSite=Strict` 是上一节四条隐式行为的替代品 |
 
-**它挡什么、不挡什么**（写进 `docs/SECURITY-zh.md`，不许含糊）：挡的是"另一个账号顺手打开浏览器"这种
-非对抗性访问。`itadmin`/`macadmin` 是**本地管理员**，能读进程内存、`docker.sock`、SQLite 文件 ——
+### 它挡什么、不挡什么（写进 `docs/SECURITY-zh.md`，不许含糊）
+
+挡的是"另一个本机账号顺手打开浏览器"和"浏览器里的其它标签页"。
+`itadmin`/`macadmin` 是**本地管理员**，能读进程内存、`docker.sock`、SQLite 文件 ——
 **登录页对拥有管理员权限的本地账号不构成边界**。把它宣传成安全边界就是自欺。
 
-会话机制、失败限流、初始凭据生成流程留到实现时再定（它们依赖登录本身，现在定了也是空谈）。
+### 待实现时确定（依赖登录本身，现在定了也是空谈）
+
+失败限流的具体窗口与阈值；初始账号在 `setup.sh` 里的生成流程（口令必须经 `read -rs`，不进 argv 与 shell 历史）；
+会话空闲超时；改口令流程。
 
 ---
 

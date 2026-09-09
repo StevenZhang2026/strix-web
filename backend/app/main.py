@@ -9,6 +9,7 @@
     5. db.connect() / migrate()        建表
     6. db.assert_no_secret_columns()   **必须在 migrate 之后** —— 要检查的是迁移
                                        实际建出来的 schema，不是迁移文件的文本
+    7. AuthService.load()              读 auth.json；读不出来就**拒绝启动**
 
 第 2 步排在第 3 步之前是刻意的：如果环境里真有凭据，我们希望在**任何日志代码运行
 之前**就失败。日志系统本身不会打凭据，但"启动过程中新增一行 logger.info(...)"是随时
@@ -18,12 +19,18 @@
 "迁移文件建出来的库"，而这里检查的是"这台机器上的真实库" —— 后者可能被人手工
 `ALTER TABLE` 过。两个检查的对象不同，都要有。
 
+第 7 步"读不出来就拒绝启动"是**安全语义**，不是健壮性偏好：如果 `auth.json` 缺失或
+损坏时我们退化成"没有账号，先放行"，那么删掉那个文件就是一条绕过登录的路径。
+代价是可见的 —— 没跑过 `./setup.sh`（C17f）的机器上 `api` 起不来，而错误信息里写着
+要跑什么。
+
 # 刻意不在这里做的事
 
 - **`/api/system/status`（同路径挂载自检、docker 探测、孤儿计数）** 是 T3。
 - **`WEB_CONCURRENCY` / `--workers 1` 的启动校验** 是 T7（跟 KeyVault 一起，
   因为那条约束的理由就是 KeyVault 是进程内 dict）。
-- **`routes/`** 下的业务路由全部属于后续任务。本文件只挂 `/api/health`。
+- **`routes/`** 下的业务路由全部属于后续任务。本文件只挂 `/api/health` 与
+  `routes/auth.py`（T4b）。
 """
 
 from __future__ import annotations
@@ -35,7 +42,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -51,6 +58,8 @@ from app.errors import (
 )
 from app.logging_setup import Redactor, configure_logging, trace_id_var
 from app.models import HealthResponse
+from app.routes import auth as auth_routes
+from app.services.auth import AuthService
 from app.settings import Settings, assert_no_credential_env, load_settings
 
 logger = logging.getLogger(__name__)
@@ -148,7 +157,14 @@ def _install_exception_handlers(app: FastAPI) -> None:
             "业务错误",
             extra={"code": exc.code, "http_status": exc.status, "path": request.url.path},
         )
-        return JSONResponse(status_code=exc.status, content=exc.to_payload(trace_id))
+        # `response_headers()` 默认返回 `{}`，目前只有 `AuthLockedError` 覆盖它
+        # （429 要带 `Retry-After`，RFC 9110 §15.6.4）。它是错误**类型**的一部分，
+        # 所以由错误对象决定，而不是让每个抛出点各自往响应里塞头。
+        return JSONResponse(
+            status_code=exc.status,
+            content=exc.to_payload(trace_id),
+            headers=exc.response_headers() or None,
+        )
 
     async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
         assert isinstance(exc, RequestValidationError)  # noqa: S101
@@ -282,6 +298,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if applied:
                 logger.info("迁移完成", extra={"applied": applied})
             db.assert_no_secret_columns()
+            # 单账号登录（T4b）。放在这个 try 里面是为了让它失败时也走下面的
+            # `db.close()` —— 不然 `auth.json` 不存在的机器上会同时留下一个泄漏的
+            # SQLite 连接和一对 -wal/-shm 文件，把"没跑 setup.sh"这件事的现场弄脏。
+            #
+            # **在 yield 之前**加载，而不是让鉴权依赖懒加载：懒加载会让第一个请求
+            # 承担一次可能的 AuthFileError，而那时报错的位置是某个业务接口，
+            # 跟真正的原因（没跑过 ./setup.sh 的 C17f）差得很远。
+            auth_service = AuthService.load(resolved.auth_path)
         except BaseException:
             # 启动失败也要关连接：WAL 会留下 -wal/-shm 文件，且连接泄漏会让
             # 后续的重启诊断更乱。
@@ -292,6 +316,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.redactor = redactor
         app.state.db = db
         app.state.strix_version = strix_version
+        app.state.auth = auth_service
 
         logger.info("启动完成")
         try:
@@ -309,10 +334,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        # 全局鉴权（T4b）。**默认拒绝**：新增的路由自动受保护，忘了加装饰器不会开洞。
+        # 反过来（每条路由自己加 Depends）会让"漏了一条"变成一个静默的后门。
+        # 免鉴权名单在 routes/auth.EXEMPT_PATHS，精确匹配 path。
+        #
+        # 必须是 app 级依赖而不是中间件：`BaseHTTPMiddleware` 看不见 WebSocket scope
+        # （本文件的 trace-id 中间件就是活证据 —— WS 下它完全不跑），写成中间件等于给
+        # `/ws/...` 开一条无鉴权后门。app 级依赖覆盖 `@router.websocket`，已实测。
+        dependencies=[Depends(auth_routes.require_session)],
     )
 
     _install_trace_id_middleware(app)
     _install_exception_handlers(app)
+    app.include_router(auth_routes.router)
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health(request: Request) -> HealthResponse:
