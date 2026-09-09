@@ -47,9 +47,10 @@
 
 在 Strix（`strix-agent` 1.5.3, Apache-2.0）之上做 Web 控制台：向导式发起扫描、实时进度可视化、中文人话报告、授权护栏。核心约束：**LLM 可切换、谁用谁的 Key、Key 绝不落盘。**
 
-**已完成：T0（构建/编排骨架）· T1（M0 契约实测，六条断言全过）· T2（后端骨架）· T4（TLS 全套）· T4b（单账号登录后端）。** git 仓库，remote `StevenZhang2026/strix-web`（**public**）。
+**已完成：T0（构建/编排骨架）· T1（M0 契约实测，六条断言全过）· T2（后端骨架）· T4（TLS 全套）· T4b（单账号登录后端）· T5（前端骨架 + 中文文案表）。** git 仓库，remote `StevenZhang2026/strix-web`（**public**）。
 逐条验收记录在 `PLAN.md` 的派发清单对应行与 §里程碑，归因在 `pitfalls`。
-**现在可以跑**：`make lint`、`make test`（161 passed）、`docker compose -p strix-console up -d api nginx` → `https://127.0.0.1/api/health`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
+**现在可以跑**：`make lint`（= `lint-api` ruff + **`lint-web` eslint/tsc，跑在宿主 node 上**）、`make test`（174 passed，**0 skipped —— skip 数不为 0 就说明有守卫没在跑**）、`docker compose -p strix-console up -d api web nginx` → `https://127.0.0.1/`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
+`lint-web` 依赖 `frontend/node_modules`，装它必须显式 `npm ci --registry=https://registry.npmjs.org/`（宿主 `~/.npmrc` 的镜像源被 TLS 解密，**不许动那个文件**）。
 **T4b 之后 `api` 起不来除非 `${DATA}/auth.json` 存在** —— 缺它就拒绝启动（否则删掉该文件即绕过登录）。跑一次 `./setup.sh` 的 C17f 建账号。
 `make verify-e2e` / `make reap` 仍是计划中的接口（T30）。
 已就绪：`strix_sandbox` 网络 + 靶场 `m0-juice-shop`（接入该网络，别名 `juice-shop`）。
@@ -128,7 +129,9 @@
 ### TypeScript（前端）
 
 - `strict: true`，**禁止 `any`**；Next.js App Router；服务端组件优先
-- **所有用户可见文案集中在 `frontend/messages/zh-CN.json`**，组件里**不得**出现中文字面量
+- **样式只用 CSS Modules + `globals.css` 里的 token 层，不引 Tailwind**（2026-09-09 拍板，理由在 `PLAN.md:220`）。也**不引 `clsx`/`cva`** —— 变体走级联（`.btn.stop`）
+- **所有用户可见文案集中在 `frontend/messages/zh-CN.json`**，组件里**不得**出现中文字面量（eslint 强制，但**抓不到模板字符串**）
+- **任何文件不许 import `next/headers`**（服务端彻底不碰会话 cookie）；**只有 `src/lib/stores/keys.ts` 可以碰 `window.sessionStorage`**。两条都由 `make lint-web` 的 eslint 封死
 - 状态：zustand（客户端）+ react-query（服务端数据）；WS 流单独一个 store，专家 tab 复用同一 store
 - Key 输入框 `type=password` + 随机 `name`（破自动填充）；POST 后 `finally` 清空 React state
 
