@@ -1,0 +1,23 @@
+# 构建上下文只需要源码、依赖清单和文案表。
+#
+# `node_modules` 必须排除：宿主上装的是 darwin-arm64 的原生二进制
+# （`@next/swc-darwin-arm64`），进 linux 镜像后不可用；而且它本身有几百 MB，
+# 白传一遍就是几十秒。镜像里的依赖一律由 `npm ci` 按 `package-lock.json` 重装。
+node_modules
+.next
+out
+
+# 本机开发产物
+*.tsbuildinfo
+.DS_Store
+
+# 环境文件一律不进构建上下文。这个项目的口径是凭据只经运行期注入，
+# 构建上下文里出现 `.env*` 就已经错了（CLAUDE.md §安全不变式）。
+.env
+.env.*
+
+# 说明文档不参与构建。
+messages/README.md
+
+# lint 配置只在开发与 CI 用；镜像构建刻意不跑 eslint（见 next.config.ts）。
+eslint.config.mjs

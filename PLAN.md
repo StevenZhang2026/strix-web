@@ -217,7 +217,12 @@ Strix/
 │           ├── projection.py  paths.py  catalogue.py
 │   └── tests/{test_target_guard,test_key_hygiene,test_scan_launcher,test_projector_resync,
 │              test_no_secret_columns,test_strix_contract}.py + fixtures/run_dirs/
-└── frontend/  (Next.js 15 + React 19 + Tailwind + zustand + react-query)
+└── frontend/  (Next.js 15 + React 19 + CSS Modules + zustand + react-query)
+    # 2026-09-09 拍板不引 Tailwind：设计刻意窄（圆角只有 2 个值、零 box-shadow、
+    # 3 个语义色各不串用），而 Tailwind 的红利来自接受它的宽刻度 —— 我们的字阶与圆角
+    # 都不在它的默认刻度上，每个值都要写成 `[]` 转义，付税却用不到它卖的东西。
+    # 另一层理由：Tailwind 的默认长相（rounded-lg shadow-sm）正是这轮花力气排掉的
+    # 品类脸，给下游子任务 Tailwind 等于给漂移开一条回去的路。
     ├── messages/zh-CN.json         # 全部用户可见文案集中在此
     └── src/{app,components/{wizard,live,findings,report,expert},lib}
 ```
@@ -892,7 +897,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
 | T28 | 续跑（重新索要 Key）+ 并发队列 + 留存清理任务 | T10 | `routes/scans.py` `services/scan_supervisor.py` | **2 —— ⚠️ 破坏性操作**（留存清理会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run、绝不递归删 `${DATA}` 下其他任何目录 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1**（原标 2，2026-09-08 **下调** —— 全清单唯一一条下调）：断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
-| T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 |
+| T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 |　**注意 `README.md` 已有一份临时版（2026-09-09 提前写，因为仓库是 public 而合规声明不该等到 M8）**，内含合规声明、"未完成不可用"状态表、安全姿态摘要。T30a 是**改写**它而不是新建，且要**保留合规声明原文**（见 §合规声明）。状态表到那时应当整段删掉 —— 一份要靠手工维护的进度表在产品做完之后就是纯负债 |
 | T30b | `make verify-e2e`（28 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2**（原与 T30a 合并标 1，2026-09-08 拆开并上调）—— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18（`grep 2>/dev/null \|\| echo 通过` 会把"文件不存在"报成"通过"）、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
 
 **可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。

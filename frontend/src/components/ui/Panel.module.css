@@ -1,0 +1,28 @@
+/* 侧栏面板。样张 `.panel` / `.panel-head` / `.panel-body`。 */
+
+.panel {
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box); /* 2px = 容器，方的不能按 */
+}
+
+/* 面板表头刻意**不填底色**：六个填色表头堆在一起就变成了「卡片套件」，
+   而那正是这一轮花力气排掉的品类脸。一条稍重的下划线足够把它认成表头。 */
+.head {
+  margin: 0;
+  padding: var(--s3) var(--s4) var(--s2);
+  border-bottom: 1px solid var(--rule-2);
+  font-size: var(--fs-2);
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+}
+
+.body {
+  padding: var(--s4);
+}
+
+/* 面板之间靠间距分隔，不靠额外的容器。 */
+.panel + .panel {
+  margin-top: var(--s5);
+}

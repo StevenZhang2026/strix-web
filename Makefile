@@ -119,8 +119,43 @@ lock-dev:
 build-test:
 	docker build --target test -t $(IMAGE_TEST) backend
 
+# 只读挂前端文案表：`test_message_coverage.py` 要拿 `frontend/messages/zh-CN.json`
+# 跟 `app/errors.py` 的机器码做双向比对，而 build-test 的构建上下文只有 `backend/`，
+# 镜像里没有它。不挂的话那 13 个测试全 skip，而 skip 会让 `make test` 照样退 0 ——
+# 一个"看起来在跑、其实没在跑"的守卫（这正是它被加进来要防的那类事）。
+#
+# 用环境变量指路，不靠测试自己从 `__file__` 往上找仓库根：镜像里 app 在 /app、
+# tests 在 /work，路径推导的结论取决于 rootdir 落在哪一个 —— 一个会在下次改
+# Dockerfile 时静默失效的假设。挂到一个固定的中立路径再显式告诉它，没有可推导的余地。
+# （路径不是机密，走 -e 没问题；凭据绝不这样传。）
 test: build-test
-	docker run --rm $(IMAGE_TEST) pytest
+	docker run --rm \
+	  -v "$(PWD)/frontend/messages:/messages:ro" \
+	  -e CONSOLE_MESSAGES_JSON=/messages/zh-CN.json \
+	  $(IMAGE_TEST) pytest
 
-lint: build-test
+lint: lint-api lint-web
+
+lint-api: build-test
 	docker run --rm $(IMAGE_TEST) sh -eu -c 'ruff check . && ruff format --check .'
+
+# 前端闸门。**这条 target 是「服务端彻底不碰 cookie」那条裁决的唯一执行点** ——
+# 它靠 eslint 的 `no-restricted-imports` 禁掉 `next/headers`，而 `next.config.ts` 刻意
+# 设了 `eslint.ignoreDuringBuilds: true`（lint 不该由原生二进制的 postinstall 门决定
+# 镜像能不能构建）。两件事合起来的后果是：没有这条 target，那些边界规则在任何自动
+# 流程里都不会跑，「用工具封死」就退化成「靠人记」——而那正是它要替代的东西。
+#
+# 用宿主 node（v24.19.0，CLAUDE.md §环境 里声明的版本），不另起镜像：这里跑的是
+# Node 工具链，不是 Python 业务代码，「后端必须容器化」那条约束不适用。
+#
+# 缺 node_modules 时**硬失败并给出命令**，不 skip。理由同 test 的只读挂载：
+# 一个会静默跳过的检查等于没有检查。
+#
+# ⚠️ 全新克隆上 `npm run typecheck` 必须在**至少一次 `npm run build` 之后**跑 ——
+# `next-env.d.ts` 里有一行 `/// <reference path="./.next/types/routes.d.ts" />`，
+# 是 `next build` 自己写进去的。T30b 写验收脚本时注意这个顺序。
+lint-web:
+	@test -d frontend/node_modules || { \
+	  echo "frontend/node_modules 不存在。先跑：(cd frontend && npm ci --registry=https://registry.npmjs.org/)"; \
+	  exit 1; }
+	cd frontend && npm run lint && npm run typecheck

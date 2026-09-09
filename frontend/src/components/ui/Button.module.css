@@ -1,0 +1,54 @@
+/* 按钮。**逐值照抄样张的 `.btn` / `.btn.ghost` / `.btn.stop`**。
+   变体靠**层叠**表达（`.btn.ghost` 权重高于 `.btn`），不靠 JS 拼类名 ——
+   见 `globals.css` 顶部第 3 节：clsx / cva 是"用 JS 重新实现层叠"。
+
+   基态就是填色的闸门按钮：样张里主操作是常态，次要操作才是变体。 */
+
+.btn {
+  font: inherit;
+  font-size: var(--fs-3);
+  font-weight: 600; /* 整站上限。永不用 700。 */
+  letter-spacing: 0.02em;
+  padding: 10px var(--s5);
+  /* 4px = 可按。整站只有可点的东西是圆角，见 globals.css 的形状约定。 */
+  border-radius: var(--r-act);
+  cursor: pointer;
+  border: 1px solid var(--gate);
+  background: var(--gate);
+  color: var(--sheet);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--gate-hi);
+  border-color: var(--gate-hi);
+}
+
+/* 次要操作：同一个闸门色，只是不填。 */
+.ghost {
+  background: transparent;
+  color: var(--gate);
+}
+
+.ghost:hover:not(:disabled) {
+  background: rgba(23, 80, 92, 0.07);
+}
+
+/* 停止。刻意**不是**红色填充：整站没有一个纯红填充按钮 ——
+   「停止」是一个正常的、随时可以用的操作，不该长得像一次事故。 */
+.stop {
+  border-color: var(--sev2);
+  color: var(--sev2);
+  background: transparent;
+}
+
+.stop:hover:not(:disabled) {
+  background: rgba(120, 38, 76, 0.07);
+}
+
+/* 禁用态：整站唯一使用 opacity 表达状态的地方。
+   这里可以接受，因为它表达的正是"这个东西现在不参与" —— 一层灰纱，
+   而不是一个需要被读出来的状态值。 */
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

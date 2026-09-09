@@ -1,5 +1,5 @@
 # =============================================================================
-# Strix Web 控制台 —— api + nginx（web 由 T5 追加）
+# Strix Web 控制台 —— api + web + nginx
 #
 # 刻意不写顶层 `version:` —— Compose v2+ 视其为 obsolete 并打警告，而 T0 的验收
 # 项之一就是 `docker compose config` 零警告。
@@ -160,6 +160,79 @@ services:
     #   加了只对 Linux 宿主有意义。
 
   # ===========================================================================
+  # web —— Next.js 15 standalone。只产出 HTML/CSS/JS，**持有零个凭据**。
+  #
+  # 刻意不给它 x-console-env，而且**整个 environment 段都不写**。它需要知道的东西
+  # 是空集：不读数据目录、不碰 docker.sock、不知道模型是哪一家、更不该看到任何与
+  # 凭据相关的东西。需要鉴权的数据全部由**浏览器**直接打 /api/*（同源，经 nginx），
+  # Next.js 进程从不代取 —— 理由全文见 frontend/src/lib/api/client.ts 顶部第一节，
+  # 并由 eslint 的 `no-restricted-imports`（禁 next/headers）机械保证。
+  #
+  # 因此 PLAN.md 里原先设想的 `CONSOLE_API_ORIGIN=http://api:8000` 这一行在方案 B
+  # 下是**无用的**：没有任何服务端代码会去请求 api。留着它比删掉更糟 —— 它在暗示
+  # "服务端可以代取"，而那正是这一轮刻意封掉的东西。
+  #
+  # NODE_ENV / NEXT_TELEMETRY_DISABLED / PORT / HOSTNAME 四个变量都在
+  # frontend/Dockerfile 的 runtime 阶段用 ENV 设定，**不在这里重复**（两处写同一个值
+  # 迟早漂移）。其中 HOSTNAME 那条最不直观，事实与实测见下：
+  #   · Docker 会给每个容器注入 HOSTNAME=<容器 id 前 12 位>
+  #     （实测 `docker run --rm node:24-slim node -e 'console.log(process.env.HOSTNAME)'`
+  #     → `1e750d714b3f`）；
+  #   · standalone 的 server.js 把 process.env.HOSTNAME 当**监听地址**用，于是不覆盖
+  #     它就会去 bind 一个不存在的接口名；
+  #   · 镜像里的 `ENV HOSTNAME=0.0.0.0` **足以**压掉那次注入（已实测：只在镜像里设，
+  #     容器内读到的就是 `0.0.0.0`）。所以这里不需要再写一行。
+  # ===========================================================================
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # 与 api 同一条理由：显式写 target。三阶段里 runtime 恰好是最后一个，但
+      # `deps` / `build` 阶段带着 node_modules 和全部源码，绝不能因为将来加了一个
+      # 阶段就静默变成默认产物。
+      target: runtime
+    image: strix-console/web:0.1.0
+
+    networks:
+      # **只有 default**，刻意不加 strix_sandbox。
+      # api 必须在沙箱网络上是因为它要访问沙箱里的 Caido 端点（M0 断言 4）；web 只是
+      # 个渲染器，把它接进沙箱网络等于让被测目标的邻居能直接打到控制台前端。
+      - default
+
+    read_only: true
+
+    tmpfs:
+      # read_only 之下，Next.js standalone 在运行期需要写的路径只有这两处：
+      #   /app/.next/cache —— Next 启动时无条件创建它（增量缓存 / fetch 缓存的根）。
+      #     本轮全是静态页，写入量接近 0，但缺了它启动就 EROFS。
+      #   /tmp —— Node 自己的 os.tmpdir()。我们的代码不写临时文件，但这类写入不由
+      #     我们控制（一次就够炸），16m 是"够用且写满也无害"的量。
+      # 两处都不带 noexec —— .next/cache 里将来可能落 Next 的 wasm / 编译产物，
+      # 而 /tmp 加 noexec 对 Node 没有额外收益（它不从 /tmp 加载代码）。
+      - "/app/.next/cache:size=64m"
+      - "/tmp:size=16m"
+
+    security_opt:
+      - "no-new-privileges:true"
+
+    # 不写 user: —— 镜像里已经 `USER node`，且拷进去的文件是 `--chown=node:node`。
+    # 在这里再写一遍 uid 只会在两边不一致时变成一堆 EACCES。
+
+    # PID 1 要收割 Node 可能派生的子进程。
+    init: true
+
+    # 只 expose、不 publish。对外唯一入口是 nginx:443。
+    # （本机另有一个在用的 compose 项目占着宿主 3000 —— 我们不发布端口，不冲突。）
+    expose:
+      - "3000"
+
+    # 刻意**不设 healthcheck**。
+    # healthcheck 的唯一实际用处是给 `depends_on: condition: service_healthy` 提供
+    # 判据，而我们不用那个：nginx.conf 用变量形式的 proxy_pass + resolver，上游没起来
+    # 时返回 502 而不是拒绝启动。加一条只会换来每 30s 一次的日志噪音，和一个
+    # "看起来在保证就绪、其实什么都没保证"的绿点。真正的就绪判定在 make verify-e2e。
+
+  # ===========================================================================
   # nginx —— **唯一**发布端口的服务。只做 TLS 终止 + 反代，不跑任何业务逻辑。
   #
   # 刻意不给它 x-console-env：它不需要知道数据目录、沙箱限额、更不该看到任何与
@@ -197,12 +270,12 @@ services:
     security_opt:
       - "no-new-privileges:true"
 
-    # 只是启动顺序，不是就绪判定 —— api 现在没有 HEALTHCHECK（T2 才有 /api/health）。
+    # 只是启动顺序，不是就绪判定 —— 两个上游都没有 HEALTHCHECK。
     # nginx.conf 里用变量形式的 proxy_pass + resolver，上游没起来时返回 502 而不是
     # 拒绝启动，所以顺序其实也不关键。
-    # T5 加 web 服务时，这里补一个 web，并给 web 写 expose: ["3000"]（**不是** ports）。
     depends_on:
       - api
+      - web
 
     networks:
       - default

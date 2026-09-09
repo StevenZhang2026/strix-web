@@ -1,0 +1,66 @@
+/* 错误告知块。与授权印记条、会话遮罩同一个语言：左侧一条竖线 + 纸面。
+
+   竖线用 `--sev2`（梅子序列的第二档）而不是琥珀：琥珀是「需要你确认」，
+   这里是「出了问题」。两个语义色不串用（globals.css 顶部第 3 条）。 */
+
+.notice {
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-left: 3px solid var(--sev2);
+  border-radius: 0 var(--r-box) var(--r-box) 0;
+  padding: var(--s5) var(--s6);
+  max-width: var(--measure);
+}
+
+.title {
+  font-size: var(--fs-4);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  color: var(--sev2);
+}
+
+.detail,
+.action {
+  margin-top: var(--s3);
+  font-size: var(--fs-3);
+  color: var(--ink-2);
+}
+
+/* 「该怎么办」比「出了什么事」更该被看见：正文色而不是弱化色。 */
+.action {
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------- 相关信息
+   具体值（目标、解析到的 IP、你填的上限……）一律走这张键值表，
+   **不插进句子里**。理由见 messages/README.md 第 4 条：中文插值语序、
+   长 URL 断句、缺参数时花括号漏出去。
+   这张表的长相与工单的字段行同构 —— 同一个视觉语言，不是两套。 */
+.rows {
+  margin: var(--s4) 0 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--s4);
+  row-gap: 2px;
+  font-size: var(--fs-2);
+}
+
+.rowKey {
+  color: var(--ink-mute);
+  text-align: right;
+}
+
+.rowValue {
+  margin: 0;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  /* 长 URL / 长 IP 列表必须能断，否则会把整块撑出容器。 */
+  overflow-wrap: anywhere;
+}
+
+.traceHint {
+  margin-top: var(--s3);
+  font-size: var(--fs-1);
+  color: var(--ink-mute);
+}

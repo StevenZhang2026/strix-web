@@ -1,0 +1,351 @@
+{
+  "app": {
+    "name": "Strix 控制台",
+    "tagline": "本机运行",
+    "footerLocal": "数据与凭据都不离开这台机器",
+    "footerConsoleVersion": "控制台",
+    "footerStrixVersion": "strix-agent"
+  },
+
+  "nav": {
+    "home": "首页",
+    "newScan": "新建扫描",
+    "scans": "扫描记录",
+    "audit": "审计",
+    "diagnostics": "本机诊断",
+    "logout": "退出登录"
+  },
+
+  "common": {
+    "confirm": "确认",
+    "cancel": "取消",
+    "back": "上一步",
+    "next": "下一步",
+    "retry": "重试",
+    "copy": "复制",
+    "copied": "已复制",
+    "close": "关闭",
+    "loading": "正在读取",
+    "empty": "暂无内容",
+    "unknown": "未知",
+    "notReadyYet": "这个入口还没接上。",
+    "traceIdLabel": "问题编号",
+    "traceIdHint": "反馈问题时带上这个编号，本机日志里能查到对应的完整记录。",
+    "viewOriginal": "查看英文原文",
+    "detailsTitle": "相关信息"
+  },
+
+  "units": {
+    "second": "秒",
+    "minute": "分钟",
+    "hour": "小时"
+  },
+
+  "compliance": {
+    "heading": "授权条款（每次扫描都适用）",
+    "p1": "Strix 会真实攻击你指向的目标。仅限对自己拥有或已获书面授权的系统使用，并严格遵守约定范围。",
+    "p2": "未授权测试在多数司法辖区违法。授权与合规责任完全由使用者承担。",
+    "p3": "本工具只能记录你的授权声明，无法验证授权真实性。"
+  },
+
+  "home": {
+    "docketTitle": "新建授权工单",
+    "docketNumberPending": "编号在你签署时生成",
+    "fieldTarget": "测试目标",
+    "fieldTargetBlank": "网址、域名或 IP，可填多个",
+    "fieldAuthorization": "授权依据",
+    "fieldAuthorizationBlank": "授权文件编号，或合同、工单号",
+    "fieldOperator": "操作人",
+    "fieldOperatorBlank": "对这次测试负责的人",
+    "fieldTemplate": "测试范围",
+    "fieldTemplateBlank": "从六个场景里选一个，也可以自己调",
+    "fieldBudget": "费用上限",
+    "fieldBudgetBlank": "必填。用的是你自己的模型凭据",
+    "start": "开始填写工单",
+    "startHint": "一共五步，最后一步要你逐字确认目标。",
+    "readyTitle": "本机就绪状态",
+    "readyDocker": "Docker 可达",
+    "readySandboxImage": "沙箱镜像已就绪",
+    "readySamePath": "数据目录路径一致",
+    "readyTelemetryOff": "遥测已关闭",
+    "readyTelemetryOffValue": "不外发任何数据",
+    "readyNotProbed": "尚未检测",
+    "recentTitle": "最近扫描",
+    "recentEmpty": "还没有扫描记录。填完一份工单就会出现在这里。"
+  },
+
+  "credentials": {
+    "panelTitle": "模型凭据",
+    "none": "还没有提供凭据。凭据只存在于内存中，后端一重启就要重新提供 —— 这是「绝不落盘」的直接代价。",
+    "provide": "现在提供凭据",
+    "forget": "立即忘记凭据",
+    "maskedLabel": "已登记",
+    "verifying": "正在验活",
+    "verified": "验活通过"
+  },
+
+  "session": {
+    "expiredTitle": "会话已失效",
+    "expiredDetail": "会话存在后端内存里，后端重启或长时间不操作都会让它失效。已保存的扫描记录不受影响。",
+    "toLogin": "重新登录"
+  },
+
+  "scan": {
+    "stampTarget": "测试目标",
+    "stampResolved": "解析到",
+    "stampAuthorization": "授权依据",
+    "stampOperator": "操作人",
+    "stampDeclaredAt": "声明于",
+    "stateRunning": "受控执行中",
+    "tabLive": "实时",
+    "tabFindings": "发现",
+    "tabReport": "中文报告",
+    "tabExpert": "原始记录",
+    "stop": "停止这次扫描",
+    "stopHint": "停止是优雅的：agent 会先把手里的发现写完再退出，已拿到的结果和报告都不会丢。",
+    "resume": "继续这次扫描",
+    "resumeNeedsKey": "继续扫描需要重新提供一次凭据。"
+  },
+
+  "status": {
+    "starting": "准备中",
+    "running": "进行中",
+    "completed": "已完成",
+    "stopped": "已提前结束",
+    "failed": "失败",
+    "interrupted": "已中断",
+    "orphanedRunning": "状态未知"
+  },
+
+  "phase": {
+    "pullingImage": "拉取沙箱镜像",
+    "startingSandbox": "沙箱启动",
+    "settingUpProxy": "抓包代理就绪",
+    "testing": "正在测试",
+    "translating": "生成中文报告",
+    "heading": "进行到哪一步"
+  },
+
+  "budget": {
+    "heading": "花掉的钱",
+    "ceilingLabel": "上限",
+    "stopsAt": "达到上限后停止。",
+    "reserveNote": "虚线是上限的九成 —— 子任务到这里就停手，把剩下的留给总协调收尾。",
+    "overflowNote": "斜纹这一段是可能多花的量：结算发生在每一轮结束之后，所以最后一轮会把总额顶出上限一点。停止之前拿到的结果不会丢。",
+    "reportCost": "报告生成费用"
+  },
+
+  "severity": {
+    "critical": "严重",
+    "high": "高危",
+    "medium": "中危",
+    "low": "低危",
+    "info": "提示",
+    "needsReview": "需人工确认"
+  },
+
+  "errors": {
+    "invalid_request": {
+      "title": "请求内容不合法",
+      "detail": "后端没能解析这次提交的内容，通常是有必填项没填，或者格式不对。",
+      "action": "回到上一步检查标记出来的字段，改好后重新提交。",
+      "params": ["field"]
+    },
+    "not_found": {
+      "title": "找不到这个地址",
+      "detail": "请求的地址在后端不存在。多半是链接过期，或者页面版本比后端旧。",
+      "action": "回到首页重新进入。如果是刷新之后才出现的，先整站刷新一次。",
+      "params": ["path"]
+    },
+    "method_not_allowed": {
+      "title": "这个地址不接受该操作",
+      "detail": "地址存在，但不支持这次用的请求方式。这是页面自身的问题，不是你的操作有误。",
+      "action": "记下问题编号反馈给我们。这次操作没有产生任何改动。",
+      "params": ["path", "allow"]
+    },
+    "internal_error": {
+      "title": "后端出错了",
+      "detail": "后端处理这次请求时出了意外。详细信息只写进本机日志，不会出现在页面上。",
+      "action": "重试一次通常就好。持续出现就到本机诊断页查看后端日志。"
+    },
+    "not_in_allowlist": {
+      "title": "目标不在授权清单里",
+      "detail": "当前是强制模式，只有列进授权清单的目标才允许扫描。",
+      "action": "确认你对这个目标确实有授权，然后把它加入清单。加入这一步会写进审计记录。",
+      "params": ["target", "registrable_domain"]
+    },
+    "blocked_metadata": {
+      "title": "这个地址永久禁止扫描",
+      "detail": "它是云服务商的元数据地址，扫描它等于替攻击者去取云凭据。这条限制不能解除，也没有「确认后继续」。",
+      "action": "换一个目标。要测云上主机，请填它对外的域名或公网 IP。",
+      "params": ["target", "resolved_ip"]
+    },
+    "dns_changed": {
+      "title": "目标解析结果变了",
+      "detail": "你声明授权时这个域名解析到的地址，和现在解析到的不是同一批。这正是 DNS 重绑定的形状，所以扫描不会启动。",
+      "action": "重新走一遍授权确认，核对新的解析结果。确定只测某台固定主机，就直接填它的 IP。",
+      "params": ["target", "declared_ips", "resolved_ips"]
+    },
+    "split_horizon": {
+      "title": "同一个域名指向内外两处",
+      "detail": "这个域名同时解析到公网地址和内网地址，无法判断你授权的是哪一个。",
+      "action": "直接填写你要测的那个 IP，不要用域名。",
+      "params": ["target", "public_ips", "private_ips"]
+    },
+    "missing_typed_confirmation": {
+      "title": "确认串不一致",
+      "detail": "逐字输入的内容和目标不一致。大小写、首尾空格、中文标点都算不一致。",
+      "action": "照着输入框旁边灰色显示的那串字符重新输入一遍。",
+      "params": ["target"]
+    },
+    "budget_exceeds_ceiling": {
+      "title": "超过本机费用上限",
+      "detail": "填写的费用上限超过了这台机器允许的最大值。",
+      "action": "把上限调低。确实需要更高，就改本机配置里的全局上限并重启后端。",
+      "params": ["requested_usd", "ceiling_usd"]
+    },
+    "key_required": {
+      "title": "需要重新提供凭据",
+      "detail": "凭据只存在于内存中，后端一重启就没了。这是「绝不落盘」的直接代价，不是故障。",
+      "action": "重新粘贴一次凭据。目标、模板和预算都还留着，不用重填。",
+      "params": ["provider", "auth_shape"]
+    },
+    "key_verify_failed": {
+      "title": "凭据没通过验活",
+      "detail": "我们拿它发了一次最小请求，模型服务拒绝了。这一步刻意放在扫描之前，免得跑几十分钟才发现凭据是错的。",
+      "action": "核对有没有多余的空格或换行，并确认这个账号能用你选的模型。",
+      "params": ["provider", "auth_shape", "latency_ms"]
+    },
+    "unexpected_secret_key": {
+      "title": "多填了一项凭据",
+      "detail": "你选的这种凭据形状不需要这一项。两套凭据同时给，模型网关会静默忽略一套，事后查不出哪一套在生效，所以这里直接拒绝。",
+      "action": "只填当前形状要求的那几项，其余留空。",
+      "params": ["key_name", "auth_shape"]
+    },
+    "concurrency_limit": {
+      "title": "已有扫描在跑",
+      "detail": "一次扫描要独占一整个沙箱容器，本机同时只允许固定数量。",
+      "action": "等当前扫描结束，或者先把它停掉。",
+      "params": ["limit", "running_scan_id"]
+    },
+    "docker_unavailable": {
+      "title": "连不上 Docker",
+      "detail": "起扫描前的预检没通过：Docker 守护进程没有响应。",
+      "action": "确认 Docker Desktop 正在运行，然后到本机诊断页重新检测。"
+    },
+    "unauthenticated": {
+      "title": "请先登录",
+      "detail": "这次请求没有带上有效会话。会话存在后端内存里，后端重启或长时间不操作都会失效。",
+      "action": "重新登录。已保存的扫描记录不受影响。"
+    },
+    "invalid_credentials": {
+      "title": "用户名或口令不对",
+      "detail": "两者中至少有一个不对。我们刻意不告诉你是哪一个。",
+      "action": "重新输入。忘了口令就在本机重新运行 setup.sh 重设账号。"
+    },
+    "auth_locked": {
+      "title": "登录已暂时锁定",
+      "detail": "连续失败次数太多，登录入口暂停了一段时间。",
+      "action": "等锁定时间过去再试。",
+      "params": ["retry_after"]
+    },
+    "origin_mismatch": {
+      "title": "来源校验未通过",
+      "detail": "这次连接的来源和访问的地址不一致，看起来不是从本机控制台页面发起的。",
+      "action": "用 https://localhost 打开控制台，不要经由其它地址或第三方页面访问。",
+      "params": ["origin", "host"]
+    }
+  },
+
+  "scanFailures": {
+    "llm_tls_intercepted": {
+      "title": "模型连接被中间设备解密",
+      "detail": "到模型服务的加密连接被中途拆开并换了证书，这台机器不认那张证书。企业网络里的解密设备是最常见的原因 —— 不是模型或凭据的问题。",
+      "action": "把企业根证书导出成一个文件，按运维文档挂载给后端；或者换一个没有做解密的网络。"
+    },
+    "bedrock_route_rejects_bearer": {
+      "title": "这条路由不接受这种凭据",
+      "detail": "Bedrock 的两种凭据走两条不同路由。你用的是 API key，但模型名指向了只认访问密钥的那一条。",
+      "action": "把模型名换成带 invoke 的那一条，或者改用访问密钥形式的凭据 —— 后者还便宜好几倍。"
+    },
+    "prompt_cache_unsupported_on_route": {
+      "title": "这条路由不支持提示缓存",
+      "detail": "模型名里带 invoke 的路由不接受提示缓存参数，请求被服务端拒绝了。",
+      "action": "关掉提示缓存后重试。控制台下一次会为这类模型自动关掉它。"
+    },
+    "invalid_api_key": {
+      "title": "凭据无效",
+      "detail": "模型服务拒绝了这组凭据。",
+      "action": "回到凭据页重新粘贴，注意首尾的空格和换行。"
+    },
+    "model_access_denied": {
+      "title": "这个账号没有该模型的权限",
+      "detail": "凭据本身是对的，但账号没有被授权使用这个模型，或者区域选错了。",
+      "action": "在模型服务商控制台里为这个账号开通该模型，或者换一个已开通的模型。"
+    },
+    "model_not_found": {
+      "title": "找不到这个模型",
+      "detail": "模型名字在服务商那里不存在，通常是拼写或版本号写错。",
+      "action": "从模型列表里重新选一个。"
+    },
+    "missing_required_env": {
+      "title": "缺少必需的配置项",
+      "detail": "启动扫描要用的某个配置项是空的。",
+      "action": "到本机诊断页看缺哪一项，补齐后重新发起。"
+    },
+    "llm_connection_failed": {
+      "title": "连不上模型服务",
+      "detail": "到模型服务的连接没有建立起来，更具体的几种原因都已排除。",
+      "action": "确认这台机器能访问模型服务的地址，然后重试。"
+    },
+    "docker_permission_denied": {
+      "title": "没有权限操作 Docker",
+      "detail": "后端能看到 Docker 的接口，但没有权限使用它。",
+      "action": "按运维文档检查 Docker socket 的权限，然后重启后端。"
+    },
+    "docker_not_installed": {
+      "title": "没有找到 Docker",
+      "detail": "扫描需要 Docker 来跑沙箱，当前环境里没有它。",
+      "action": "安装并启动 Docker Desktop，再回到本机诊断页检测。"
+    },
+    "failed_to_pull_image": {
+      "title": "沙箱镜像拉取失败",
+      "detail": "沙箱镜像没有下载完，多半是网络中断。",
+      "action": "确认能访问镜像仓库后，在本机诊断页点重新拉取。这一步可以反复重试。"
+    },
+    "scan_preparation_failed": {
+      "title": "扫描准备阶段失败",
+      "detail": "沙箱还没开始测试就退出了。",
+      "action": "到原始记录页看这次的完整输出，把问题编号一起反馈。"
+    },
+    "scan_incomplete": {
+      "title": "结论不完整",
+      "detail": "费用或轮次先用完了，这次扫描是被提前结束的，不是跑完的。已经找到的问题都还在，但没测到的部分无从判断 —— 这次结果不能当作「目标没有问题」。",
+      "action": "提高费用上限后继续这次扫描，接着上次的进度往下测。"
+    }
+  },
+
+  "paramLabels": {
+    "field": "字段",
+    "path": "地址",
+    "allow": "支持的请求方式",
+    "target": "目标",
+    "registrable_domain": "注册域名",
+    "resolved_ip": "解析到",
+    "declared_ips": "声明时解析到",
+    "resolved_ips": "现在解析到",
+    "public_ips": "公网地址",
+    "private_ips": "内网地址",
+    "requested_usd": "你填的上限",
+    "ceiling_usd": "本机允许的最大值",
+    "provider": "模型服务",
+    "auth_shape": "凭据形状",
+    "latency_ms": "耗时",
+    "key_name": "多余的一项",
+    "limit": "同时允许的扫描数",
+    "running_scan_id": "正在跑的扫描",
+    "retry_after": "解锁还需",
+    "origin": "来源",
+    "host": "访问地址"
+  }
+}

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img">
+  <!-- 一份被盖了印的工单。同一个概念的最小形态：
+       方框 = 容器（2px 圆角，与 --r-box 一致），三条线 = 字段，
+       左侧竖条 = 授权印记那条琥珀竖线。
+       颜色写死在这里而不是用变量：SVG 作为独立资源被请求，拿不到页面的 CSS 变量。
+       两个值分别等于 --gate (#17505C) 与 --stamp (#8A5A12)。 -->
+  <rect x="5" y="3" width="22" height="26" rx="2" fill="#F8F9F5" stroke="#17505C" stroke-width="2"/>
+  <rect x="5" y="3" width="3" height="26" fill="#8A5A12"/>
+  <g stroke="#17505C" stroke-width="2" stroke-linecap="square">
+    <line x1="12" y1="11" x2="23" y2="11"/>
+    <line x1="12" y1="16" x2="23" y2="16"/>
+    <line x1="12" y1="21" x2="19" y2="21"/>
+  </g>
+</svg>

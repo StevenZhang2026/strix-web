@@ -1,0 +1,34 @@
+/* 面板里的状态行列表。逐值照抄样张的 `.rows`。
+
+   点线分隔（`dotted`）是刻意的：面板内部的行是同一件事的若干侧面，
+   实线会把它们讲成几件互不相干的事。整条列表最后一行不画线。 */
+
+.rows {
+  font-size: var(--fs-3);
+  /* 是 `<ul>`（语义上确实是一组同类条目），但不要项目符号 ——
+     状态点已经在每行开头承担了"这是一条"的视觉职责。 */
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  gap: var(--s3);
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px dotted var(--rule);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.value {
+  margin-left: auto;
+  color: var(--ink-2);
+  font-size: var(--fs-2);
+  text-align: right;
+  /* 数字等宽：几行数值右对齐时不等宽会看起来在抖。 */
+  font-variant-numeric: tabular-nums;
+}

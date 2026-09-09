@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "allowJs": false,
+    "noEmit": true,
+    "incremental": true,
+    // 增量信息落到 .next/ 里，因为根 .gitignore 已经忽略 `.next/` 而**没有**
+    // `*.tsbuildinfo` 这条。默认位置是 ./tsconfig.tsbuildinfo，跑一次
+    // `tsc --noEmit` 就会在仓库里留一个未被忽略的构建产物。
+    // 本轮不许改根 .gitignore，所以从这一侧解决 —— 这样也更对：产物本来就该跟
+    // 其他构建产物住在一起。
+    "tsBuildInfoFile": ".next/tsconfig.tsbuildinfo",
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}

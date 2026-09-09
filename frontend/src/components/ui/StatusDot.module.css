@@ -1,0 +1,30 @@
+/* 状态点。逐值照抄样张的 `.dot`。
+
+   **形状也带信息，不只靠颜色** —— 圆 = 正常，方 = 需要你处理，空心 = 未知/未检测。
+   这不是装饰：色盲用户、打印出来的黑白报告、以及"两个绿点一个黄点"这种
+   一眼扫过去的场合，形状比色相可靠。
+
+   注意这里的 `50%` 和 `1px` **不属于** `--r-box` / `--r-act` 那套语义半径
+   （见 globals.css 的形状约定）：它们表达的是形状本身，不是"能不能按"。 */
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gate);
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+/* 方块 = 需要你处理。 */
+.warn {
+  background: var(--stamp);
+  border-radius: 1px;
+}
+
+/* 空心 = 还不知道。本轮首页的就绪面板全用这一档 —— 后端还没有检测接口。 */
+.idle {
+  background: transparent;
+  border: 1.5px solid var(--rule-2);
+}

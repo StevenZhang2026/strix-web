@@ -1,0 +1,130 @@
+/* 授权印记条。逐值照抄样张的 `.stamp-bar` / `.state`，另加骨架态。
+
+   它跟随一次扫描一生，不是发起时看一眼的弹窗 —— 所以它有结构性位置，
+   在标签页之上，四个 tab 切换时它不动。 */
+
+.bar {
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  /* 左侧 3px 琥珀竖线：全站琥珀色的用量都很小，用量小才有分量。 */
+  border-left: 3px solid var(--stamp);
+  border-radius: 0 var(--r-box) var(--r-box) 0;
+  padding: var(--s4) var(--s5);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s5) var(--s6);
+  align-items: baseline;
+  /* 全页唯一的入场动画。它在**骨架态**就播完 —— 数据到达时不再播第二次，
+     否则"唯一的入场动画"就变成了每次取数都抖一下。 */
+  animation: settle 0.34s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes settle {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar {
+    animation: none;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.key {
+  font-size: var(--fs-1);
+  color: var(--ink-mute);
+  letter-spacing: 0.04em;
+}
+
+.value {
+  font-size: var(--fs-3);
+  /* 这个 1.4 是**契约**：骨架占位块的高度按它算（见 `--stamp-line`）。改这里要一起改。 */
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  /* 单行到底。长 URL 换行会把整条印记条撑高 —— 那正是我们要消灭的布局跳动，
+     而且它还会把"目标"这一栏的位置推走。溢出用省略号，完整值在 title 里。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------- 每栏的宽度
+   `min-width` 是**为骨架态预留的位置**，不是装饰。
+   有它，加载完成前后每一栏的左边缘都在同一个像素上。
+   `max-width` 只作用在目标那一栏（唯一可能很长的值）。 */
+.fTarget {
+  min-width: 22ch;
+  max-width: 34ch;
+}
+.fResolved {
+  min-width: 11ch;
+}
+.fAuthorization {
+  min-width: 14ch;
+}
+.fOperator {
+  min-width: 6ch;
+}
+.fDeclaredAt {
+  min-width: 16ch;
+}
+
+/* --------------------------------------------------------------- 骨架占位
+   高度写成 `calc(font-size * line-height)`，与 `.value` 的行盒**精确**等高。
+   用 `1em`、`100%` 或干脆放个空格都不行 —— 那几种做法的高度取决于字体的
+   升降部度量，换一台机器的中文字体就差一两个像素，于是又跳了。 */
+.placeholder {
+  display: block;
+  height: calc(var(--fs-3) * 1.4);
+  background: var(--sheet-sunk);
+  border-radius: var(--r-box);
+}
+
+/* 刻意**没有**闪烁 / 呼吸动画。整站只有一个入场动画（上面那个 settle），
+   再加一个脉冲会让"正在读取"变成页面上最抢眼的东西 —— 而它其实是最不重要的。
+   `aria-busy` 已经把"正在读取"这件事告诉了辅助技术。 */
+
+.state {
+  margin-left: auto;
+  align-self: center;
+  border: 1px solid var(--stamp);
+  color: var(--stamp);
+  /* 2px = 容器，方的不能按。这是一枚状态印记，不是按钮。 */
+  border-radius: var(--r-box);
+  padding: 3px 10px;
+  font-size: var(--fs-2);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  /* 骨架态与已加载态同宽同高，见上面 min-width 的理由。 */
+  min-width: 8ch;
+  text-align: center;
+}
+
+.statePlaceholder {
+  /* 边框留着（位置不变），只是里面还没有字。 */
+  color: transparent;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,0 +1,113 @@
+/* 首页。逐值照抄样张 ① 的 `.two` / `.docket` / `.terms` / `.actions` / `.empty`。 */
+
+/* 主栏 + 侧栏。侧栏定宽 320px：它装的是状态与凭据，宽度不该随窗口变 ——
+   一个会伸缩的状态面板会让人以为它在变化。 */
+.two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--s5);
+}
+
+/* 窄屏下改成上下两栏。工单在上、状态在下 —— 主角不让位。 */
+@media (max-width: 900px) {
+  .two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ------------------------------------------------------------------ 工单
+   首屏不是 hero 标题 + 渐变，而是「要你填的那张纸」。 */
+.docket {
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+}
+
+.docketHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+  padding: var(--s5) var(--s6) var(--s4);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* h1 在这里是 --fs-5（26px）而不是全局的 --fs-6（34px）：
+   这张纸的标题不该比它自己的内容更抢眼，34px 会让工单变成海报。 */
+.docketTitle {
+  font-size: var(--fs-5);
+}
+
+.docketNo {
+  margin-left: auto;
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+.docketBody {
+  padding: var(--s6);
+}
+
+/* ------------------------------------------------------------------ 条款
+   合规声明是工单的**条款**，不是弹窗。它有结构性位置。
+   刻意**不填底色** —— 一大块暖米色底会把这份工单变成另一种熟脸；
+   琥珀色只留一条 3px 的竖线，用量小才有分量。 */
+.terms {
+  margin-top: var(--s6);
+  border-left: 3px solid var(--stamp);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: var(--s4) var(--s5);
+}
+
+.termsHeading {
+  font-size: var(--fs-3);
+  margin-bottom: var(--s2);
+  color: var(--stamp);
+}
+
+.termsText {
+  max-width: var(--measure); /* 中文一行 ≈ 34 字，超过就丢行 */
+  font-size: var(--fs-3);
+  line-height: 1.85;
+  color: var(--ink-2);
+}
+
+.termsText + .termsText {
+  margin-top: var(--s2);
+}
+
+/* ------------------------------------------------------------------ 动作 */
+.actions {
+  margin-top: var(--s6);
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+
+.hint {
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+/* ------------------------------------------------------------------ 侧栏 */
+.empty {
+  font-size: var(--fs-3);
+  color: var(--ink-mute);
+  max-width: 26em;
+}
+
+.credentialsNote {
+  font-size: var(--fs-3);
+  color: var(--ink-mute);
+  max-width: 26em;
+  margin-bottom: var(--s3);
+}
+
+/* 侧栏面板里的按钮下面也要能放一句说明。 */
+.panelActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+}
