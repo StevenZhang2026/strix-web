@@ -186,7 +186,7 @@
       "title": "目标不在授权清单里",
       "detail": "当前是强制模式，只有列进授权清单的目标才允许扫描。",
       "action": "确认你对这个目标确实有授权，然后把它加入清单。加入这一步会写进审计记录。",
-      "params": ["target", "registrable_domain"]
+      "params": ["target"]
     },
     "blocked_metadata": {
       "title": "这个地址永久禁止扫描",
@@ -344,7 +344,6 @@
     "path": "地址",
     "allow": "支持的请求方式",
     "target": "目标",
-    "registrable_domain": "注册域名",
     "resolved_ip": "解析到",
     "declared_ips": "声明时解析到",
     "resolved_ips": "现在解析到",
