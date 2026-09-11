@@ -26,11 +26,13 @@
 
 # 刻意不在这里做的事
 
-- **`/api/system/status`（同路径挂载自检、docker 探测、孤儿计数）** 是 T3。
 - **`WEB_CONCURRENCY` / `--workers 1` 的启动校验** 是 T7（跟 KeyVault 一起，
   因为那条约束的理由就是 KeyVault 是进程内 dict）。
-- **`routes/`** 下的业务路由全部属于后续任务。本文件只挂 `/api/health` 与
-  `routes/auth.py`（T4b）。
+- **任何 docker 探测。** T3 的 `/api/system/status` 由**人**主动触发，启动期一次都
+  不探。启动时探 docker 会让"docker daemon 正在重启"变成"api 起不来"，而
+  `api` 起不来就没有任何界面能告诉用户是 docker 的问题。lifespan 里只做一件与
+  docker 相关的事：把传输层与"我是哪个容器"这两个**不需要跟 daemon 说话**的事实
+  装进 `app.state`。
 """
 
 from __future__ import annotations
@@ -57,9 +59,11 @@ from app.errors import (
     NotFoundError,
 )
 from app.logging_setup import Redactor, configure_logging, trace_id_var
-from app.models import HealthResponse
 from app.routes import auth as auth_routes
+from app.routes import health as health_routes
+from app.routes import system as system_routes
 from app.services.auth import AuthService
+from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
 from app.settings import Settings, assert_no_credential_env, load_settings
 
 logger = logging.getLogger(__name__)
@@ -317,6 +321,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.db = db
         app.state.strix_version = strix_version
         app.state.auth = auth_service
+        # T3。两者都**不跟 docker daemon 说话**：传输层是无状态的（每次请求新建连接），
+        # 容器自省只读 `/proc/self/mountinfo`。所以 docker 挂着也不影响启动。
+        #
+        # `self_container_ref` 在这里解析一次而不是每次请求都读 /proc：它是进程生命期
+        # 内的常量（容器 id 不会变），而单测要替换它时改一个 state 字段就够了。
+        app.state.docker_transport = UnixSocketTransport()
+        app.state.self_container_ref = read_self_container_ref()
 
         logger.info("启动完成")
         try:
@@ -347,17 +358,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _install_trace_id_middleware(app)
     _install_exception_handlers(app)
     app.include_router(auth_routes.router)
-
-    @app.get("/api/health", response_model=HealthResponse)
-    async def health(request: Request) -> HealthResponse:
-        # 不查任何依赖（不探 docker、不碰 DB）。理由见 models.HealthResponse ——
-        # 一个"更全面"的 healthcheck 会在依赖抖动时重启 api，而重启 api 会清空
-        # 内存 KeyVault，把所有人的凭据弄丢。也就是说它会**制造**故障。
-        return HealthResponse(
-            status="ok",
-            app_version=__version__,
-            strix_version=request.app.state.strix_version,
-        )
+    # `/api/health`（免鉴权，零依赖查询）与 `/api/system/status`（鉴权后，查全部依赖）。
+    # 两者的界线写在 `routes/health.py` 的模块 docstring 里 —— 把依赖检查搬进 health
+    # 会让 docker 抖一下就重启 api，而重启 api 会清空内存 KeyVault。
+    app.include_router(health_routes.router)
+    app.include_router(system_routes.router)
 
     return app
 

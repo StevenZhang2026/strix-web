@@ -110,7 +110,20 @@ class Settings(BaseSettings):
     strix_telemetry: str = ""
     strix_no_update_check: str = ""
     # N2：操作者运行期挂载的企业 CA bundle 路径。空 = 未启用。绝不烧进镜像。
+    #
+    # ⚠️ 在 api 容器里这一项**总是空**：`STRIX_EXTRA_CA_FILE` 只出现在
+    # docker-compose.yml 的 volumes 段（宿主侧路径），没有进 x-console-env。
+    # 它留在这里是为了"手工起容器时也能自报"，但 `/api/system/status` 判定 N2
+    # 是否启用**不看它**，看下面的 `ssl_cert_file` 与那个挂载点的真实形状 ——
+    # 那两样是容器内可观测的事实（见 services/system_status.py）。
     strix_extra_ca_file: str = ""
+
+    # 容器内真正生效的 CA bundle 路径。compose 设为
+    # `${CONSOLE_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}`，也就是：
+    # N2 启用时是 /etc/strix/extra-ca.pem，未启用时是镜像自带的系统 bundle。
+    # 默认值给空串而不是那个系统路径：空串的含义是"没人告诉我"，而写死系统路径会让
+    # "compose 忘了设它"看起来像"设成了默认值"。判定 N2 时会区分这两种情形。
+    ssl_cert_file: str = ""
 
     @field_validator("console_log_level")
     @classmethod
@@ -156,6 +169,17 @@ class Settings(BaseSettings):
         见 CLAUDE.md §安全不变式「单账号登录」。
         """
         return self.console_data_dir / "auth.json"
+
+    @property
+    def tls_cert_path(self) -> Path:
+        """nginx 用的自签证书（`./setup.sh` 的 C18 签发，`nginx` 以 `:ro` 挂载）。
+
+        api 进程能读到它，靠的正是同路径挂载：证书在 `${DATA}/tls/` 下，而
+        `${DATA}` 在容器内外是同一个绝对路径。**只读它，绝不读 `key.pem`** ——
+        私钥对本进程没有任何用途，而"能读到"和"会读"之间的距离就是一次
+        `logger.debug(content)` 的距离。
+        """
+        return self.console_data_dir / "tls" / "cert.pem"
 
     @property
     def migrations_dir(self) -> Path:
