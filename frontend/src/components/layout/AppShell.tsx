@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { t } from "@/lib/messages";
 
+import { LogoutButton } from "./LogoutButton";
 import { SessionBadge } from "./SessionBadge";
 import { VersionFooter } from "./VersionFooter";
 import styles from "./AppShell.module.css";
@@ -11,6 +12,9 @@ import styles from "./AppShell.module.css";
  *
  * 顶栏刻意**没有导航菜单**：本轮只有首页一个页面，一条只有一项的导航是噪音。
  * `messages.nav.*` 里那几条文案已经就位，T18/T25/T26 把页面建起来时再加。
+ * ⚠️ 加导航的人请注意：本组件**只**由 `app/(app)/layout.tsx`、`app/error.tsx`、
+ * `app/not-found.tsx` 渲染，**不由根布局渲染** —— 所以 `/login` 天然看不到导航。
+ * 那条保证来自"文件放在哪个目录"，不需要你在这里写任何 if。
  *
  * 顶栏右侧也刻意**没有**样张里那句「本机环境就绪」：后端到 T5 只有四个路由
  * （`/api/health`、`/api/auth/{login,logout,me}`），没有任何系统状态接口。
@@ -28,6 +32,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
           </div>
           <div className={styles.topbarRight}>
             <SessionBadge />
+            <LogoutButton />
           </div>
         </div>
       </div>

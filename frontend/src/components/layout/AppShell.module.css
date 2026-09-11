@@ -42,6 +42,35 @@
   min-height: calc(var(--fs-2) * 1.6);
 }
 
+/* 顶栏里的「退出登录」。**文字型控件，不是 `ui/Button`** ——
+   16px/600/10px-24px 的按钮会让 13px 的顶栏差不多翻倍高，而填色的 `--gate` 语义是
+   "真的会发生事情的动作"，登出不属于那一类。理由全文见 `LogoutButton.tsx`。
+   长相与 `globals.css` 里的 `a` 同构：闸门色 + 常驻下划线。 */
+.logout {
+  font: inherit;
+  font-size: var(--fs-2);
+  letter-spacing: inherit;
+  color: var(--gate);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.logout:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* 登出失败那一句。用 `--sev2`（梅子第二档）而不是琥珀：琥珀是"需要你确认"，
+   这里是"出了问题" —— 与 `errors/ErrorNotice.module.css` 同一个判据。 */
+.logoutFailed {
+  color: var(--sev2);
+  font-size: var(--fs-2);
+}
+
 .shell {
   max-width: 1180px;
   margin: 0 auto;

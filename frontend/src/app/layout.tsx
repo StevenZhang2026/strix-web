@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 
-import { AppShell } from "@/components/layout/AppShell";
 import { t } from "@/lib/messages";
 
 import { Providers } from "./providers";
@@ -34,16 +33,17 @@ export const viewport: Viewport = {
  * 浏览器按它选中日韩字形（同一个码位在 zh 和 ja 下字形不同），
  * 也按它决定断行规则。
  *
- * `Providers` 是整棵树唯一的客户端根，包在 `AppShell` **外面**：
- * 会话失效遮罩要能压住顶栏和页脚，不能只压住主内容区。
+ * `Providers` 是整棵树唯一的客户端根，它必须在这里 —— react-query 的缓存和
+ * "会话失效"的回调注册要覆盖**每一个**页面，包括 `/login`（它也要发请求）。
+ *
+ * **根布局里刻意没有 `AppShell`**（T5b 改动）。应用外壳属于 `(app)/layout.tsx`，
+ * 因为 `/login` 不该有它。理由全文见那个文件。
  */
 export default function RootLayout({ children }: { readonly children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
       <body>
-        <Providers>
-          <AppShell>{children}</AppShell>
-        </Providers>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

@@ -1,0 +1,77 @@
+/* 登录页版式。
+   这一页在路由组外面，所以没有 `AppShell` 的 `.shell`（1180px 定宽内容区），
+   自己负责居中。 */
+
+.page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--s6) var(--s5);
+}
+
+/* 卡片列宽。420px 是"一行放得下用户名 + 一条竖线 + 一个输入框"的下限，
+   同时远小于 `--measure`（34em ≈ 正文行长）—— 登录页上没有正文。 */
+.card {
+  width: 100%;
+  max-width: 440px;
+}
+
+/* 品牌行：与 `AppShell.module.css` 的 `.brand` / `.tagline` 同值，
+   这样从登录页跳进应用时那一行不会跳动。 */
+.brand {
+  font-size: var(--fs-3);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--s4);
+}
+
+.tagline {
+  font-style: normal;
+  color: var(--ink-mute);
+  font-weight: 400;
+  font-size: var(--fs-2);
+  margin-left: var(--s2);
+  letter-spacing: 0.02em;
+}
+
+/* 纸面。与 `errors/SessionExpiredMask.module.css`、`app/(app)/page.module.css`
+   的 `.docket` 同构：`--sheet` 底 + 1px `--rule-2` + `--r-box`，**零 box-shadow**。
+   刻意**不加**左侧琥珀竖线：`--stamp` 的语义是"这里需要人来确认"（授权印记），
+   登录不是一次授权动作，串用会稀释那个颜色。 */
+.sheet {
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+  padding: var(--s5) var(--s6) var(--s6);
+}
+
+/* h1 在这里是 --fs-4（20px）而不是全局的 --fs-6：这张纸只有两个输入框，
+   34px 的标题会让它变成一张海报（同 `(app)/page.module.css` 里 `.pageTitle` 的理由）。 */
+.heading {
+  font-size: var(--fs-4);
+}
+
+.intro {
+  margin-top: var(--s2);
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+.formWrap {
+  margin-top: var(--s5);
+}
+
+.note {
+  margin-top: var(--s4);
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+  line-height: 1.7;
+}
+
+.foot {
+  margin-top: var(--s5);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}

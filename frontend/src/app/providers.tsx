@@ -5,7 +5,6 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { setUnauthenticatedHandler } from "@/lib/api/client";
 import { makeQueryClient } from "@/lib/api/query";
-import { SessionExpiredMask } from "@/components/errors/SessionExpiredMask";
 import { useKeysStore } from "@/lib/stores/keys";
 import { useSessionStore } from "@/lib/stores/session";
 
@@ -17,8 +16,14 @@ import { useSessionStore } from "@/lib/stores/session";
  *   2. 把"会话失效"的回调注册给 `lib/api/client.ts`（**全站唯一注册点**）；
  *   3. 从 sessionStorage 恢复 `vault_handle`（必须在挂载后做，见 stores/keys.ts）。
  *
- * 它是 `app/` 目录下**唯一**允许带 `"use client"` 的文件（eslint 里有对应的例外）。
- * 其余页面一律是服务端组件，需要交互就下沉到 `components/` 的叶子。
+ * 它是 `app/` 目录下**唯一**允许带 `"use client"` 的文件（`error.tsx` 除外，那是
+ * Next 的硬要求）。其余页面一律是服务端组件，需要交互就下沉到 `components/` 的叶子。
+ *
+ * T5b 把 `<SessionExpiredMask />` 从这里**移到了** `app/(app)/layout.tsx`。
+ * 原来的理由写的是"遮罩要能压住顶栏和页脚，所以得在 AppShell 外面" —— 那句话作为
+ * 结果对、作为**理由**不准确：遮罩靠 `position: fixed; inset: 0` 覆盖整个视口，
+ * 与它在 DOM 里的位置无关。挪走之后覆盖范围一点没变，但多了一条结构性保证：
+ * 遮罩不可能出现在 `/login` 上（一个盖住登录表单的"请重新登录"是自相矛盾的）。
  */
 export function Providers({ children }: { readonly children: ReactNode }) {
   // `useState` 的初始化函数，**不是**模块级单例。模块级单例在 dev 的 HMR 下会跨热更新
@@ -41,10 +46,5 @@ export function Providers({ children }: { readonly children: ReactNode }) {
     hydrateFromSession();
   }, [hydrateFromSession]);
 
-  return (
-    <QueryClientProvider client={queryClient}>
-      {children}
-      <SessionExpiredMask />
-    </QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }

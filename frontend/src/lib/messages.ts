@@ -36,7 +36,7 @@ export type MessageKey = MessagePath<typeof messages>;
  *
  * 类型已经保证 key 存在，所以两处 `return key` 的兜底只在"JSON 被改坏了"时才会走到
  * （例如有人把一个字符串改成了对象）。那时露出 key 本身比抛异常好：一个页面上出现
- * `home.docketTitle` 这样的英文串是**刺眼且可搜索的**，而抛异常会把整棵子树炸掉。
+ * `home.introTitle` 这样的英文串是**刺眼且可搜索的**，而抛异常会把整棵子树炸掉。
  */
 export function t(key: MessageKey): string {
   let node: unknown = messages;

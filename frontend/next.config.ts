@@ -6,8 +6,14 @@ const nextConfig: NextConfig = {
    * `.next/standalone`，运行时镜像里就不需要 `node_modules` 整棵树。
    * 这直接决定了 `Dockerfile` 第三阶段只 COPY 三样东西。
    *
-   * 刻意**不用** `output: "export"`：静态导出没有服务端，就没有 Node 进程，
-   * 以后 T5b 要加 middleware（"没 cookie 就重定向"）时会无处可放。
+   * 刻意**不用** `output: "export"`：静态导出要求每个动态段在**构建期**就能被
+   * `generateStaticParams` 枚举出来，而 T25 的 `/scans/[id]` 里的 id 是运行期才产生的
+   * 扫描记录 —— 构建时那份清单必然是空的。
+   *
+   * ⚠️ 这里原先写的理由是"以后 T5b 要加 middleware（没 cookie 就重定向）时会无处可放"。
+   * **那条理由已作废**：T5b 拍板本项目不加 middleware（一个都不加），未登录跳转在
+   * `src/components/auth/RequireSession.tsx`，论证全文见 `src/lib/api/client.ts` 第二节。
+   * 结论（用 `standalone`）没变，但它现在靠的是上面那条，不是一个不会发生的需求。
    */
   output: "standalone",
 

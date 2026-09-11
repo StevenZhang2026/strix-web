@@ -36,3 +36,29 @@
   font-size: var(--fs-3);
   color: var(--ink-2);
 }
+
+.actions {
+  margin-top: var(--s5);
+}
+
+/* 「重新登录」。一个 `<Link>` 长成 `ui/Button` 的 `.ghost` 观感（同色不填），
+   **刻意不用填色的 primary**：这张卡片是琥珀语言（"这里需要人来处理"），
+   往里放一个填满 `--gate` 的闸门按钮会有两个语义色互相抢。
+   值逐条对齐 `ui/Button.module.css` 的 `.btn` + `.ghost`，只把常驻下划线去掉 ——
+   它已经长得像按钮了，再加下划线就是两种"可点"的信号叠在一起。 */
+.action {
+  display: inline-block;
+  font-size: var(--fs-3);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 10px var(--s5);
+  border: 1px solid var(--gate);
+  border-radius: var(--r-act);
+  background: transparent;
+  color: var(--gate);
+  text-decoration: none;
+}
+
+.action:hover {
+  background: rgba(23, 80, 92, 0.07);
+}

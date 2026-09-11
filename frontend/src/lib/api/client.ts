@@ -25,7 +25,20 @@
  *
  * middleware 跑在 Edge runtime 上，看不到响应体里的机器码 —— 而我们要区分的正是
  * 「HTTP 401」与「响应体 `{code:"unauthenticated"}`」这两件事同时成立的情形。
- * middleware 只适合"没 cookie 就重定向"，那是 T5b 的活。
+ *
+ * **T5b 拍板：本项目不加 middleware，一个都不加**（2026-09-10）。曾经的设想是
+ * "没 cookie 就重定向"，它被否掉的理由有三条，最硬的是第一条：
+ *   1. middleware 只能判断 cookie **在不在**，而这里最常见的失效原因是"api 重启了"
+ *      —— 那时 cookie 一直都在（它刻意没有 `max_age`，见 `routes/auth.py`），
+ *      middleware 会一路放行。花掉一条硬不变式，换来的几乎是零。
+ *   2. 读 cookie 要求 Next 进程知道它叫什么名字，而下面第三节的原话是"我们连它叫
+ *      什么名字都不需要知道"。那句话是"零个凭据"这条可一眼验证的性质的一半。
+ *   3. eslint 的 `no-restricted-imports` 只封了 `next/headers`；middleware 读 cookie
+ *      走的是 `next/server` 的 `NextRequest.cookies` —— **lint 拦不住**。
+ *      也就是说那条边界会退化成一句要靠人记的话。
+ * 未登录跳转因此放在客户端：`components/auth/RequireSession.tsx` 打 `/api/auth/me`
+ * （永远 200），拿到 `authenticated:false` 才 `router.replace("/login")`。
+ * 代价是未登录时会先闪一下首页骨架 —— 那个骨架是纯静态的，零用户数据。
  *
  * **WebSocket 握手失败复用同一段解析。** 已实测（`app/routes/auth.py` 的
  * `UnauthenticatedError` docstring）：全局依赖在 WS 握手上抛出时，握手返回的是
@@ -111,11 +124,21 @@ export function notifyUnauthenticated(): void {
   unauthenticatedHandler?.();
 }
 
+/**
+ * 这个响应是不是"你没有身份"。
+ *
+ * 两个条件是 **或**，不是且：
+ *   · 只看 status：将来若有别的东西（反代、防火墙）也回 401，会误报会话失效；
+ *     所以拿到机器码时以机器码为准。
+ *   · 只看机器码：响应体解析失败（nginx 直接回的 502 HTML）时就漏了。
+ *
+ * ⚠️ 它回答的是"**这个响应是什么**"，**不是**"要不要弹会话失效遮罩"。两者不同：
+ * `POST /api/auth/login` 打错口令也是 401（`InvalidCredentialsError`），
+ * 但那不意味着会话失效 —— 那是一次登录尝试失败。要不要通报是**策略**，
+ * 属于调用点，见下面 `isAuthAttempt`。所以本函数刻意**不认识**任何机器码黑名单：
+ * 那种名单一定会长，而"我是一次登录尝试"这个知识只有调用方有。
+ */
 function isUnauthenticated(status: number, code: string): boolean {
-  // 两个条件是 **或**，不是且：
-  //   · 只看 status：将来若有别的东西（反代、防火墙）也回 401，会误报会话失效；
-  //     所以拿到机器码时以机器码为准。
-  //   · 只看机器码：响应体解析失败（nginx 直接回的 502 HTML）时就漏了。
   return status === 401 || code === "unauthenticated";
 }
 
@@ -152,6 +175,14 @@ interface RequestOptions {
   /** 已经是普通对象，不做任何校验 —— 校验是后端的事。 */
   readonly body?: unknown;
   readonly signal?: AbortSignal;
+  /**
+   * 这个请求**本身就是在建立身份**。它拿到 401 只可能意味着"这一次尝试失败了"，
+   * 不可能意味着"会话失效了"，所以不调 `notifyUnauthenticated()`。
+   *
+   * **全站只有 `login()` 传它。别扩散。** 类型写 `?: true` 而不是 `?: boolean`：
+   * 不给"传一个变量进来"留口子 —— 那样这个开关就会有一天由运行期数据决定。
+   */
+  readonly isAuthAttempt?: true;
 }
 
 /**
@@ -193,7 +224,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
   if (!response.ok) {
     const { code, traceId, params } = await readErrorBody(response);
-    if (isUnauthenticated(response.status, code)) {
+    if (isUnauthenticated(response.status, code) && options.isAuthAttempt !== true) {
       notifyUnauthenticated();
     }
     throw new ApiError(response.status, code, traceId, params);
@@ -204,7 +235,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 }
 
 // =============================================================================
-// 后端在 T5 阶段**真实存在**的端点，就这四个。
+// 后端在 T5b 阶段**真实存在**的端点，就这四个（T5 时只包了两个，登录页要用另两个）。
 // `/api/scans`、`/api/keys`、`/ws/*` 全部是 404，要等 T6/T7/T9/T13。
 // 不给不存在的接口写包装函数 —— 那会让下游以为它们能用。
 // =============================================================================
@@ -231,4 +262,38 @@ export interface SessionState {
 
 export function fetchSession(signal?: AbortSignal): Promise<SessionState> {
   return apiFetch<SessionState>("/api/auth/me", signal === undefined ? {} : { signal });
+}
+
+/**
+ * `POST /api/auth/login`。成功时 cookie 由响应的 `Set-Cookie` 落到浏览器 ——
+ * **这个函数不接触、也无法接触那个 cookie**（它是 `HttpOnly` 的）。
+ *
+ * ⚠️ 本函数里**不许有任何日志、埋点、错误上报**。口令只以函数参数的形态存在于
+ * 一次调用里，`JSON.stringify` 之后就交给 fetch 了。`console.log(arguments)` 这类
+ * 顺手一行会把它写进浏览器控制台 —— 那是一个可被截图、可被扩展读取的地方。
+ *
+ * `isAuthAttempt: true` 是本项目**唯一**用到它的地方：这里的 401 是
+ * `invalid_credentials`（口令错），不是会话失效，不该弹全屏遮罩 ——
+ * 一个盖住登录表单的"请重新登录"遮罩是纯粹的自相矛盾。
+ *
+ * 失败抛 `ApiError`：`invalid_credentials`(401) / `auth_locked`(429) /
+ * `invalid_request`(422)。调用方按码分支，见 `components/auth/LoginForm.tsx`。
+ */
+export function login(username: string, password: string): Promise<SessionState> {
+  return apiFetch<SessionState>("/api/auth/login", {
+    body: { username, password },
+    isAuthAttempt: true,
+  });
+}
+
+/**
+ * `POST /api/auth/logout`。后端**幂等**、永远 200（在 `EXEMPT_PATHS` 里），
+ * 所以这里只有网络层能失败。
+ *
+ * 顺序纪律（与 `stores/keys.ts` 同源）：**先请后端清，再清本地**。cookie 只能由
+ * 后端的响应删除，本地先清再宣布"你已登出"是一句谎话 —— 服务端会话还活着。
+ * 所以调用方必须在**成功之后**才 `queryClient.clear()` 并跳转。
+ */
+export function logout(): Promise<{ readonly ok: boolean }> {
+  return apiFetch<{ readonly ok: boolean }>("/api/auth/logout", { method: "POST" });
 }

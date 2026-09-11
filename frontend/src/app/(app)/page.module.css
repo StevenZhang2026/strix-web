@@ -1,0 +1,218 @@
+/* 首页。逐值照抄样张 ① 的 `.two` / `.docket` / `.terms` / `.actions` / `.empty`。 */
+
+/* 主栏 + 侧栏。侧栏定宽 320px：它装的是状态与凭据，宽度不该随窗口变 ——
+   一个会伸缩的状态面板会让人以为它在变化。 */
+.two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--s5);
+}
+
+/* 窄屏下改成上下两栏。工单在上、状态在下 —— 主角不让位。 */
+@media (max-width: 900px) {
+  .two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ------------------------------------------------------------------ 纸
+   首屏不是 hero 标题 + 渐变，也不再是「要你填的那张纸」（那样上来就在要求输入）。
+   它是一张**讲清规则、并预告接下来会问什么**的纸。载体不变，语气变了。 */
+.docket {
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+}
+
+/* 只剩一个 h1，所以**不用 flex** —— 单孩子的 flex 容器是一行没有作用的代码。
+   原先这里是 flex，因为右侧还有一个"编号在你签署时生成"。那句话属于向导里那份
+   真工单（有编号可言），不属于一张介绍页，已删。 */
+.docketHead {
+  padding: var(--s4) var(--s6) var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* h1 在这里是 --fs-5（26px）而不是全局的 --fs-6（34px）：
+   这张纸的标题不该比它自己的内容更抢眼，34px 会让它变成海报。 */
+.pageTitle {
+  font-size: var(--fs-5);
+}
+
+.docketBody {
+  padding: var(--s4) var(--s6) var(--s5);
+}
+
+/* ------------------------------------------------------------------ 介绍
+   通栏一段，**一行写满再换行**（2026-09-11 用户裁决）。
+
+   这里原先有 `max-width: var(--measure)`（34em）。加它的理由是：这一段横跨整张纸
+   约 770px，不夹一行约 48 个汉字，超出中文舒适行长（30–40 字），读到行尾容易丢行。
+   代价是右边留出一条约 220px 的空白，看起来像"排版没做完"。用户两次明确要求填满，
+   已按此定稿 —— **别再把 max-width 加回来**，那条空白是被否掉的结果，不是漏改。
+   （`--measure` 本身没废：`ErrorNotice` 与 `SessionExpiredMask` 还在用，
+   那两处是窄容器里的长句，情况不同。）
+
+   字号与右侧批注**统一**为 --fs-3（16px）。原先左 20px 右 13px 是靠字号分主次，
+   看着像两种不同性质的内容；统一之后主次改由**框**来分：正文裸在纸上，
+   批注装进一个下沉的框里。 */
+.lede {
+  font-size: var(--fs-3);
+  color: var(--ink);
+}
+
+/* 批注框：--sheet-sunk 是 token 层里三级亮度的最低一级，专门用来做"凹进去"。
+   全项目零 box-shadow，层次只靠这三级亮度差 —— 所以这里是下沉，不是浮起的卡片。
+   `--r-box`（2px）= 容器、不能按；能按的东西才用 `--r-act`（4px）。 */
+.note {
+  font-size: var(--fs-3);
+  line-height: 1.7;
+  color: var(--ink-2);
+  background: var(--sheet-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-box);
+  padding: var(--s4);
+}
+
+/* ------------------------------------------------------------------ 五步 + 批注
+   左栏比右栏宽：五步那一行是「104px 标签 + 24px 间隙 + 提示」，加上编号缩进与
+   Panel 的内边距，等分会让最长那条提示（「从六个场景里选一个，也可以自己调」，16 字）
+   折行。1.7 : 1 让左栏约 470px，提示那一列剩约 270px，16 字（约 208px）放得下。
+   曾用 1.35 : 1，实测那条提示就是会折 —— 改这个比例前先拿最长那条量一遍。 */
+.mid {
+  margin-top: var(--s4);
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: var(--s5);
+  align-items: start;
+}
+
+/* 窄屏：批注落到五步下面。 */
+@media (max-width: 900px) {
+  .mid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 这个 `<ol>` 装在 `Panel` 里，上边界由 Panel 的表头下划线给，所以**不再自带**
+   border-top（两条线叠在一起会变成一条 2px 的粗线）。
+   `padding-left` 是给编号留的位置 —— 编号在盒子外面（`list-style-position` 默认值）。 */
+.stepList {
+  margin: 0;
+  padding-left: 2.4em;
+}
+
+/* 行距在这里**覆盖**全局的 1.8。全局那个值是给正文段落定的（中文长段落需要呼吸），
+   而这五行是表格式的单行条目 —— 1.8 会让它们看起来像五个互不相干的段落，
+   条目之间的空白比条目本身还多。1.5 + 4px 上下内边距，一行 32px：
+   文字本身占 24px，剩下 8px 是分隔线两侧的呼吸，表格行本来就这个量级。 */
+.step {
+  padding: var(--s1) 0;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* 最后一行不画下划线：Panel 的 body 有 16px 内边距，那条线会孤零零悬在框内。 */
+.step:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.step::marker {
+  color: var(--ink-mute);
+  font-size: var(--fs-2);
+}
+
+/* 两列：104px 标签 + 剩下全给提示。`grid-template-columns` 与 `column-gap` 与
+   `ui/Field.module.css` 的 `.form` **逐值相同** —— 从这份预告走进 T18 的真工单时，
+   字段名要落在同一条竖轴上。
+
+   grid 加在 `<li>` 的**子元素**上，不是 `<li>` 自己身上：`<li>` 必须保住
+   `display: list-item`，换成 grid/flex 会把编号整排吃掉（浏览器不报错）。
+   `<li>` 里放一个块级子元素完全正常，编号照样对齐第一行。
+
+   原先是给标签一个 `inline-block` 定宽。那样提示是**同一个行框里的下一段文字**，
+   折行后回到行首、撞在标签下面（「从六个场景里选一个，也可以自｜己调」）。
+   现在提示自己占一列，折行只在自己这一列里发生。 */
+.stepRow {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  column-gap: var(--s5);
+}
+
+.stepLabel {
+  color: var(--ink);
+}
+
+.stepHint {
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+/* ------------------------------------------------------------------ 条款
+   合规声明是工单的**条款**，不是弹窗。它有结构性位置。
+   刻意**不填底色** —— 一大块暖米色底会把这份工单变成另一种熟脸；
+   琥珀色只留一条 3px 的竖线，用量小才有分量。
+
+   通栏、在最下、紧挨按钮。 */
+.terms {
+  margin-top: var(--s4);
+  border-left: 3px solid var(--stamp);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: var(--s4) var(--s5);
+}
+
+.termsHeading {
+  font-size: var(--fs-3);
+  margin-bottom: var(--s2);
+  color: var(--stamp);
+}
+
+/* 同 `.lede`：**一行写满再换行**，行宽夹已按 2026-09-11 的裁决去掉。
+   条款这三段本来最该夹行宽（是要被逐字读的法律口径），但整张纸只有一种行宽才不显乱。
+   顺带省了约 30px 高度 —— 第一段从两行变一行。 */
+.termsText {
+  font-size: var(--fs-3);
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+
+.termsText + .termsText {
+  margin-top: var(--s2);
+}
+
+/* ------------------------------------------------------------------ 动作 */
+.actions {
+  margin-top: var(--s4);
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+
+.hint {
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+/* ------------------------------------------------------------------ 侧栏 */
+.empty {
+  font-size: var(--fs-3);
+  color: var(--ink-mute);
+  max-width: 26em;
+}
+
+.credentialsNote {
+  font-size: var(--fs-3);
+  color: var(--ink-mute);
+  max-width: 26em;
+  margin-bottom: var(--s3);
+}
+
+/* 侧栏面板里的按钮下面也要能放一句说明。 */
+.panelActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+}

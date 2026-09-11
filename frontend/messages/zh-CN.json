@@ -49,8 +49,10 @@
   },
 
   "home": {
-    "docketTitle": "新建授权工单",
-    "docketNumberPending": "编号在你签署时生成",
+    "introTitle": "每次扫描都从一份授权工单开始",
+    "introLede": "Strix 控制台跑在你这台机器上，用你自己的模型凭据发起自动化渗透测试。测什么、测到什么程度、最多花多少钱，都由你在工单里写明。",
+    "introRule": "授权工单是这次测试的书面依据。没有工单发不起扫描；扫描开始前还会把工单上的目标重新解析一遍比对，对不上就拒绝。",
+    "stepsHeading": "工单会问你五件事",
     "fieldTarget": "测试目标",
     "fieldTargetBlank": "网址、域名或 IP，可填多个",
     "fieldAuthorization": "授权依据",
@@ -87,7 +89,19 @@
   "session": {
     "expiredTitle": "会话已失效",
     "expiredDetail": "会话存在后端内存里，后端重启或长时间不操作都会让它失效。已保存的扫描记录不受影响。",
-    "toLogin": "重新登录"
+    "toLogin": "重新登录",
+    "logoutFailed": "退出登录没成功，后端可能连不上。当前会话仍然有效，稍后再试。"
+  },
+
+  "login": {
+    "heading": "登录控制台",
+    "intro": "这台控制台由一个账号看管，账号在本机运行 setup.sh 时设定。",
+    "username": "用户名",
+    "password": "口令",
+    "submit": "登录",
+    "submitting": "正在登录",
+    "forgot": "忘了口令就在本机重新运行 setup.sh 重设账号 —— 控制台里没有改口令的入口，也没有任何人能替你找回它。",
+    "scope": "登录挡的是本机另一个账号、和浏览器里的其它标签页。对拥有本机管理员权限的人，它不构成边界。"
   },
 
   "scan": {
@@ -344,7 +358,7 @@
     "key_name": "多余的一项",
     "limit": "同时允许的扫描数",
     "running_scan_id": "正在跑的扫描",
-    "retry_after": "解锁还需",
+    "retry_after": "剩余锁定时间",
     "origin": "来源",
     "host": "访问地址"
   }

@@ -1,0 +1,77 @@
+/* 登录表单。
+   栅格与分隔线**逐值照抄** `ui/Field.module.css`（`104px 1fr` + 右对齐标签 + 一条
+   落在列间隙中央的竖线），让这张表单读起来就是首页那份工单的同一种表单行。
+
+   刻意**不复用** `ui/FieldTable` 那个组件：它是 `<dl>/<dt>/<dd>`（"字段名—字段值"），
+   而可输入的表单在语义上是 `<label for>` + `<input>`，把输入框塞进 `<dd>` 会破坏
+   `dl` 的内容模型。
+
+   ---------------------------------------------------------------------------
+   ⚠️ 输入框样式写在这里，**不建** `ui/TextInput`（T5b 拍板）
+
+   现有 8 个 ui 组件里没有任何可输入控件（`FieldTable` 只渲染"虚线 + 灰提示"的空白态）。
+   按「重复第三次才提取」：这是第一次，T7 的凭据表单是第二次，T18 的向导是第三次 ——
+   到那时再抽 `ui/TextInput`，那时也才知道它真正需要哪几个变体。
+
+   取值全部来自 token 层，**没有新增任何颜色、圆角、字阶、间距**：
+     · `--sheet-sunk` + `--rule-2` + `--r-box` —— 与 `globals.css` 的 `.lit` 同构。
+       输入框就是 `.lit`（用户输入过的字面量）的可编辑形态。
+     · `--mono` —— `globals.css` 写明等宽字只属于两处，其中一处正是"用户输入过的
+       字面量"。这条继承是有出处的，不是随手挑的。
+     · 圆角取 `--r-box`（2px = 容器）而**不是** `--r-act`（4px = 可以点）：输入框是
+       往里写字的容器，不是可点击的东西。圆角在本设计里携带信息。
+     · 焦点圈不写 —— `globals.css` 的全局 `:focus-visible` 已经给了 2px 闸门色。 */
+
+.grid {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  column-gap: var(--s5);
+  margin: 0;
+}
+
+.label {
+  text-align: right;
+  font-size: var(--fs-3);
+  color: var(--ink-2);
+  padding: var(--s3) var(--s5) var(--s3) 0;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  /* 让竖线正好落在 grid 的列间隙中央，而不是贴着标签。 */
+  margin-right: calc(-1 * var(--s5) + 1px);
+}
+
+.value {
+  margin: 0;
+  padding: var(--s3) 0 var(--s3) var(--s5);
+  border-bottom: 1px solid var(--rule);
+}
+
+.input {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: var(--fs-3);
+  letter-spacing: 0;
+  color: var(--ink);
+  background: var(--sheet-sunk);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+  padding: var(--s2) var(--s3);
+}
+
+/* 提交中：整站唯一允许用 opacity 表达状态的语义是"这个东西现在不参与"
+   （见 `ui/Button.module.css` 的 `:disabled`）。这里同理。 */
+.input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.actions {
+  margin-top: var(--s5);
+}
+
+/* 错误块与按钮之间留一整档间距：它出现时不该看起来像按钮的一部分。 */
+.failure {
+  margin-top: var(--s5);
+}
