@@ -576,7 +576,7 @@ GET/POST-touch/DELETE /api/keys[/{h}]
 GET  /api/scan-templates
 POST /api/targets/validate  {raw:[…], overrides:{allow_private,allow_loopback}}
      → 每个目标 {ok, normalized, kind, resolved_ips, ip_class, allowlist_entry,
-                 registrable_domain, code?, overridable?, note_zh?}
+                 registrable_domain, code?, overridable?, note_code?}
 GET/PUT /api/allowlist  ·  POST/DELETE /api/allowlist/entries[/{id}]
 
 POST /api/scans   {vault_handle, template_id, targets[], overrides, scan_mode?, max_budget_usd(必填),
@@ -875,7 +875,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | | **↑ 为什么登录口令框与 API Key 输入框的规则相反**（别把这两条并成一条）：「随机 `name` 破自动填充」的出处是**泄漏矩阵第 11 行**，讲的是 `POST /api/keys` 的 **API Key 输入框** —— 对别人家的 provider 密钥，被浏览器存下来是**净损失**，那一条**不变**。控制台**登录口令**是相反的情形：`setup.sh` 强制 ≥12 位（`MIN_PASSWORD_LENGTH = 12`），不让密码管理器帮忙，用户就会挑一个记得住的弱口令、或把它抄进便签 —— 那比让浏览器记住更糟。且在本项目的威胁模型下自动填充不引入攻击面：要挡的是"本机另一个 OS 账号"（macOS 浏览器配置 per-OS-user，另一个账号的浏览器里没有你存的口令）和"浏览器里的其它标签页"（拿不到自动填充）；而坐在你已解锁浏览器前的人早就带着 `HttpOnly` 会话 cookie 了，口令对他没有增量价值。**已知且接受的残余风险**：浏览器若开了 iCloud 钥匙串 / Chrome 同步，这个口令会**离开本机**，而页脚文案写的是「数据与凭据都不离开这台机器」—— 该句指的是扫描数据与 **LLM API Key**（后者从不进浏览器存储），登录口令是例外。**必须写进 `docs/SECURITY-zh.md`（T30a）**，不得让人以为字面上零外发。同时注意 `autoComplete` 上**没有**"可填充但不要同步"这种值，所以这条风险只能如实记录，不能靠代码消除 | | | |
 | T6 | `target_guard.py` 纯函数全分类 + ~80 用例（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
 | T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处 |
-| T8 | 白名单加载/校验/热重载 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
+| T8 | 白名单加载/校验/热重载。**另接 T6 交回的三件事**：① `zh-CN.json` 新建 `targetGuard` 子树，装 8 个 `RejectionReason` 的中文与 `notes.loopback_rewrite`（T6 只出码，不出文案；这些不是 HTTP 错误，不进 `errors.py`，因为它们是输入框下方的行内提示，请求本身没失败）；② `registrable_domain` 怎么算 —— T6 **没有**产出它，正确实现要 Public Suffix List，无依赖的近似实现在 `example.co.uk` 上是错的，而错值会削弱逐字确认闸门（见下方「待定」）；③ `TargetRejected` 在 HTTP 层怎么表达（200 带 `ok:false` 还是 4xx 带码）—— 这决定 ① 的文案落在哪棵树 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
 | T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
 | T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
 | T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（2026-09-08 复核：**曾误判"逻辑简单，模板 1 够了"，错**。它删容器，而本机还跑着别人的项目 —— 判据是后果不对称，不是逻辑复杂度）。prompt 必须写死：`label=strix-run-type=console` 精确过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删 |
@@ -933,7 +933,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | R9 | 费用失控（大应用 + 贵模型的 deep 扫描可以烧掉几百美元）| 中 | 预算强制必填 + 全局上限；向导显示预估区间与生效上限；实时 CostMeter；80% 软告警带一键停止；并发 1。Strix 自身在 70/85/95% 会引导收尾，所以上限是优雅降级 |
 | R10 | 中文翻译幻觉出一个漏洞、或把真问题说轻了 | 中 | Prompt 禁止新增事实；喂 `counterevidence`/`assumptions`/`confidence_rationale` 让"需人工确认"如实呈现；**每张发现卡都有「查看原文」切到英文 `vulnerabilities/<id>.md`**；报告页脚注明"中文说明由 AI 依据扫描原始结果生成，技术细节以原文为准"；**绝不翻译** `poc_script_code`/`evidence`/`endpoint`/`code_locations` |
 | R11 | 扫描中 `api` 重启 → 子进程被孤立、WS 悬空、key handle 失效 | 中 | 启动时 `ScanSupervisor.recover()` 扫 `status IN (starting,running)` 的行，重新发现 run 目录并挂只读 RunProjector（无子进程也能工作），标 `orphaned_running`；`run.json` 到终态就正常收尾；若 15 分钟不动且无对应沙箱容器则标 `interrupted` 并提供续跑（需新 Key）|
-| R12 | `localhost` 有三种含义（用户的 Mac / `api` 容器 / 沙箱）导致误解 | 中 | loopback 放行流程用中文讲清 Strix 的 `host.docker.internal` 改写；`/api/targets/validate` 返回 `note_zh`；常见问题给完整例子 |
+| R12 | `localhost` 有三种含义（用户的 Mac / `api` 容器 / 沙箱）导致误解 | 中 | loopback 放行流程用中文讲清 Strix 的 `host.docker.internal` 改写；`/api/targets/validate` 返回 `note_code`（后端只给码，中文在 `zh-CN.json`，T6 改）；常见问题给完整例子 |
 | R13 | Docker Desktop 资源耗尽 | 低 | 上面那组 `STRIX_SANDBOX_*` 限额；并发 1；状态页显示剩余磁盘，低于 20GB 告警（沙箱镜像 + run 目录 + 截图很快堆起来）|
 | R14 | base64 截图撑爆 WS 帧与 DB | 低 | EventMirror 首见即抽取到 `media/` 并改写为 URL；`scan_media` 记账；留存清理优先删 media |
 | R15 | **TLS 装了但静默失效** —— 三种真实模式：证书缺 SAN/EKU（Chrome 直接 `ERR_CERT_COMMON_NAME_INVALID` 拒连）｜证书未被信任（每次弹警告页，用户被训练成无脑点过）｜`nginx.conf` 漏了 `proxy_buffering off`/`proxy_read_timeout` 导致 SSE 卡死或 WS 60 秒被掐 | 中 | 验收 22（SAN+EKU 断言）与 25（wss + 长时空闲）为**发布阻断**；26 断言 SSE 首字节延迟；`/api/system/status` 暴露 `tls.cert_trusted` 与证书剩余天数，未信任时给中文修复指引（`security add-trusted-cert` 原样命令可复制）|
@@ -950,7 +950,8 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 2. `/api/system/status`：断言 `docker.reachable`、`network.present && api_attached`、
    `data_dir.identical_path_ok`、`telemetry.strix_telemetry == false`、`sandbox_image.present`
 3. **护栏矩阵**：`169.254.169.254` 与 `metadata.google.internal` → `blocked_metadata, overridable:false`；
-   `10.20.1.5` → 需内网放行；`http://localhost:13000` → 需 loopback 放行 + `note_zh`；
+   `10.20.1.5` → 需内网放行；`http://localhost:13000` → 需 loopback 放行 + `note_code:"loopback_rewrite"`
+   （并断言 `zh-CN.json` 里那句正文含 `host.docker.internal`）；
    `https://admin:pw@example.com` → 拒绝（否则会被 Strix 当成仓库）；`例子.中国` → punycode 且标记；
    同时解析到公网与内网的主机名 → `split_horizon`
 4. **授权强制**：缺 `authorization` → 422；`typed_confirmation` 写错 → 409；只勾 2 项 → 422；

@@ -330,14 +330,21 @@ class GuardVerdict:
     （请求体少了一个必填的确认标志），而不是护栏码。
     """
 
-    note_zh: str | None
-    """需要当场向用户解释清楚的一句话。目前只有 `loopback` 有（验收 3 要求）。
+    note_code: str | None
+    """需要当场向用户解释清楚的那句话的**机器码**。目前只有 `loopback` 有（验收 3）。
 
-    ⚠️ 这是**后端返回值里唯一的中文**，与 `errors.py`「文案全在前端」的规矩相反。
-    刻意破例的理由：`PLAN.md:953-956` 的验收矩阵直接点名字段叫 `note_zh`，而这句话
-    的内容是一条代码级事实（`scan_setup.py:51` 把环回地址改写成
-    `host.docker.internal`）—— 它跟着 Strix 的版本变，不跟着界面措辞变，所以真源在
-    后端这一侧。它不属于 `errors.*` 那棵树，`test_message_coverage.py` 不管它。
+    这个字段一度叫 `note_zh`，直接返回中文正文 —— 理由是"内容是一条代码级事实
+    （`scan_setup.py:51` 把环回改写成 `host.docker.internal`），跟着 Strix 版本变、
+    不跟着界面措辞变"。已否掉：`errors.py` 的模块 docstring 把规矩连理由一起写死了
+    ——「同一个码在不同界面位置需要不同措辞，后端硬编码一句就把前端锁死了」。这句话
+    恰好正中该理由：T8 要把它塞进输入框下方一行行内提示，T18 的向导有整段的篇幅，
+    审计与报告里又是第三种口径。后端返回一句定稿中文，那三处只能共用最长的那一版。
+    「跟着 Strix 版本变」成立的是**这条提示该不该出现**（由本模块判定，仍在后端），
+    不是它的措辞。
+
+    取值域固定为下方 `_LOOPBACK_NOTE_CODE` 一个值。它**不属于** `errors.*` 那棵树
+    （不是错误，是解释），前端在 `targetGuard.notes.*` 下查文案 —— 那棵子树连同
+    `RejectionReason` 的文案一起由 T8 落地（见 `PLAN.md` T8 行）。
     """
 
 
@@ -792,12 +799,10 @@ _NON_PUBLIC: frozenset[TargetCategory] = frozenset(
     {TargetCategory.LOOPBACK, TargetCategory.PRIVATE, TargetCategory.CARRIER_RESERVED}
 )
 
-# 环回目标必须当场解释清楚的那句话。见 GuardVerdict.note_zh 的注释（唯一的中文返回值）。
-_LOOPBACK_NOTE_ZH = (
-    "这是环回地址。Strix 会把它改写成 host.docker.internal，"
-    "也就是扫描沙箱访问的是**你这台电脑**上的服务，不是沙箱容器内部的服务。"
-    "请确认要测的服务确实监听在本机。"
-)
+# 环回目标必须当场解释清楚的那件事。**只给码，正文在前端**（见 GuardVerdict.note_code）。
+# 这个码要说的是：Strix 会把环回地址改写成 host.docker.internal，也就是沙箱访问的是
+# 宿主机上的服务，不是沙箱容器内部的服务 —— 出处 `scan_setup.py:51`。
+_LOOPBACK_NOTE_CODE = "loopback_rewrite"
 
 
 def _policy_for(
@@ -945,8 +950,8 @@ def evaluate_target(
         required_opt_in=required,
         error_code=None if allowed else _error_code_for(category),
         # 硬拦时不给环回说明：那句话是在教用户怎么正确地扫本机，而这次根本不会扫。
-        note_zh=(
-            _LOOPBACK_NOTE_ZH
+        note_code=(
+            _LOOPBACK_NOTE_CODE
             if TargetCategory.LOOPBACK in categories and not hard_blocked
             else None
         ),

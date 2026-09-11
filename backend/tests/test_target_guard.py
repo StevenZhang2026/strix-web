@@ -612,9 +612,14 @@ def test_metadata_wins_over_mixed() -> None:
     assert verdict.error_code == "blocked_metadata"
 
 
-# ---- loopback：默认拦，勾选可放行，必须带 note_zh ----------------------------
+# ---- loopback：默认拦，勾选可放行，必须带 note_code -------------------------
 def test_loopback_needs_opt_in_and_carries_note() -> None:
-    """验收 3：`http://localhost:13000` → 需 loopback 放行 + `note_zh`。"""
+    """验收 3：`http://localhost:13000` → 需 loopback 放行 + 带说明码。
+
+    ⚠️ **这里断言不到的那一半**：中文正文必须点出 `host.docker.internal`，否则
+    用户不知道扫的是自己这台机器。正文在 `zh-CN.json` 的 `targetGuard.notes.*`，
+    由 T8 落地并自带断言 —— 本模块只保证"该出现说明时给出了码"。
+    """
     verdict = _verdict("http://localhost:13000", ("127.0.0.1",))
     assert verdict.category is TargetCategory.LOOPBACK
     assert verdict.allowed is False
@@ -623,9 +628,7 @@ def test_loopback_needs_opt_in_and_carries_note() -> None:
     assert verdict.required_opt_in == (OptInFlag.LOOPBACK,)
     # 缺勾选不是错误，是向导还没走完。
     assert verdict.error_code is None
-    assert verdict.note_zh is not None
-    # 说明里必须点出改写目标，否则用户不知道扫的是自己这台机器。
-    assert "host.docker.internal" in verdict.note_zh
+    assert verdict.note_code == "loopback_rewrite"
 
 
 def test_loopback_allowed_after_opt_in() -> None:
@@ -638,7 +641,7 @@ def test_loopback_allowed_after_opt_in() -> None:
     assert verdict.required_opt_in == ()
     assert verdict.error_code is None
     # 放行之后说明照旧要给 —— 这时候它才真的有用。
-    assert verdict.note_zh is not None
+    assert verdict.note_code == "loopback_rewrite"
 
 
 def test_loopback_allowed_by_allowlist_file() -> None:
@@ -665,7 +668,7 @@ def test_private_needs_opt_in() -> None:
     assert verdict.requirement is GuardRequirement.OPERATOR_OPT_IN
     assert verdict.required_opt_in == (OptInFlag.PRIVATE,)
     assert verdict.error_code is None
-    assert verdict.note_zh is None
+    assert verdict.note_code is None
 
 
 def test_private_allowed_after_opt_in() -> None:
@@ -809,7 +812,7 @@ def test_split_horizon_public_plus_loopback_has_no_note() -> None:
     """环回参与了 split-horizon 时不给环回说明 —— 这次根本不会扫。"""
     verdict = _verdict("https://example.com", (PUBLIC_V4, "127.0.0.1"))
     assert verdict.category is TargetCategory.MIXED
-    assert verdict.note_zh is None
+    assert verdict.note_code is None
 
 
 def test_split_horizon_public_plus_reserved() -> None:
