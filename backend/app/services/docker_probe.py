@@ -100,10 +100,17 @@ ORPHAN_LABEL_SELECTOR = "strix-run-type=console"
 # **但这个 label 单独一个是不够的。** 已在本机实测：`PLAN.md:754` 起 M0 靶场的命令
 # 里也写着 `--label strix-run-type=console`，所以只按上面那个选择器数，会把**靶场**
 # 数成一个孤儿沙箱（本机实测 `count=1`，名字是 `m0-juice-shop`）。
-# 真沙箱一定同时带 `strix-run-id`（`docker_client.py:110-124` 两个 label 一起打，
-# `PLAN.md:812` M0 断言 3 已实测确认），靶场没有 —— 所以要求它存在，是一个**正向**
-# 判据，而不是"把叫某个名字的排除掉"。docker 的 filters 只支持正向 label 匹配，
-# 这一步只能在客户端做。
+# 真沙箱一定同时带 `strix-run-id`，而这不是"实测碰巧如此"，是**结构上做不到相反**：
+# `strix/runtime/docker_client.py:113-123` 的 `_apply_run_labels()` 开头就是
+#     run_id = os.getenv("STRIX_RUN_ID")
+#     if not run_id: return          # ← 早退
+# 也就是说 `strix-run-type` 这个 label 只可能在 `strix-run-id` 已经被打上之后才写入。
+# **Strix 产不出"有 run-type、无 run-id"的容器。** 靶场是我们自己手打 label 造出来的，
+# 才落在那个 Strix 到不了的组合里。
+#
+# 所以要求 run-id 存在是一个**正向**判据（永不误伤真沙箱），而不是"把叫某个名字的
+# 排除掉"。docker 的 filters 只支持正向 label 匹配，非空判定只能在客户端做。
+# 本机实测：修前 `count=1`（`m0-juice-shop`），修后 `count=0`。
 ORPHAN_REQUIRED_LABEL = "strix-run-id"
 # 只回报前若干个名字：这是给人看的线索，不是清单。全量清单由 `make reap --dry-run` 给。
 MAX_ORPHAN_NAMES = 20

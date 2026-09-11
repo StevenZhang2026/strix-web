@@ -751,9 +751,17 @@ URL（含 query string），且格式不可配置**，级别提到 `crit` 才压
 docker run -d --name m0-juice-shop \
   --network strix_sandbox --network-alias juice-shop \
   -p 127.0.0.1:13000:3000 \
-  --label strix-run-type=console --label strix-console-role=m0-target \
+  --label strix-console-role=m0-target \
   bkimminich/juice-shop:latest
 ```
+⚠️ **原稿这里还有一个 `--label strix-run-type=console`，已删（2026-09-11，T3 实测发现）。**
+那个 label 是 Strix 打在**沙箱**容器上的、也是 `make reap`(T11) 的删除选择器 ——
+给一个我们永远不想被回收的靶场打上它，等于把它排进了待删清单。当时已经起来的那个
+`m0-juice-shop` 仍然带着它（`docker inspect` 实测确认），所以**只改文档不够**，回收侧
+必须同时要求 `strix-run-id` 非空（见 T11 行与验收 21）。那道判据永不误伤真沙箱，理由是
+`docker_client.py:113` 的早退让 Strix 结构上产不出"有 run-type、无 run-id"的容器。
+**不要为此重启 `m0-juice-shop`** —— 重建它没有收益，而 reap 侧的判据已经把它排除了。
+
 ⚠️ **目标 URL 不能写 `http://localhost:13000`**（本节原稿的写法，已实测是错的）：扫描发生在
 **沙箱容器内**，那里的 `localhost` 就是沙箱自己，宿主的发布端口根本不在那个 netns 里。
 2026-09-08 从 `strix_sandbox` 上实测：
@@ -867,18 +875,18 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T0 | 最小 `api` 镜像 + compose 骨架（`strix-agent==1.5.3` 精确 pin + `--only-binary=:all:` + hash lock + 同路径挂载 + `strix_sandbox` 网络）| — | `backend/Dockerfile` `backend/pyproject.toml` `docker-compose.yml` `.env.example` `setup.sh` | **3** |
 | T1 | **M0 契约实测** —— ✅ **6 条断言 2026-09-08 全部实测通过**（第 3 次运行）。断言 2 只覆盖 `bedrock-apikey` 形状，`single` 形状要在 T7 复跑一遍 | T0 | 无（只跑命令）| **自** |
 | T2 | FastAPI 骨架 + `assert_no_secret_columns()` + `RedactionFilter` + 建表迁移 | T1 | `app/{main,settings,db,models,logging_setup}.py` `migrations/001_init.sql` | **3** —— ✅ **2026-09-08 交付并由我独立复核通过**。`make lint` 干净，`make test` 99 passed。我复跑并确认的：脱敏挂在 **Formatter** 上（子 logger `litellm.utils` 实测被脱敏）／`uvicorn.access` 是**静音**不是接管（否则静默作废 `--no-access-log`，pitfalls 条 33）／五条结构不变式真的会拦（FK、`authorization_id NOT NULL`、`max_budget_usd > 0`、`json_valid(targets_json)`、`json_array_length(affirmations_json) = 3`，且全部回滚干净）／**投毒验证**：给 `scans` 加一列 `api_key` 后 api 退出码 3 报 `SecretColumnError`，已回滚／41 列零凭据列。<br>**三处由我补**：① `docker-compose.yml` 的 `target: runtime`（Dockerfile 里 `test` 是最后一个阶段，不写 target 时生产镜像会带上 pytest/ruff/tests —— 已实测 `import pytest` 现在 rc=1）；② `logging_setup.py` 的 `converter = staticmethod(time.gmtime)`（`formatTime()` 默认用 localtime，那行时间戳缀的 `Z` 是假的；容器里 TZ 恰好未设所以测不出来，pitfalls 条 37），配 `test_ts_is_really_utc_even_under_a_non_utc_tz`（自己改进程时区，否则这条测试恒真）；③ **404 / 405 的响应形状**（下方独立一段） |
-| T3 | `/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检 | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 |
+| T3 | ✅ 2026-09-11 落地。`/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检。**接口刻意不带缓存**（缓存会在用户刚修好之后继续说没修好）；启动期一次都不探（探不到 docker 就起不来 = 没有界面能告诉用户是 docker 的问题）。**剩下的前端一小步**（不是新任务，接上就行）：① `zh-CN.json` 新建 `systemStatus` 段装六个阻断码的中文 —— `docker_unreachable` / `sandbox_network_missing` / `api_not_on_sandbox_network` / `same_path_mount_unverified` / `sandbox_image_missing` / `telemetry_not_disabled`（**刻意不进 `errors.py`** —— 那是 HTTP 错误码树，混在一起前端就不知道去哪棵取词，`test_two_code_trees_stay_disjoint` 是这条的机械版）；② 首页侧栏「本机就绪状态」四行接真值：`docker.reachable` / `sandbox_image.present` / `data_dir.identical_path_ok` / `telemetry.strix_telemetry === false`。**三态**：`true` 绿 / `false` 红 / **`null` 必须画成"未知"，绝不画绿** | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 |
 | T4 | TLS 全套：证书生成（SAN+EKU）、`nginx.conf` 四条必须指令、compose 加 `nginx` | T0 | `setup.sh` `nginx/nginx.conf` `docker-compose.yml` `env.example` | 2 —— ✅ **2026-09-08 交付并由我独立复核通过**。验收 23（80 不通）／24（不带 CA `http_code=000`）／证书 SAN+EKU+`CA:FALSE`+密钥成对／唯一发布端口 `127.0.0.1:443`／`api` 8000 宿主不可达／N2 默认关闭，均已复跑。`setup.sh` 332→613 行，新增 C17c 端口占用（只查不占，绝不杀进程）、C17d 证书三态机（`ok` 态**永不覆盖**，`STRIX_REGEN_CERT=1` 才重签且先备份）、C17e N2 校验（真 `docker run` 挂一次，防 Docker Desktop File sharing 未覆盖时静默给空文件）。带出 `pitfalls` 条 26–31 与本文档泄漏矩阵 #14／#15。**`target: runtime` 由我补**（见 T2 行） |
 | T4b | **单账号登录 —— 后端**：`auth.py`（`hashlib.scrypt` + 随机 salt + `hmac.compare_digest`）、`${DATA}/auth.json`(0600) 读写、会话 = 进程内存不透明 id、`POST /api/auth/{login,logout}` + `GET /api/auth/me`、**全局路由依赖**（唯一豁免 `/api/health` 与三个 auth 路由本身）、失败限流、`setup.sh` 建初始账号（口令经 `read -rs`）、`audit_log.actor` 落真实用户名 | T2 T4 | `app/services/auth.py` `app/routes/auth.py` `app/main.py` `setup.sh` `tests/test_auth.py` | **3** —— 定的约定被**每一个后续路由任务继承**（全局依赖一旦定错形状，T3/T7/T8/T12/T16/T23/T25 全要改），且**碰安全不变式**。prompt 必须写死四条：① 散列**绝不进 SQLite**，不许给 `assert_no_secret_columns()` 开任何豁免；② **不许引 `argon2-cffi`／`passlib`／`python-jose`／`pyjwt`**（`pyjwt` 虽在 lock 里但是 `mcp` 的传递依赖，不是我们的）；③ **不许装 `CORSMiddleware`** —— 理由见 §单账号登录 理由三的表；④ 会话**不签名、不自包含**，就是一个查内存 dict 的随机串 |
 | T5 | **前端视觉方向**（定一次，产出项目设计约定）+ Next.js 外壳 + 全中文文案表 | T2 | `frontend/messages/zh-CN.json` `frontend/src/app/*` `frontend/Dockerfile` `docker-compose.yml`(只加 `web`) | **3 + frontend-design**。prompt 必须写死三条：① **构建链只用 Next.js 自带的（Turbopack/webpack），不许引入 Vite / Rollup / esbuild 作为独立构建层** —— 那是第二套互斥的构建体系，违反 §编码哲学 第 4 条；② **不许 `next export` / `output: 'export'`** —— 静态导出会废掉服务端组件与 `/scans/[id]` 的 SSR，而 nginx 的 `location /` 是 `proxy_pass` 到 `web:3000` 的**运行中 Node 进程**，不是发静态文件；③ `web` 只写 `expose: ["3000"]`，**绝不写 `ports`**，并补 `nginx` 的 `depends_on` 成 `[api, web]` |
 | T5b | **单账号登录 —— 前端**：登录页 + 未登录重定向 + 401 统一拦截（复用 `key_required` 那套交互，因为会话与 KeyVault 同生共死）+ 登出。文案进 `zh-CN.json` | T4b T5 | `frontend/src/app/login/*` `frontend/src/lib/api.ts` `frontend/messages/zh-CN.json` | **3**（`agent-rules.md` §四：前端页面必须模板 3。读 T5 的约定，**不再开** frontend-design）。prompt 必须写死：口令框 `type=password` + **标准 `name` + `autoComplete="current-password"`**（2026-09-10 拍板，**推翻本行原先写的"随机 `name`"**，理由见下）；**会话 id 由 cookie 承载，前端一行都不许碰它** —— 不读、不存 `sessionStorage`、不放 URL（与 `vault_handle` 刻意相反，理由见 §单账号登录 方案表最后一行）|
 | | **↑ 为什么登录口令框与 API Key 输入框的规则相反**（别把这两条并成一条）：「随机 `name` 破自动填充」的出处是**泄漏矩阵第 11 行**，讲的是 `POST /api/keys` 的 **API Key 输入框** —— 对别人家的 provider 密钥，被浏览器存下来是**净损失**，那一条**不变**。控制台**登录口令**是相反的情形：`setup.sh` 强制 ≥12 位（`MIN_PASSWORD_LENGTH = 12`），不让密码管理器帮忙，用户就会挑一个记得住的弱口令、或把它抄进便签 —— 那比让浏览器记住更糟。且在本项目的威胁模型下自动填充不引入攻击面：要挡的是"本机另一个 OS 账号"（macOS 浏览器配置 per-OS-user，另一个账号的浏览器里没有你存的口令）和"浏览器里的其它标签页"（拿不到自动填充）；而坐在你已解锁浏览器前的人早就带着 `HttpOnly` 会话 cookie 了，口令对他没有增量价值。**已知且接受的残余风险**：浏览器若开了 iCloud 钥匙串 / Chrome 同步，这个口令会**离开本机**，而页脚文案写的是「数据与凭据都不离开这台机器」—— 该句指的是扫描数据与 **LLM API Key**（后者从不进浏览器存储），登录口令是例外。**必须写进 `docs/SECURITY-zh.md`（T30a）**，不得让人以为字面上零外发。同时注意 `autoComplete` 上**没有**"可填充但不要同步"这种值，所以这条风险只能如实记录，不能靠代码消除 | | | |
-| T6 | `target_guard.py` 纯函数全分类 + ~80 用例（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
+| T6 | ✅ 2026-09-11 落地，**181 个用例**（原估 ~80）。`target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；`requirement`/`overridable` 与 `allowed` **正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 | T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
 | T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处 |
 | T8 | 白名单加载/校验/热重载。**另接 T6 交回的三件事**：① `zh-CN.json` 新建 `targetGuard` 子树，装 8 个 `RejectionReason` 的中文与 `notes.loopback_rewrite`（T6 只出码，不出文案；这些不是 HTTP 错误，不进 `errors.py`，因为它们是输入框下方的行内提示，请求本身没失败）；② `registrable_domain` 怎么算 —— T6 **没有**产出它，正确实现要 Public Suffix List，无依赖的近似实现在 `example.co.uk` 上是错的，而错值会削弱逐字确认闸门（见下方「待定」）；③ `TargetRejected` 在 HTTP 层怎么表达（200 带 `ok:false` 还是 4xx 带码）—— 这决定 ① 的文案落在哪棵树 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
 | T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
 | T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
-| T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（2026-09-08 复核：**曾误判"逻辑简单，模板 1 够了"，错**。它删容器，而本机还跑着别人的项目 —— 判据是后果不对称，不是逻辑复杂度）。prompt 必须写死：`label=strix-run-type=console` 精确过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删 |
+| T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（2026-09-08 复核：**曾误判"逻辑简单，模板 1 够了"，错**。它删容器，而本机还跑着别人的项目 —— 判据是后果不对称，不是逻辑复杂度）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** ——M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 T3 实测），只按前者过滤会删掉它；而加上后者永不误伤真沙箱（`docker_client.py:113` 早退，Strix 产不出"有 run-type、无 run-id"的容器）。可直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR` / `ORPHAN_REQUIRED_LABEL` 两个常量，别再抄一遍字面串 |
 | T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** |
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3**（原标 2，2026-09-08 上调 —— **本次校对最主要的错标**）：**T14 / T15 / T16 / T21 / T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界。本文件自己都写着"全项目最难的一块"，却是唯一没让它先上报方案的地方 |
 | T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 |
@@ -936,7 +944,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | R12 | `localhost` 有三种含义（用户的 Mac / `api` 容器 / 沙箱）导致误解 | 中 | loopback 放行流程用中文讲清 Strix 的 `host.docker.internal` 改写；`/api/targets/validate` 返回 `note_code`（后端只给码，中文在 `zh-CN.json`，T6 改）；常见问题给完整例子 |
 | R13 | Docker Desktop 资源耗尽 | 低 | 上面那组 `STRIX_SANDBOX_*` 限额；并发 1；状态页显示剩余磁盘，低于 20GB 告警（沙箱镜像 + run 目录 + 截图很快堆起来）|
 | R14 | base64 截图撑爆 WS 帧与 DB | 低 | EventMirror 首见即抽取到 `media/` 并改写为 URL；`scan_media` 记账；留存清理优先删 media |
-| R15 | **TLS 装了但静默失效** —— 三种真实模式：证书缺 SAN/EKU（Chrome 直接 `ERR_CERT_COMMON_NAME_INVALID` 拒连）｜证书未被信任（每次弹警告页，用户被训练成无脑点过）｜`nginx.conf` 漏了 `proxy_buffering off`/`proxy_read_timeout` 导致 SSE 卡死或 WS 60 秒被掐 | 中 | 验收 22（SAN+EKU 断言）与 25（wss + 长时空闲）为**发布阻断**；26 断言 SSE 首字节延迟；`/api/system/status` 暴露 `tls.cert_trusted` 与证书剩余天数，未信任时给中文修复指引（`security add-trusted-cert` 原样命令可复制）|
+| R15 | **TLS 装了但静默失效** —— 三种真实模式：证书缺 SAN/EKU（Chrome 直接 `ERR_CERT_COMMON_NAME_INVALID` 拒连）｜证书未被信任（每次弹警告页，用户被训练成无脑点过）｜`nginx.conf` 漏了 `proxy_buffering off`/`proxy_read_timeout` 导致 SSE 卡死或 WS 60 秒被掐 | 中 | 验收 22（SAN+EKU 断言）与 25（wss + 长时空闲）为**发布阻断**；26 断言 SSE 首字节延迟；`/api/system/status` 暴露证书剩余天数 + SAN/EKU/`CA:FALSE` 的实测结论，未信任时给中文修复指引（`security add-trusted-cert` 原样命令可复制）。⚠️ **`tls.cert_trusted` 在后端恒为 `null`**（2026-09-11 T3 改）：信任判定在宿主钥匙串 / 浏览器 NSS 库里，api 容器既没有 `security` 也看不见 keychain，所以它如实回报 `cert_trusted_reason: "not_observable_from_container"` 而不是猜。**这条改由前端判定**：页面能加载出来本身就是"证书已被接受"的证明（拿不到就根本渲染不了这个状态页）。后端只负责"证书本身合不合格"那一半 |
 
 ---
 
@@ -995,7 +1003,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
     `report.exported`/`key.registered`（掩码）/`key.forgotten`；对 CSV `grep -c "$TEST_KEY"` → **0**
 20. **重启恢复**：扫描中 `docker compose restart api` → 标 `orphaned_running`、WS 重连并从镜像续流、
     `run.json` 到终态后正常收尾
-21. **拆除**：`docker compose down` → `docker ps -a --filter label=strix-run-type=console` 为空；
+21. **拆除**：`docker compose down` → `docker ps -a --filter label=strix-run-type=console` 里**没有带非空 `strix-run-id` 的容器**（不是"为空"—— M0 靶场带着同一个 `strix-run-type`，它在跑的时候这条永远不可能为空，2026-09-11 T3 实测）；
     `$DATA` 仍保有 DB 与 run 目录（持久化正常）；`/run/strix` 随容器消失（tmpfs 生效）
 22. **证书正确性（发布阻断）**：`openssl x509 -noout -text -in $DATA/tls/cert.pem` 同时含
     `Subject Alternative Name`（`localhost`/`127.0.0.1`/`::1`）与 `TLS Web Server Authentication`；

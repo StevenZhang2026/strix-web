@@ -36,6 +36,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+# 依赖论证（CLAUDE.md §编码哲学 4「依赖是负债，每个新依赖必须论证」）：
+#
+# 这**不是**新依赖 —— `cryptography==48.0.1` 已经在 `requirements.lock` 里带 hash
+# pin 住了。它也不是可有可无的传递依赖：`strix-agent` 对它的要求是
+# `cryptography<49,>=48.0.1`，**非 extra、非可选**。而 `strix-agent==1.5.3` 这个 pin
+# 我们不许升级也不许放宽（CLAUDE.md §Strix 集成 第 1 条），所以它不会从依赖树里消失。
+# 换句话说：直接 import 它引入的额外风险被那条 pin 兜住了，为零。
+#
+# 为什么不用标准库：`ssl` 没有任何**公开** API 能解析一个任意的证书文件并取出 SAN
+# 与 EKU（`ssl._ssl._test_decode_cert` 是私有的，名字里带 `_test`）。为了省一个
+# 已经装好的依赖去调一个私有函数，是把负债换成了更贵的负债。
 from cryptography import x509
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
