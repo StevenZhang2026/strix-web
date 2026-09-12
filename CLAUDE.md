@@ -3,60 +3,48 @@
 全局调度规则（Plan 约束、任务拆分、三套派发模板、Skill/Superpowers 开关、人工干预边界）见：
 @agent-rules.md
 
-**`PLAN.md` 是设计的唯一权威**（1140 行，含事实出处 `file:line`、泄漏矩阵、里程碑、**T0–T30 派发清单**、28 条端到端验收）。
-本文件只放长期稳定、每轮都需要的项目事实。两者冲突时以 `PLAN.md` 为准，并回头修本文件。
+**`PLAN.md` 是设计的唯一权威**（含事实出处 `file:line`、泄漏矩阵、里程碑、**T0–T30 派发清单**、28 条端到端验收）。
+本文件只放长期稳定、每轮都需要的项目事实，**硬上限 150 行**（2026-09-12 用户定）—— 写到 150 就必须往层二/层三下沉，不许硬塞、不许靠合并长行糊过去。两者冲突时以 `PLAN.md` 为准，并回头修本文件。
+**`PLAN.md` 有 1000+ 行，禁止整读**：先 `grep -n "^## " PLAN.md` 看小节，再按行区间 `Read`。整读一次要在本会话后续每一次调用上重复付费（`agent-rules.md` §九）。
 
 ## 规则分流（记录任何新规则/新坑之前先读这一节）
 
-| 层 | 放什么 | 落在哪 | 加载方式 |
-|---|---|---|---|
-| 一 | **常驻高频硬规则** —— 每轮都可能用到、跨模块、违反即出事 | 本文件 | 常驻（`@agent-rules.md` 同为常驻） |
-| 二 | **低频 / 特定场景的坑** —— 只在做某类操作时才需要，且**已实测** | `pitfalls/history-pitfalls.md` | **按需**，靠下方触发条件唤起 |
-| 三 | **只在改某模块时才用到的坑** | 该目录下的 `CLAUDE.md` | 读写该目录文件时自动加载 |
+- **层一 常驻高频硬规则**（每轮都可能用到、跨模块、违反即出事）→ 本文件，与 `@agent-rules.md` 同为常驻
+- **层二 低频 / 特定场景的坑**（只在做某类操作时才需要，且**已实测**）→ `pitfalls/history-pitfalls.md`，**不被 `@import`**，靠下方触发条件唤起 —— **没有触发条件的条目等于没写**
+- **层三 只在改某模块时才用到的坑** → 该目录下的 `CLAUDE.md`，读写该目录文件时自动加载
 
-**二层的触发条件**（`pitfalls/history-pitfalls.md` 不被 `@import`；没有触发条件的条目等于没写）：
+**层二的触发条件**（只是路牌：命中就去读那几条，别指望这里的一句话代替原文）：
 
-- 动 `backend/Dockerfile` / `requirements.lock` / `docker-compose.yml` → 条 2、4、5、9、10、**17**（`PIP_ONLY_BINARY` 只是默认值）
-- 写密钥卫生扫描（镜像 env / 文件系统）→ 条 **17b**（按值的形状判，别按变量名，否则 `GPG_KEY` 必误报）
-- 跑 `make lock` 或任何耗时长的网络任务 → 条 10、11、12、**15**（本网络有企业防火墙选择性解密 TLS，**不许引 PyPI 镜像**）、**16**（机器要消费的事实**绝不从日志里抠**）
+- 动 `backend/Dockerfile` / `requirements.lock` / `docker-compose.yml` → 条 2、4、5、9、10、17
 - 动 `setup.sh` 或任何挂载路径判定 → 条 1、2、5
-- 改本文件的 `@import`，或派发 subagent → 条 6、7
+- 动 `nginx.conf` / 证书 / compose 的可选 env 与可选挂载 → 条 27、28、30、31
+- 动日志初始化 / 写 Formatter / 接管 uvicorn 的 logger → 条 33、37
+- 动 `STRIX_LLM` 的值 / 换模型路由 → 条 22、23。**换路由必须重验 `completion_cost`**，否则预算护栏静默变 0
+- 跑 `make lock` 或任何耗时长的网络任务 → 条 10、11、12、15（**不许引 PyPI 镜像**）、16
 - 跑 `make verify-e2e` / 起靶机 → 条 3
-- **核查 Strix 内部源码 / 写 shell 断言** → 条 **18**（`cd` 进 site-packages 会遮蔽 `agents`；`grep 2>/dev/null || echo 通过` 会把"文件不存在"报成"通过"）
-- **排查"连不上模型" / 设计错误码映射** → 条 **19**（面板标题不足以分类错误，必须看正文异常类名）。哪家能用见下方环境表「出网 TLS」行
-- **写"凭据不落盘"这类全盘扫描断言** → 条 **20**（`grep -r <key> /` 在容器里 6 分钟跑不完，要按落盘面枚举）
-- **要用户运行任何需要输入凭据的交互式脚本** → 条 **21**（**只给命令，不给逐项输入表** —— 摆成表格读起来就像"请在这里填写"，已真实导致用户把 key 贴进对话）
-- **动 `STRIX_LLM` 的值 / 换模型路由** → 条 **22**（凭据形状绑死路由）+ 条 **23**（路由绑死 `STRIX_PROMPT_CACHE`）。**换路由必须重验 `completion_cost`**，否则预算护栏静默变 0
-- **写验收/自检脚本** → 条 **23** 末段（"检查都通过" ≠ "被检查的事真发生了"）
-- **展示扫描结论 / 做预算 UI** → 条 **24**（退出码 0 也可能是预算耗尽，须读 `run.json.status`；预算是软上限）
-- **写凭据卫生断言 / 加新供应商** → 条 **25**（结论按 auth_shape 而定，测一种不能推及另一种）
-- 在 shell 里判断命令成败、或查不可见字符 → 条 8、12、**26**（`--help | grep` 的退出码不可信）、**29**（`docker exec` 喂 heredoc 忘了 `-i`，静默空跑还退 0）
-- **动 `nginx.conf` / 证书 / compose 的可选 env 与可选挂载** → 条 **27、28、30、31**
-- **动日志初始化 / 写 Formatter / 接管 uvicorn 的 logger** → 条 **33**（`--no-access-log` 会被"接管"静默作废）、**37**（`formatTime` 默认 localtime，缀 `Z` 就是说谎）
-- **写迁移执行器 / 配 ruff / 在容器里跑 pytest / 写"命中黑名单就报错"的断言** → 条 **32、34、35、36**
+- 写凭据卫生断言（镜像 env / 文件系统 / 全盘扫描）或加新供应商 → 条 17b、20、25
+- 写迁移执行器 / 配 ruff / 在容器里跑 pytest / 写"命中黑名单就报错"的断言 → 条 32、34、35、36
+- 写验收/自检脚本 → 条 23 末段（"检查都通过" ≠ "被检查的事真发生了"）
+- 写任何带中文提示的 shell 脚本 → 条 14（`$VAR` 必须写成 `${VAR}`，否则 macOS bash 3.2 崩）
+- 在 shell 里判断命令成败 / 查不可见字符 / 核查 Strix 内部源码 → 条 8、12、18、26、29
+- 排查"连不上模型" / 设计错误码映射 → 条 19。哪家能用见下方环境表「出网 TLS」行
+- 展示扫描结论 / 做预算 UI → 条 24
+- 要用户运行任何需要输入凭据的交互式脚本 → 条 21（**只给命令，不给逐项输入表**）
 - 想读写 `.env` / `.env.*`，或某个操作被 deny 挡住 → 条 13
-- **写任何带中文提示的 shell 脚本** → 条 14（`$VAR` 必须写成 `${VAR}`，否则 macOS bash 3.2 崩）
-- **要导出企业根 CA / 动 `STRIX_EXTRA_CA_FILE`（N2）/ 跑任何 docker 清理命令** → 读 `pitfalls/local-env.md`（**未跟踪**，只在本机）。**仓库是 public**（`StevenZhang2026/strix-web`），具名的内网信息（解密设备归属、本机另一个 compose 项目名）一律只放那里，不许搬回被跟踪的文件；commit 身份是**仓库级**的 GitHub noreply 邮箱（刻意不用全局那个公司邮箱），别改回去
+- 改本文件的 `@import`，或派发 subagent → 条 6、7
+- 要导出企业根 CA / 动 `STRIX_EXTRA_CA_FILE`（N2）/ 跑任何 docker 清理命令 → 读 `pitfalls/local-env.md`（**未跟踪**，只在本机）
 
-**三层的归属**：建模块时**同时**建该目录的 `CLAUDE.md`，把本文件对应条目搬过去、只留一句结论 ——
-`strix_bridge/`(T13) 收 `agents.db` 非只追加 / 截图只留 3 张 / import 边界；
-`services/`(T9) 收一进程一次扫描 / `STRIX_LLM` 注入与独立 cwd / 退出码语义；`frontend/`(T17) 收 §TypeScript 全部 4 条。
-**目录建立之前这些条目一律留在本文件** —— 提前搬走会让知识无家可归。
+**层三的归属**：建模块时**同时**建该目录的 `CLAUDE.md`，把本文件对应条目搬过去、只留一句结论（已搬 `frontend/`；T9 落地时搬 `services/`，T13 搬 `strix_bridge/`）—— **代码写出来之前一律留在本文件**，提前搬走会让知识无家可归。
 
 ## 项目状态
 
 在 Strix（`strix-agent` 1.5.3, Apache-2.0）之上做 Web 控制台：向导式发起扫描、实时进度可视化、中文人话报告、授权护栏。核心约束：**LLM 可切换、谁用谁的 Key、Key 绝不落盘。**
 
-**已完成：T0（构建/编排骨架）· T1（M0 契约实测，六条断言全过）· T2（后端骨架）· T3（`/api/system/status` 依赖自检）· T4（TLS 全套）· T4b（单账号登录后端）· T5（前端骨架 + 中文文案表）· T5b（登录前端 + 首屏介绍）· T6（目标护栏纯函数）· T8（授权清单 + `/api/targets/validate`）。** git 仓库，remote `StevenZhang2026/strix-web`（**public**）。
-**开工先读 `PLAN.md` §交接**（当前进度、待放行的事、上一次交接留下的问题）。
-逐条验收记录在 `PLAN.md` 的派发清单对应行与 §里程碑，归因在 `pitfalls`。
-**现在可以跑**：`make lint`（= `lint-api` ruff + **`lint-web` eslint/tsc，跑在宿主 node 上**）、`make test`（**580 passed，0 skipped —— skip 数不为 0 就说明有守卫没在跑**）、`docker compose -p strix-console up -d api web nginx` → `https://127.0.0.1/`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
+**开工先读 `PLAN.md` §交接**（当前进度、待放行的事、上一次交接留下的问题）。进度、逐条验收记在 `PLAN.md`（派发清单对应行 + §里程碑），归因记在 `pitfalls` —— **本节不复述，也不记日期/数量/退出码**。
+**现在可以跑**：`./setup.sh`（环境校验 + 生成 `.env` + 自签证书与信任指引）、`make lock`（在一次性 Linux 容器里生成 hash lock）、`make lint`（= `lint-api` ruff + **`lint-web` eslint/tsc，跑在宿主 node 上**）、`make test`（**必须 0 skipped —— skip 数不为 0 就说明有守卫没在跑**）、`docker compose -p strix-console up -d api web nginx` → `https://127.0.0.1/`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。**待 T30**：`make verify-e2e`（28 条验收，6–11 Key 卫生门、22/25 TLS 阻断项、27/28 登录阻断项）、`make reap`（按 label 清孤儿沙箱）。
 `lint-web` 依赖 `frontend/node_modules`，装它必须显式 `npm ci --registry=https://registry.npmjs.org/`（宿主 `~/.npmrc` 的镜像源被 TLS 解密，**不许动那个文件**）。
-**T4b 之后 `api` 起不来除非 `${DATA}/auth.json` 存在** —— 缺它就拒绝启动（否则删掉该文件即绕过登录）。跑一次 `./setup.sh` 的 C17f 建账号。
-`make verify-e2e` / `make reap` 仍是计划中的接口（T30）。
-已就绪：`strix_sandbox` 网络 + 靶场 `m0-juice-shop`（接入该网络，别名 `juice-shop`）。
-**扫描目标 URL 必须写 `http://juice-shop:3000`，不是 `localhost:13000`** —— 后者在沙箱内指向沙箱自己，已实测失败。
-重跑 M0 用 `./scripts/m0_probe.sh`（真凭据只经 `read -rs` → stdin，从不落盘）。
+**`api` 起不来除非 `${DATA}/auth.json` 存在** —— 缺它就拒绝启动（否则删掉该文件即绕过登录）。跑一次 `./setup.sh` 的 C17f 建账号。
+靶场 `m0-juice-shop` 已就绪（接入 `strix_sandbox`，别名 `juice-shop`），重跑 M0 用 `./scripts/m0_probe.sh`：**扫描目标 URL 必须写 `http://juice-shop:3000`，不是 `localhost:13000`** —— 后者在沙箱内指向沙箱自己，已实测失败。
 
 ## 编码哲学（Karpathy 风格，按其公开表述归纳）
 
@@ -68,24 +56,19 @@
 6. **删代码是进步** —— 死代码、注释掉的代码、"以后可能用"的分支，见到就删
 7. **不变量写进代码，不是写进文档** —— 用 DB 约束、类型、启动断言表达。范例：`scans.authorization_id NOT NULL` 让"误扫"结构上不可能；`assert_no_secret_columns()` 启动即校验
 
-## 技术约束（不可协商）
-
-### 环境
+## 技术约束（不可协商）：环境
 
 | 项 | 事实 | 后果 |
 |---|---|---|
 | 支持范围 | **macOS + Linux，且都要求 Docker Desktop**。Windows 原生**不支持**（`C:\` 含冒号，同路径挂载不成立 → 只能 WSL2）；Docker Engine 待扩展 | `setup.sh` 按 `uname` 分支 + 检测 `docker info` 的 `Docker Desktop` 字样，非 Desktop 直接阻断 |
 | 部署机规格 | **可变** —— 可能是小笔记本也可能是服务器。本开发机 Docker VM 仅 `11 核 / 7.75 GB` | 沙箱四个限额**必须参数化**，由 `setup.sh` 按 `docker info` 的 `MemTotal`/`NCPU` 算出写进 `.env`，不许硬编码 |
-| **最小主机要求** | Docker VM 内存 **≥ 4 GB**（推荐 8）、CPU **≥ 2 核**（推荐 4）、数据目录可用 **≥ 10 GB**（推荐 20）、宿主物理内存 ≥ VM 配额 + 2 GB。"VM 内存"是 `docker info` 的 `MemTotal`，**不是宿主物理内存**。推导见 `PLAN.md` §最小主机要求的推导 | 常量集中在 `setup.sh` 顶部 `REQ_*`/`REC_*`，C17 管磁盘、C17b 管内存与 CPU，低于阻断线 `exit 1`。**改门槛改那里，不要改文档** |
+| **最小主机要求** | 阈值常量集中在 `setup.sh` 顶部 `REQ_*`/`REC_*`（C17 管磁盘、C17b 管内存与 CPU），低于阻断线 `exit 1`；推导见 `PLAN.md` §最小主机要求的推导。判据：**"VM 内存"是 `docker info` 的 `MemTotal`，不是宿主物理内存** | **改门槛改 `setup.sh`，不要改文档** —— 所以这里不抄数字 |
 | **出网 TLS** | 开发网络有企业防火墙做**选择性**解密：`pypi.org`/`ghcr.io` 未拦，但 **Anthropic·OpenAI·OpenRouter·DeepSeek 四家 LLM 端点全被解密**；只有 **Bedrock 与 Gemini** 可用。"这个域名没被拦"推不出"那个域名没被拦" | 开发与 M0 走 Bedrock；产品侧需要"操作者运行期挂载 CA bundle"的口子（`PLAN.md` §N2），**绝不烧进镜像**。见 `pitfalls` 条 15、19，设备归属见 `pitfalls/local-env.md`（未跟踪）|
-| 出网带宽 | **PyPI 直连约 250 KB/s**（`api` 镜像实测，84 包约 6 分钟）；但**连接会中途断流**，长任务必须可重试。`download.docker.com` 仅 45 KB/s。国内镜像站看似更快是假象 —— 那是被 MITM 代理测出来的，见条 15 | 装依赖要能重试、绝不放进构建期 `curl`；估时按分钟不按小时。见 `pitfalls` 条 10、11、15 |
-| 宿主架构 | 本机 `arm64`，但**不得假定** | hash lock 必须同时含 aarch64（`da35ae6e…74c43f`）与 x86_64（`ba0b6b13…6b6ea`）；`make lock` **不写** `--platform`；镜像按 manifest-list digest pin（本来就多架构） |
-| 宿主 Python | 仅 `3.9.6`，无 brew/pipx/uv | **后端必须容器化**，本机不跑 Python 业务代码；hash lock 只能在一次性 Linux 容器里生成 |
-| Strix 要求 | Python `>=3.12` | 后端镜像 `python:3.12-slim` |
-| Docker | Desktop `29.7.2` / Compose `v5.4.0` | DooD：挂 docker.sock，Strix 创建**兄弟**容器 |
-| Node | `v24.19.0` | 前端 Next.js 15 + React 19 |
+| 出网带宽 | PyPI 直连很慢**且连接会中途断流**；`download.docker.com` 更慢。国内镜像站看似更快是假象 —— 那是被 MITM 代理测出来的 | 装依赖要能重试、绝不放进构建期 `curl`；估时按分钟不按小时。实测数字见 `pitfalls` 条 10、11、15 |
+| 宿主架构 | 本机 `arm64`，但**不得假定** | hash lock 必须同时含 aarch64 与 x86_64（权威在 `requirements.lock`）；`make lock` **不写** `--platform`；镜像按 manifest-list digest pin（本来就多架构） |
+| 版本 | 宿主 Python 仅 `3.9.6`，无 brew/pipx/uv；Strix 要求 Python `>=3.12`；Docker Desktop `29.7.2` / Compose `v5.4.0`；Node `v24.19.0` | **后端必须容器化**（`python:3.12-slim`），本机不跑 Python 业务代码、hash lock 只能在一次性 Linux 容器里生成；DooD 挂 docker.sock，Strix 创建**兄弟**容器；前端 Next.js 15 + React 19 |
 
-### Strix 集成（每条都已读源码核实，出处见 `PLAN.md`）
+## Strix 集成（不可协商；每条都已读源码核实，出处见 `PLAN.md`）
 
 - **`strix-agent==1.5.3` 精确 pin** + `--only-binary=:all:` + hash lock。**不许**升级或放宽 —— sdist 的 hatch 钩子缺 Go 1.24 会硬失败；`test_strix_contract.py` 是升级预警线
 - **一进程一次扫描。** 模块级全局可变状态 + `configure_sdk_model_defaults` 改 `os.environ` → 同进程并发扫描会**跨用户污染 API Key**。因此走 `subprocess` CLI，**不内嵌** `run_strix_scan()`
@@ -100,7 +83,7 @@
 - **必设**：`STRIX_TELEMETRY=false`、`STRIX_NO_UPDATE_CHECK=1`、`LITELLM_LOG=ERROR`。**绝不设 `STRIX_DEBUG`**（会把 `strix.log` 拉到 DEBUG，是泄漏面）
 - **`api` 必须 `--workers 1`**（KeyVault 是进程内 dict，多 worker 会随机 404），启动时校验 `WEB_CONCURRENCY`
 
-### 安全不变式（违反即发布阻断）
+## 安全不变式（违反即发布阻断）
 
 - **任何表都不得有 Key / secret / token / password 列。** 启动 `db.assert_no_secret_columns()`，CI 有对应测试
 - **Key 绝不进 argv / query / path / 日志 / DB / compose / `.env` / 镜像**，只经 JSON POST body 到内存与子进程 env
@@ -129,12 +112,8 @@
 
 ### TypeScript（前端）
 
-- `strict: true`，**禁止 `any`**；Next.js App Router；服务端组件优先
-- **样式只用 CSS Modules + `globals.css` 里的 token 层，不引 Tailwind**（2026-09-09 拍板，理由在 `PLAN.md:220`）。也**不引 `clsx`/`cva`** —— 变体走级联（`.btn.stop`）
-- **所有用户可见文案集中在 `frontend/messages/zh-CN.json`**，组件里**不得**出现中文字面量（eslint 强制，但**抓不到模板字符串**）
-- **任何文件不许 import `next/headers`**（服务端彻底不碰会话 cookie）；**只有 `src/lib/stores/keys.ts` 可以碰 `window.sessionStorage`**。两条都由 `make lint-web` 的 eslint 封死
-- 状态：zustand（客户端）+ react-query（服务端数据）；WS 流单独一个 store，专家 tab 复用同一 store
-- Key 输入框 `type=password` + 随机 `name`（破自动填充）；POST 后 `finally` 清空 React state
+- `strict: true`、**禁止 `any`**；App Router + 服务端组件优先；样式只用 CSS Modules + `globals.css` 的 token 层（**不引 Tailwind / `clsx` / `cva`**）；文案全部进 `frontend/messages/zh-CN.json`，组件里**不得**出现中文字面量
+- **细则（eslint 封死的 `next/headers` 与 `sessionStorage` 两条边界、状态选型、Key 输入框）见 `frontend/CLAUDE.md`**
 
 ### 错误与文案
 
@@ -154,12 +133,6 @@
 - 结构化 JSON；生产 `--no-access-log`；脱敏过滤器在**推给前端和写镜像之前**执行
 - `audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 双写（DB 丢了也在、可 grep）
 
-## 命令
-
-- `./setup.sh` —— 环境校验 + 生成 `.env`（**已实现**；T4 再加自签证书与信任指引）
-- `make lock` —— 在一次性 Linux 容器里生成 hash lock（**已实现**）；`docker compose up -d --build`
-- `make verify-e2e`（28 条验收，6–11 是 Key 卫生门、22/25 是 TLS 阻断项、27/28 是登录阻断项）、`make reap`（按 label 清孤儿沙箱）—— **均待 T30**
-
 ## 禁区
 
 - **不许改** `PLAN.md` 里"已确认决策"表中的条目 —— 那些是用户拍过板的，要改先问
@@ -167,6 +140,7 @@
 - **不许**把 `data` 目录放进仓库（同路径挂载要求它是 `.env` 指定的绝对宿主路径）
 - **不许**引入向 `app.strix.ai` 或任何第三方外发数据的代码路径（这是本项目存在的理由之一）
 - **不许**代理 Strix 自带 SPA（有邮箱门 + PostHog + 报告外发中继），专家 tab 自己渲染
+- **仓库是 public**（remote `StevenZhang2026/strix-web`）：具名的内网信息（解密设备归属、本机另一个 compose 项目名）**只许**留在 `pitfalls/local-env.md`（未跟踪），不许搬回被跟踪的文件；commit 身份是**仓库级**的 GitHub noreply 邮箱（刻意不用全局那个公司邮箱），别改回去
 - **本机有另一个在用的 Docker compose 项目（6 个容器 + 端口 3000/3080/8000/5432/6379；项目名见 `pitfalls/local-env.md`，未跟踪）。**
   - **绝对禁止**任何无过滤的批量清理：`docker system prune`、`docker volume prune`、`docker image prune -a`、`docker network prune`、不带 `-p strix-console` 的 `docker compose down`
   - `make reap` **必须**按 `label=strix-run-type=console` **且 `strix-run-id` 非空**双条件过滤，先 `--dry-run` 打印再删；禁止按"名字像"或"时间早"删。**少了 run-id 那一半会删掉 M0 靶场** —— 它被手打了同一个 `strix-run-type=console`（已 `docker inspect` 实测）。加这一半不会误伤真沙箱：`docker_client.py:113` 的早退让 Strix 产不出"有 run-type、无 run-id"的容器

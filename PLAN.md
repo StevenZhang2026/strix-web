@@ -4,8 +4,9 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-**代码状态**：工作区干净；`main` 比 `origin/main`（`887cd80`）**领先 4 个提交，从未 push**
-（这里刻意不写当前提交的 SHA —— 写了就会被下一次 amend 打脸，`git log -1` 一秒就能看）。
+**代码状态**：工作区干净。`main` 比 `origin/main`（`887cd80`）**领先 11 个提交，从未 push**
+（数字用 `git rev-list --count origin/main..HEAD` 复核；这里刻意不写当前提交的 SHA ——
+写了就会被下一次 amend 打脸，`git log -1` 一秒就能看）。**push 与否用户还没表态，别自己推。**
 闸门最后一次全绿是在 `bf92e45`：
 `make test` 580 passed / 0 skipped、`make lint-api` 干净；之后只改过文档，未重跑。
 已完成 T0–T6、T8；**下一个要做的是 T7**。
@@ -15,9 +16,14 @@
    （`agent-rules.md` §九.5）。我的提案：**T7a** = `key_vault.py` 内存实现 + 单测；
    **T7b** = `routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试。串行，各自预算 ≤80 次工具调用。
    T7 是模板 3，**方案还要先上报评审**（§八.2）。等用户放行。
-2. **`CLAUDE.md` 能不能精简** —— 用户 2026-09-12 问的，我还没查（被成本核算打断）。
-   查法见 memory `keep-claude-md-lean`：按本文件 §规则分流 的三层归属找该下沉的条目。
-3. `agent-rules.md` 那笔文档改动要不要单独提交。
+2. 本地 11 个提交要不要 push 到 `origin/main`（仓库是 public，push 前自己再扫一遍具名内网信息）。
+
+**2026-09-12 文档瘦身（已完成，别重做）**：`CLAUDE.md` 173→147 行、本文件 1190→1143 行
+（§派发清单 -21%、§M0 两条需求 -24%、T2/T4 的复核记录搬进 §里程碑）。新增层三第一份
+`frontend/CLAUDE.md`（§TypeScript 细则 + T5 那三条构建禁令）。同时定死两条规则，都已写进 `CLAUDE.md` 开头：
+**① `CLAUDE.md` 硬上限 150 行；② 本文件禁止整读**（先 `grep -n "^## "` 再按行区间 `Read`）。
+**用户已明确不做的**：§编码哲学 前三条与 §安全不变式 论证句的裁剪 —— 提过，用户选择只做纯冗余，**别再自动提**。
+另修掉一处早就烂了的引用：不引 Tailwind 的理由不在 `PLAN.md:220`，在 §仓库结构 的 `globals.css` 注释。
 
 **2026-09-12 的成本核算结论**（数字在未跟踪的 `pitfalls/local-env.md`，一个都不许搬进被跟踪的文件）：
 `agent-rules.md` §九 原先写的「auto-compact 是最贵的单项」**实测是错的**（只占 4%），已重写。
@@ -289,16 +295,11 @@ UI 弹窗预填 provider/model、Key 框留空，文案说明"我们从不保存
 
 ## M0 带出的两条产品需求（**N1 与 N2 均已于 2026-09-08 拍板采纳，并入 §已确认决策**）
 
-两条都不是"开发机不便"，而是**实测发现的设计缺口**。出处见 `pitfalls/history-pitfalls.md` 条 19。
+两条都不是"开发机不便"，而是**实测发现的设计缺口**。**机理与全部 `file:line` 出处在 `pitfalls/history-pitfalls.md` 条 19／22／23**，本节只留结论与实现后果。
 
 ### N1. `vault_handle` 必须指向一**组**凭据，不是一个字符串　✅ **已采纳（2026-09-08）**
 
-> 本节原标题是 `key_handle`。**该字段已于 2026-09-08 全面改名为 `vault_handle`（DB 列与 HTTP 字段统一）** ——
-> `key_handle` 这个名字来自"一个供应商 = 一个 Key 字符串"，正是本节推翻的那个假设。
-> 顺带也解开了"黑名单必须含 `key`、又不许开豁免"的死结（见 §数据模型）。
-
-原设计假设"一个供应商 = 一个 Key 字符串"。**Bedrock 打破了这个假设，而且是打破两次** ——
-同一个供应商有**两种互斥的凭据形状**，所以形状不是 provider 的属性，是一个独立维度：
+原设计假设"一个供应商 = 一个 Key 字符串"。Bedrock 打破了它，**而且打破两次** —— 同一个供应商有两种互斥的凭据形状，所以形状不是 provider 的属性，是一个独立维度。字段名从 `key_handle` 改成 `vault_handle`（DB 列与 HTTP 字段统一）就是因为旧名字来自那个被推翻的假设；顺带解开了"黑名单必须含 `key`、又不许开豁免"的死结（见 §数据模型）。
 
 | 形状 | 要注入的 env | 值的个数 | 模型名约束 |
 |---|---|---|---|
@@ -306,85 +307,38 @@ UI 弹窗预填 provider/model、Key 框留空，文案说明"我们从不保存
 | Bedrock SigV4 | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION_NAME` | 3 | `bedrock/<model>` |
 | Bedrock API key（bearer） | `AWS_BEARER_TOKEN_BEDROCK` + `AWS_REGION_NAME` | 2 | **必须** `bedrock/invoke/<model>` |
 
-**最后一列不是可选项，是硬约束**：bearer token 在 litellm 里的支持是**分路由的**。
-converse 路由（`bedrock/<model>`）在 `converse_handler.py:334` 无条件先取 SigV4 凭据、
-再把 `credentials.access_key` 塞进 rust bridge，只给 bearer 时那里是 `None` → 直接崩，
-**走不到**认 bearer 的 `_sign_request`。invoke 路由（`bedrock/invoke/<model>`）不碰 credentials，
-签名走的正是认 bearer 的那条。已实测（详见 `pitfalls` 条 22），且 `completion_cost`
-对两条路由算出**完全一样**的值 —— 预算护栏不受影响，但**任何换路由的改动都必须重验这一点**。
-→ 所以 `auth_shape` 不只决定"要哪几个 secret 键"，还决定**模型名怎么拼**。
-   `ScanLauncher` 组 argv 时按 shape 补 `invoke/` 段，不要求用户自己记。
+**最后一列不是可选项，是硬约束** —— bearer 在 litellm 里的支持是分路由的：converse 路由无条件先取 SigV4 凭据，只给 bearer 时直接崩，走不到认 bearer 的签名分支；invoke 路由才行（条 22）。→ `auth_shape` 不只决定"要哪几个 secret 键"，还决定**模型名怎么拼**：`ScanLauncher` 按 shape 补 `invoke/` 段，不要求用户自己记。
 
-**而 `invoke/` 段又反过来强制一个 env**：Strix 的 prompt caching 只在 converse 路由上成立
-（它注入的 `cache_control_injection_points` 带 `{"location":"tool_config"}`，只有
-`converse_transformation.py` 消费；invoke 路由原样塞进请求体 → Bedrock `400`）。
-Strix 自己**想**防住（`core/inputs.py:265-282` 的 docstring 明写"未映射的 Bedrock 模型一个注入点都不给"），
-但 `config/models.py:857` 的 `_prompt_cache_name_candidates` 只剥 `litellm/` 和 `bedrock/`、**不剥 `invoke/`**，
-第 2、3 个候选名照样命中缓存能力表 → 判定返回 `True`、注入照旧。已实测，详见 `pitfalls` 条 23。
-出路是 Strix 自带的一等公民开关 **`STRIX_PROMPT_CACHE=false`**（`config/settings.py:51`，默认 `true`），
-不需要打补丁。关掉后 `extra_args` 只剩 `{'timeout': …}`，无 converse 专用参数残留；
-成本计算**逐位相同**（`report/state.py:699` 的候选名最后一个天然剥掉 `invoke/`），预算护栏不受影响。
-→ **判据是路由，不是 auth_shape**：`ScanLauncher` 按"模型名里含 `invoke/`"决定是否注入这个 env，
-   而不是按"用的是 bearer"。SigV4 用户若自己指定了 invoke 路由，同样要关。
+**而 `invoke/` 段又反过来强制一个 env**：Strix 的 prompt caching 只在 converse 路由上成立，走 invoke 会被 Bedrock 打回 `400`；Strix 自己想防住但候选名不剥 `invoke/`，判定照旧返回 `True`（条 23）。出路是它自带的一等公民开关 **`STRIX_PROMPT_CACHE=false`**，不需要打补丁。
+→ **判据是路由，不是 auth_shape**：按"模型名里含 `invoke/`"决定是否注入这个 env；SigV4 用户若自己指定 invoke 路由，同样要关。
+→ **`completion_cost` 对两条路由算出的值逐位相同**，预算护栏不受影响 —— 但**任何换路由的改动都必须重验这一点**，否则护栏静默变 0。
 
-两种 Bedrock 形状**必须二选一**：`litellm/llms/bedrock/base_aws_llm.py:1554-1564` 先取
-`AWS_BEARER_TOKEN_BEDROCK`，有值就发 `Authorization: Bearer …` 并**整段跳过 SigV4**。
-同时给两套会让 litellm 静默忽略一套，失败时归因不了 —— UI 必须让人明确选一种，不能两个框都摆着。
-
-Strix 侧帮不上忙：`_mirror_api_key_to_provider_env`（`config/models.py:590-592`）只填名字以
-`_API_KEY` 结尾的变量，`AWS_*` 四个都不符合。好在 `LLM_API_KEY` 对 Strix 是**可选**的
-（`interface/environment.py:43-44` 进的是 `missing_optional_vars`，只有 `STRIX_LLM` 必填），
-直接喂 `AWS_*` env 就能跑（M0 已实测 SigV4 路径打到 AWS 真实响应）。
-顺带排除一个虚惊：`config/models.py:712` 的 `api_key=llm.api_key or "not-needed"` 在
-`_register_openai_client_with_headers` 里，只有设了 `extra_headers` 才会走到，不碰 Bedrock 路径。
+两种 Bedrock 形状**必须二选一**：litellm 先取 `AWS_BEARER_TOKEN_BEDROCK`，有值就发 `Authorization: Bearer …` 并整段跳过 SigV4。同时给两套会被静默忽略一套、失败时归因不了 —— **UI 必须让人明确选一种，不能两个框都摆着**。Strix 侧帮不上忙（它只镜像名字以 `_API_KEY` 结尾的变量），但 `LLM_API_KEY` 对 Strix 是**可选**的（只有 `STRIX_LLM` 必填），直接喂 `AWS_*` env 就能跑（M0 已实测打到 AWS 真实响应）。
 
 后果，逐条落到实现上：
 
-- `POST /api/keys` 的 body 从 `api_key: SecretStr` 改为 `auth_shape: str` +
-  `secrets: dict[str, SecretStr]`（键就是要注入子进程的 env 变量名）+ 非机密的
-  `params: dict[str, str]`（区域等）。**每个供应商声明它支持哪几种 auth_shape、每种要哪几个键**，
-  由 `/api/providers` 一并返回，前端据此渲染 1／2／3 个输入框。
-  后端只注入所选 shape 声明的那几个键，**多余的键一律拒绝**（`400 unexpected_secret_key`）——
-  否则用户把 bearer 和 SigV4 都填上，会撞进上面那个静默忽略。
+- `POST /api/keys` 的 body 从 `api_key: SecretStr` 改为 `auth_shape: str` + `secrets: dict[str, SecretStr]`（键就是要注入子进程的 env 变量名）+ 非机密的 `params: dict[str, str]`（区域等）。**每个供应商声明它支持哪几种 auth_shape、每种要哪几个键**，由 `/api/providers` 一并返回，前端据此渲染 1／2／3 个输入框。后端只注入所选 shape 声明的那几个键，**多余的键一律拒绝**（`400 unexpected_secret_key`）—— 否则用户把两套都填上，会撞进上面那个静默忽略。
 - `RedactionFilter` 必须把这一组里的**每个值**都注册为精确子串 —— 只注册"主 Key"会漏掉 secret。
 - `label` 的脱敏展示要按值分别算（`AKIA…7Q4F` / `…` 各一条），不能只显示一条。
-- 泄漏矩阵每一行的判定对象从"Key"变成"这一组值"；M0 的探测脚本已按
-  `SEC_HARD`（真机密）/ `SEC_SOFT`（半公开标识符，如 `AKIA…`）分级扫描，两级都要报。
-- `db.assert_no_secret_columns()` 的列名黑名单不变（本来就是按名字拦），但要确认
-  `aws`/`access`/`credential` 这类词也在名单里，否则 `aws_access_key_id` 列能溜过去。
-- **成本要如实告知，而且现在有数字了**（M0 第 3 次运行实测）：bearer 形状被迫走 invoke 路由、
-  进而被迫关掉 prompt caching。实测 13 次请求就烧掉 `$2.0572`，`cached_tokens: 0` /
-  `cache_write_tokens: 0`，输入 603K token（每次约 45K，同一份 system prompt + 历史重发 13 遍），
-  **在 juice-shop 上一无所获**。Bedrock 缓存读取是原价的 1/10 → 开着缓存这笔钱大致是 1/4～1/6。
-  → **SigV4 不是"也行"，是便宜 4～6 倍。** UI 在选 Bedrock API key 形状时必须给出这个量级对比，
-    并说明 SigV4 保留缓存。这是真实取舍，不许悄悄替用户决定；也不许只说"可能更贵"这种没信息的话。
-  → 同时意味着**默认预算 $2 对 bearer 形状是不够的**，向导的预算默认值要按形状区分。
+- 泄漏矩阵每一行的判定对象从"Key"变成"这一组值"；探测脚本按 `SEC_HARD`（真机密）/ `SEC_SOFT`（半公开标识符）分级扫描，**两级都要报**。
+- `db.assert_no_secret_columns()` 的黑名单机制不变（本来就按名字拦），但要确认 `aws`／`access`／`credential` 也在名单里，否则 `aws_access_key_id` 能溜过去。
+- **成本要如实告知，而且有数字**（M0 第 3 次运行实测）：bearer 形状被迫走 invoke、进而被迫关缓存，13 次请求烧掉 `$2.0572`（`cached_tokens: 0`、`cache_write_tokens: 0`、输入 603K token），**在 juice-shop 上一无所获**。Bedrock 缓存读取是原价 1/10 → 开着缓存大致是 1/4～1/6。
+  → **SigV4 不是"也行"，是便宜 4～6 倍。** 选 bearer 形状时 UI 必须给出这个量级对比并说明 SigV4 保留缓存 —— 这是真实取舍，不许悄悄替用户决定，也不许只说"可能更贵"这种没信息的话。
+  → 同时意味着**默认预算 $2 对 bearer 形状不够**，向导的预算默认值要按形状区分。
 
 ### N2. 运行期由操作者挂载 CA bundle —— **绝不**烧进镜像　✅ **已采纳（2026-09-08）**
 
-本网络实测：`api.anthropic.com` / `api.openai.com` / `openrouter.ai` / `api.deepseek.com`
-**四家全被同一台企业防火墙解密**，容器内没有那张企业根 CA，TLS 握手就失败，与凭据无关。
-这不是本开发机的怪癖 —— **任何处在企业 TLS 检查后面的用户都会撞上，且现有设计下无解**。
+本网络实测四家主流 LLM 端点全被同一台企业防火墙解密，容器内没有那张企业根 CA，TLS 握手就失败，与凭据无关。这不是本开发机的怪癖 —— **任何处在企业 TLS 检查后面的用户都会撞上，且现有设计下无解**。
 
-所以要留一个口子：`docker-compose.yml` 上一对**可选**变量，
-`STRIX_EXTRA_CA_FILE`（宿主 PEM 绝对路径，默认空）→ 以 `:ro` 挂进 `api` 容器，
-并设 `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` 指向它。默认关闭；`setup.sh` 不自动探测、不自动填。
+所以留一个口子：`docker-compose.yml` 上一对**可选**变量，`STRIX_EXTRA_CA_FILE`（宿主 PEM 绝对路径，默认空）→ 以 `:ro` 挂进 `api`，并设 `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` 指向它。默认关闭；`setup.sh` 不自动探测、不自动填。**边界必须写清，否则这个口子会变成条 15 那个被否掉的方案**：
 
-**边界必须写清，否则这个口子会变成条 15 那个被否掉的方案**：
-
-- 只允许**运行期由操作者显式挂载**。构建期把任何 CA 烧进镜像 = 把一张能签任意域名的证书
-  焊进交付物，**永久禁止**（条 15 的裁定不变）。运行期挂载与构建期烧进去是两件不同的事。
-- 启用它意味着"凭据与全部 LLM 流量明文过一遍企业解密设备"。这必须在 UI 上**显式警示**并
-  写进 `docs/SECURITY-zh.md` 的已知风险，不能只当一个安静的配置项。
-- 系统自检（`GET /api/system/status`）要报出"额外 CA：已启用/未启用"，让人一眼看见自己在哪种模式。
+- 只允许**运行期由操作者显式挂载**。构建期把任何 CA 烧进镜像 = 把一张能签任意域名的证书焊进交付物，**永久禁止**（条 15 的裁定不变）。
+- 启用它意味着"凭据与全部 LLM 流量明文过一遍企业解密设备"。必须在 UI 上**显式警示**并写进 `docs/SECURITY-zh.md` 的已知风险，不能只当一个安静的配置项。
+- `GET /api/system/status` 要报出"额外 CA：已启用/未启用"，让人一眼看见自己在哪种模式。
 
 ### 由此确定的开发期取舍（不是产品需求，只是本机怎么干活）
 
-本网络未被解密的只有 **AWS Bedrock** 与 **Google Gemini**。开发与 M0 走 Bedrock ——
-它后面就是 Anthropic Claude，Strix 的 system prompt 与 ~90 个 skill 都是按 Claude 调的，
-行为最接近设计意图。已用**假凭据**实测到 AWS 返回真实 HTTP 响应
-（`BedrockException Invalid Authentication - security token … is invalid`），
-证明 TLS 与请求投递都通，只差真凭据。
+本网络未被解密的只有 **AWS Bedrock** 与 **Google Gemini**。开发与 M0 走 Bedrock —— 它后面就是 Anthropic Claude，Strix 的 system prompt 与 ~90 个 skill 都是按 Claude 调的，行为最接近设计意图。
 
 ---
 
@@ -881,6 +835,11 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 
 单人约 **21 个工作日**（M1 因 TLS 从 2 天增至 3 天）。**M0 永远第一。**
 
+**已完成任务的复核记录**（派发清单只留 ✅ 与日期，细节记在这里，两处别都写）：
+
+- **T2**（2026-09-08，子 agent 交付 + 我独立复跑）：脱敏挂在 **Formatter** 上（子 logger 实测被脱敏）／`uvicorn.access` 是**静音**不是接管（否则静默作废 `--no-access-log`，`pitfalls` 条 33）／五条结构不变式真的会拦且回滚干净／**投毒验证**：给 `scans` 加 `api_key` 列后 api 退出码 3 报 `SecretColumnError`。**三处由我补**：① compose `target: runtime`（Dockerfile 里 `test` 是最后一个阶段，不写 target 则生产镜像带上 pytest/tests）；② `logging_setup` 的 `converter = staticmethod(time.gmtime)`（`pitfalls` 条 37）+ 自改进程时区的测试（否则该测试恒真）；③ 404/405 的响应形状。
+- **T4**（2026-09-08，同上）：验收 23／24、证书 SAN+EKU+`CA:FALSE`、唯一发布端口 `127.0.0.1:443`、`api` 8000 宿主不可达、N2 默认关闭，均已复跑。`setup.sh` 新增 C17c 端口占用（**只查不占，绝不杀进程**）、C17d 证书三态机（**`ok` 态永不覆盖**，`STRIX_REGEN_CERT=1` 才重签且先备份）、C17e N2 校验（真 `docker run` 挂一次，防 Docker Desktop File sharing 未覆盖时静默给空文件）。
+
 ---
 
 ## 派发清单（`agent-rules.md` §二.5 要求的五要素）
@@ -905,42 +864,42 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 
 | # | 任务 | 前置 | 涉及文件 | 模板 |
 |---|---|---|---|---|
-| T0 | 最小 `api` 镜像 + compose 骨架（`strix-agent==1.5.3` 精确 pin + `--only-binary=:all:` + hash lock + 同路径挂载 + `strix_sandbox` 网络）| — | `backend/Dockerfile` `backend/pyproject.toml` `docker-compose.yml` `.env.example` `setup.sh` | **3** |
-| T1 | **M0 契约实测** —— ✅ **6 条断言 2026-09-08 全部实测通过**（第 3 次运行）。断言 2 只覆盖 `bedrock-apikey` 形状，`single` 形状要在 T7 复跑一遍 | T0 | 无（只跑命令）| **自** |
-| T2 | FastAPI 骨架 + `assert_no_secret_columns()` + `RedactionFilter` + 建表迁移 | T1 | `app/{main,settings,db,models,logging_setup}.py` `migrations/001_init.sql` | **3** —— ✅ **2026-09-08 交付并由我独立复核通过**。`make lint` 干净，`make test` 99 passed。我复跑并确认的：脱敏挂在 **Formatter** 上（子 logger `litellm.utils` 实测被脱敏）／`uvicorn.access` 是**静音**不是接管（否则静默作废 `--no-access-log`，pitfalls 条 33）／五条结构不变式真的会拦（FK、`authorization_id NOT NULL`、`max_budget_usd > 0`、`json_valid(targets_json)`、`json_array_length(affirmations_json) = 3`，且全部回滚干净）／**投毒验证**：给 `scans` 加一列 `api_key` 后 api 退出码 3 报 `SecretColumnError`，已回滚／41 列零凭据列。<br>**三处由我补**：① `docker-compose.yml` 的 `target: runtime`（Dockerfile 里 `test` 是最后一个阶段，不写 target 时生产镜像会带上 pytest/ruff/tests —— 已实测 `import pytest` 现在 rc=1）；② `logging_setup.py` 的 `converter = staticmethod(time.gmtime)`（`formatTime()` 默认用 localtime，那行时间戳缀的 `Z` 是假的；容器里 TZ 恰好未设所以测不出来，pitfalls 条 37），配 `test_ts_is_really_utc_even_under_a_non_utc_tz`（自己改进程时区，否则这条测试恒真）；③ **404 / 405 的响应形状**（下方独立一段） |
-| T3 | ✅ 2026-09-11 落地。`/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检。**接口刻意不带缓存**（缓存会在用户刚修好之后继续说没修好）；启动期一次都不探（探不到 docker 就起不来 = 没有界面能告诉用户是 docker 的问题）。**剩下的前端一小步**（不是新任务，接上就行）：① `zh-CN.json` 新建 `systemStatus` 段装六个阻断码的中文 —— `docker_unreachable` / `sandbox_network_missing` / `api_not_on_sandbox_network` / `same_path_mount_unverified` / `sandbox_image_missing` / `telemetry_not_disabled`（**刻意不进 `errors.py`** —— 那是 HTTP 错误码树，混在一起前端就不知道去哪棵取词，`test_two_code_trees_stay_disjoint` 是这条的机械版）；② 首页侧栏「本机就绪状态」四行接真值：`docker.reachable` / `sandbox_image.present` / `data_dir.identical_path_ok` / `telemetry.strix_telemetry === false`。**三态**：`true` 绿 / `false` 红 / **`null` 必须画成"未知"，绝不画绿** | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 |
-| T4 | TLS 全套：证书生成（SAN+EKU）、`nginx.conf` 四条必须指令、compose 加 `nginx` | T0 | `setup.sh` `nginx/nginx.conf` `docker-compose.yml` `env.example` | 2 —— ✅ **2026-09-08 交付并由我独立复核通过**。验收 23（80 不通）／24（不带 CA `http_code=000`）／证书 SAN+EKU+`CA:FALSE`+密钥成对／唯一发布端口 `127.0.0.1:443`／`api` 8000 宿主不可达／N2 默认关闭，均已复跑。`setup.sh` 332→613 行，新增 C17c 端口占用（只查不占，绝不杀进程）、C17d 证书三态机（`ok` 态**永不覆盖**，`STRIX_REGEN_CERT=1` 才重签且先备份）、C17e N2 校验（真 `docker run` 挂一次，防 Docker Desktop File sharing 未覆盖时静默给空文件）。带出 `pitfalls` 条 26–31 与本文档泄漏矩阵 #14／#15。**`target: runtime` 由我补**（见 T2 行） |
-| T4b | **单账号登录 —— 后端**：`auth.py`（`hashlib.scrypt` + 随机 salt + `hmac.compare_digest`）、`${DATA}/auth.json`(0600) 读写、会话 = 进程内存不透明 id、`POST /api/auth/{login,logout}` + `GET /api/auth/me`、**全局路由依赖**（唯一豁免 `/api/health` 与三个 auth 路由本身）、失败限流、`setup.sh` 建初始账号（口令经 `read -rs`）、`audit_log.actor` 落真实用户名 | T2 T4 | `app/services/auth.py` `app/routes/auth.py` `app/main.py` `setup.sh` `tests/test_auth.py` | **3** —— 定的约定被**每一个后续路由任务继承**（全局依赖一旦定错形状，T3/T7/T8/T12/T16/T23/T25 全要改），且**碰安全不变式**。prompt 必须写死四条：① 散列**绝不进 SQLite**，不许给 `assert_no_secret_columns()` 开任何豁免；② **不许引 `argon2-cffi`／`passlib`／`python-jose`／`pyjwt`**（`pyjwt` 虽在 lock 里但是 `mcp` 的传递依赖，不是我们的）；③ **不许装 `CORSMiddleware`** —— 理由见 §单账号登录 理由三的表；④ 会话**不签名、不自包含**，就是一个查内存 dict 的随机串 |
-| T5 | **前端视觉方向**（定一次，产出项目设计约定）+ Next.js 外壳 + 全中文文案表 | T2 | `frontend/messages/zh-CN.json` `frontend/src/app/*` `frontend/Dockerfile` `docker-compose.yml`(只加 `web`) | **3 + frontend-design**。prompt 必须写死三条：① **构建链只用 Next.js 自带的（Turbopack/webpack），不许引入 Vite / Rollup / esbuild 作为独立构建层** —— 那是第二套互斥的构建体系，违反 §编码哲学 第 4 条；② **不许 `next export` / `output: 'export'`** —— 静态导出会废掉服务端组件与 `/scans/[id]` 的 SSR，而 nginx 的 `location /` 是 `proxy_pass` 到 `web:3000` 的**运行中 Node 进程**，不是发静态文件；③ `web` 只写 `expose: ["3000"]`，**绝不写 `ports`**，并补 `nginx` 的 `depends_on` 成 `[api, web]` |
-| T5b | **单账号登录 —— 前端**：登录页 + 未登录重定向 + 401 统一拦截（复用 `key_required` 那套交互，因为会话与 KeyVault 同生共死）+ 登出。文案进 `zh-CN.json` | T4b T5 | `frontend/src/app/login/*` `frontend/src/lib/api.ts` `frontend/messages/zh-CN.json` | **3**（`agent-rules.md` §四：前端页面必须模板 3。读 T5 的约定，**不再开** frontend-design）。prompt 必须写死：口令框 `type=password` + **标准 `name` + `autoComplete="current-password"`**（2026-09-10 拍板，**推翻本行原先写的"随机 `name`"**，理由见下）；**会话 id 由 cookie 承载，前端一行都不许碰它** —— 不读、不存 `sessionStorage`、不放 URL（与 `vault_handle` 刻意相反，理由见 §单账号登录 方案表最后一行）|
-| | **↑ 为什么登录口令框与 API Key 输入框的规则相反**（别把这两条并成一条）：「随机 `name` 破自动填充」的出处是**泄漏矩阵第 11 行**，讲的是 `POST /api/keys` 的 **API Key 输入框** —— 对别人家的 provider 密钥，被浏览器存下来是**净损失**，那一条**不变**。控制台**登录口令**是相反的情形：`setup.sh` 强制 ≥12 位（`MIN_PASSWORD_LENGTH = 12`），不让密码管理器帮忙，用户就会挑一个记得住的弱口令、或把它抄进便签 —— 那比让浏览器记住更糟。且在本项目的威胁模型下自动填充不引入攻击面：要挡的是"本机另一个 OS 账号"（macOS 浏览器配置 per-OS-user，另一个账号的浏览器里没有你存的口令）和"浏览器里的其它标签页"（拿不到自动填充）；而坐在你已解锁浏览器前的人早就带着 `HttpOnly` 会话 cookie 了，口令对他没有增量价值。**已知且接受的残余风险**：浏览器若开了 iCloud 钥匙串 / Chrome 同步，这个口令会**离开本机**，而页脚文案写的是「数据与凭据都不离开这台机器」—— 该句指的是扫描数据与 **LLM API Key**（后者从不进浏览器存储），登录口令是例外。**必须写进 `docs/SECURITY-zh.md`（T30a）**，不得让人以为字面上零外发。同时注意 `autoComplete` 上**没有**"可填充但不要同步"这种值，所以这条风险只能如实记录，不能靠代码消除 | | | |
-| T6 | ✅ 2026-09-11 落地，**181 个用例**（原估 ~80）。`target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；`requirement`/`overridable` 与 `allowed` **正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 | T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
-| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处。<br>**⚠️ 派发前必须拆（2026-09-12 定，等用户放行）**：本行的涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测、**T7b**=`routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试，串行，各自预算 ≤80 次工具调用。模板 3 不变 —— 方案仍要先上报 |
-| T8 | ✅ 2026-09-12 落地，**130 个新用例**（全套 580 passed / 0 skipped）。顺手把四个测试文件各造一份的 `app`/`anonymous`/`client` 夹具与 `make_entry` 收进 `conftest.py`（需要替身的文件**覆写 `anonymous`**，因为替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表在 T2 就建好了但一个写入方都没有）—— 只有一个 `record()`，DB + ndjson 双写共用同一个时刻；T12/T25 在它上面加事件，不要再造第二个。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览，`target.rejected` 属于 T12 的发起路径。白名单加载/校验/热重载。**另接 T6 交回的三件事**：① `zh-CN.json` 新建 `targetGuard` 子树，装 8 个 `RejectionReason` 的中文与 `notes.loopback_rewrite`（T6 只出码，不出文案；这些不是 HTTP 错误，不进 `errors.py`，因为它们是输入框下方的行内提示，请求本身没失败）；② ~~`registrable_domain` 怎么算~~ —— **已定：整条去掉，不做**（2026-09-11 用户拍板）。T6 没有产出它，正确实现要 Public Suffix List；无依赖的近似实现（取最后两段）在 `example.co.uk` 上会算出 `co.uk`，而这个值要进逐字确认串 —— **一个错的注册域名比没有注册域名更糟**，它会让用户确认一个不是他想授权的范围。为它引依赖或内置一份需手工更新的PSL 数据文件，都是为一个纯展示字段付长期维护成本。`errors.not_in_allowlist` 的 `params` 与 `paramLabels` 里对应的两条已删（`test_no_orphan_param_labels` 会让"只删一半"变成测试失败）。那条错误只展示 `target`，文案本来也没引用注册域名。**别再加回来** —— 要加就得先把 PSL 这笔账付掉；③ `TargetRejected` 在 HTTP 层怎么表达（200 带 `ok:false` 还是 4xx 带码）—— 这决定 ① 的文案落在哪棵树 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
+| T0 | 最小 `api` 镜像 + compose 骨架（`strix-agent==1.5.3` 精确 pin + `--only-binary=:all:` + hash lock + 同路径挂载 + `strix_sandbox` 网络）| — | `backend/Dockerfile` `backend/pyproject.toml` `docker-compose.yml` `.env.example` `setup.sh` | **3** ✅ |
+| T1 | **M0 契约实测** | T0 | 无（只跑命令）| **自** ✅ 2026-09-08 六条断言全过（记录在 §里程碑 M0）。**断言 2 只覆盖 `bedrock-apikey` 形状，`single` 形状要在 T7 复跑一遍** |
+| T2 | FastAPI 骨架 + `assert_no_secret_columns()` + `RedactionFilter` + 建表迁移 | T1 | `app/{main,settings,db,models,logging_setup}.py` `migrations/001_init.sql` | **3** ✅ 2026-09-08（复核记录见 §里程碑「已完成任务的复核记录」；**404/405 的响应形状**见下方独立一段）|
+| T3 | `/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检 | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 ✅ 2026-09-11。**接口刻意不带缓存**（缓存会在用户刚修好之后继续说没修好）；启动期一次都不探（探不到 docker 就起不来 = 没有界面能告诉用户是 docker 的问题）。<br>**⏳ 剩下的前端一小步**（不是新任务，接上就行）：① `zh-CN.json` 新建 `systemStatus` 段装六个阻断码的中文 —— `docker_unreachable` / `sandbox_network_missing` / `api_not_on_sandbox_network` / `same_path_mount_unverified` / `sandbox_image_missing` / `telemetry_not_disabled`（**刻意不进 `errors.py`**：那是 HTTP 错误码树，混在一起前端就不知道去哪棵取词，`test_two_code_trees_stay_disjoint` 是这条的机械版）；② 首页侧栏「本机就绪状态」四行接真值，**三态**：`true` 绿 / `false` 红 / **`null` 必须画成"未知"，绝不画绿** |
+| T4 | TLS 全套：证书生成（SAN+EKU）、`nginx.conf` 四条必须指令、compose 加 `nginx` | T0 | `setup.sh` `nginx/nginx.conf` `docker-compose.yml` `env.example` | 2 ✅ 2026-09-08（复核记录见 §里程碑「已完成任务的复核记录」；带出 `pitfalls` 条 26–31 与泄漏矩阵 #14／#15）|
+| T4b | **单账号登录 —— 后端**：`auth.py`（scrypt + 随机 salt + `hmac.compare_digest`）、`${DATA}/auth.json`(0600) 读写、会话 = 进程内存不透明 id、`POST /api/auth/{login,logout}` + `GET /api/auth/me`、**全局路由依赖**（唯一豁免 `/api/health` 与三个 auth 路由本身）、失败限流、`setup.sh` 建初始账号（口令经 `read -rs`）、`audit_log.actor` 落真实用户名 | T2 T4 | `app/services/auth.py` `app/routes/auth.py` `app/main.py` `setup.sh` `tests/test_auth.py` | **3** ✅ 2026-09-08。当时写死的四条硬约束（散列绝不进 SQLite、不引 `argon2-cffi`／`passlib`／`python-jose`／`pyjwt`、不装 `CORSMiddleware`、会话不签名不自包含）已收进 `CLAUDE.md` §安全不变式 与本文 §单账号登录 |
+| T5 | **前端视觉方向**（定一次，产出项目设计约定）+ Next.js 外壳 + 全中文文案表 | T2 | `frontend/messages/zh-CN.json` `frontend/src/app/*` `frontend/Dockerfile` `docker-compose.yml`(只加 `web`) | **3 + frontend-design** ✅ 2026-09-09。三条**仍然生效**的禁令（不引 Vite／Rollup／esbuild 作独立构建层、不 `next export`、`web` 只 `expose` 不 `ports`）已搬进 `frontend/CLAUDE.md` |
+| T5b | **单账号登录 —— 前端**：登录页 + 未登录重定向 + 401 统一拦截（复用 `key_required` 那套交互，因为会话与 KeyVault 同生共死）+ 登出 | T4b T5 | `frontend/src/app/login/*` `frontend/src/lib/api.ts` `frontend/messages/zh-CN.json` | **3** ✅ 2026-09-10。两条定死的：口令框 `type=password` + **标准 `name` + `autoComplete="current-password"`**（2026-09-10 拍板，**推翻本行原先写的"随机 `name`"**，理由见下行）；**会话 id 由 cookie 承载，前端一行都不许碰它** —— 不读、不存 `sessionStorage`、不放 URL（与 `vault_handle` 刻意相反，理由见 §单账号登录 方案表最后一行）|
+| | **↑ 为什么登录口令框与 API Key 输入框的规则相反**（别把这两条并成一条）：「随机 `name` 破自动填充」的出处是**泄漏矩阵第 11 行**，讲的是 `POST /api/keys` 的 **API Key 输入框** —— 对别人家的 provider 密钥，被浏览器存下来是净损失，**那一条不变**。登录口令是相反情形：`setup.sh` 强制 ≥12 位，不让密码管理器帮忙，用户就会挑记得住的弱口令或抄进便签，比让浏览器记住更糟；且要挡的两类人（本机另一个 OS 账号、浏览器里其它标签页）都拿不到自动填充，而坐在你已解锁浏览器前的人早就有 `HttpOnly` 会话 cookie 了。**已知且接受的残余风险**：若开了 iCloud 钥匙串／Chrome 同步，这个口令会**离开本机**，而页脚文案写的是「数据与凭据都不离开这台机器」（该句指扫描数据与 **LLM API Key**，后者从不进浏览器存储）。`autoComplete` **没有**"可填充但不要同步"这种值，所以只能如实记录、不能靠代码消除 —— **必须写进 `docs/SECURITY-zh.md`（T30a）** | | | |
+| T6 | `target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 ✅ 2026-09-11，**181 个用例**（原估 ~80）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；**`requirement`／`overridable` 与 `allowed` 正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 |
+| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3** —— `auth_shape` + `secrets` + `params` 的契约被 **T9／T18／T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据，改错一处要动三处。<br>**⚠️ 派发前必须拆（2026-09-12 定，等用户放行）**：本行涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测、**T7b**=`routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试，串行，各自预算 ≤80 次工具调用。模板 3 不变，方案仍要先上报 |
+| T8 | 授权清单（加载／校验／热重载）+ `/api/targets/validate` | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 ✅ 2026-09-12，**130 个新用例**。四个测试文件各造一份的 `app`／`anonymous`／`client` 夹具与 `make_entry` 收进了 `conftest.py`（需要替身的文件**覆写 `anonymous`**，替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表 T2 就建好了但没有写入方）—— 只有一个 `record()`，DB + ndjson 双写共用同一时刻，**T12／T25 在它上面加事件，不要造第二个写入方**。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览。<br>**T6 交回的三件事**：① `zh-CN.json` 的 `targetGuard` 子树（8 个 `RejectionReason` 的中文 + `notes.loopback_rewrite`；**不进 `errors.py`**，它们是输入框下方的行内提示，请求本身没失败）—— 已做；② ~~`registrable_domain`~~ **已定不做**（2026-09-11 用户拍板）：正确实现要 Public Suffix List，而近似实现（取末两段）在 `example.co.uk` 上算出 `co.uk`，这个值要进逐字确认串 —— **一个错的注册域名比没有更糟**，会让用户确认一个不是他想授权的范围。**别再加回来**，要加就先把 PSL 那笔维护账付掉；③ **⏳ `TargetRejected` 在 HTTP 层怎么表达**（200 带 `ok:false` 还是 4xx 带码）—— 决定文案落在哪棵树 |
 | T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
 | T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
-| T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（2026-09-08 复核：**曾误判"逻辑简单，模板 1 够了"，错**。它删容器，而本机还跑着别人的项目 —— 判据是后果不对称，不是逻辑复杂度）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** ——M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 T3 实测），只按前者过滤会删掉它；而加上后者永不误伤真沙箱（`docker_client.py:113` 早退，Strix 产不出"有 run-type、无 run-id"的容器）。可直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR` / `ORPHAN_REQUIRED_LABEL` 两个常量，别再抄一遍字面串 |
-| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected` / `dns_changed` 两个审计事件**加在 T8 建好的 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`/`dns_timeout`/`dns_failed`）**目前没有测试**，本任务真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`/`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤** |
-| T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3**（原标 2，2026-09-08 上调 —— **本次校对最主要的错标**）：**T14 / T15 / T16 / T21 / T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界。本文件自己都写着"全项目最难的一块"，却是唯一没让它先上报方案的地方 |
+| T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（判据见上方「两条容易搞反的」）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** —— M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 实测），只按前者会删掉它；加上后者永不误伤真沙箱（`docker_client.py:113` 早退）。直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR`／`ORPHAN_REQUIRED_LABEL`，别再抄字面串 |
+| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected`／`dns_changed` 两个审计事件**加在 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`／`dns_timeout`／`dns_failed`）**目前没有测试**，真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`／`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤** |
+| T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3** —— **T14／T15／T16／T21／T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界 |
 | T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 |
-| T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自**（原和 T15b 合并标 2，2026-09-08 拆开）—— **要真凭据、真扫描，而派发规则第 3 条禁止把 Key 给子 agent。这类任务结构上不可派发** |
+| T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自** —— 要真凭据、真扫描，派发规则第 3 条禁止把 Key 给子 agent，**结构上不可派发** |
 | T15b | 重同步测试（吃 T15a 的夹具）| T15a | `tests/test_projector_resync.py` | 2 |
 | T16 | WS + SSE 路由、重连回放 | T14 | `routes/stream.py` | 2 |
 | T17 | 前端实时面板（子 agent 树 / 事件流 / 终端 / 截图 / CostMeter）| T5 T16 | `frontend/src/components/live/*` | **3**（读 T5 的约定，**不再开** frontend-design）|
 | T18 | 五步向导（授权步：三勾选 + 逐字输入，期望串显示在框**旁边**）| T5 T12 | `frontend/src/components/wizard/*` | **3** |
-| T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3**（原标 1，2026-09-08 上调 —— **原标违反 `agent-rules.md` §四"前端页面开发必须用模板 3"**。且"费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表）。读 T5／T18 的约定，**不再开** frontend-design |
+| T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3** —— "费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表。读 T5／T18 的约定，**不再开** frontend-design |
 | T20 | 发现 tab | T17 | `frontend/src/components/findings/*` | **3** |
-| T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3**（原标 2，2026-09-08 上调）—— 含**新建迁移 = 表结构设计**，`agent-rules.md` §四 明列在模板 3；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |
+| T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3** —— 含**新建迁移 = 表结构设计**（`agent-rules.md` §四 明列）；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |
 | T22 | `exporter_html.py` 打印 CSS + 报告 tab | T21 T5 | `services/exporter_html.py` `frontend/src/components/report/*` | **3** |
 | T23 | md/csv/sarif 直通导出 | T21 | `routes/reports.py` | 1 |
 | T24 | 专家 tab（复用同一 store，**不代理 Strix 自带 SPA**）| T17 | `frontend/src/components/expert/*` | **3** |
-| T25 | 审计 UI + CSV 导出 | T12 | `services/audit.py` `routes/audit.py` **`frontend/src/app/audit/*`** | **3**（原标 2 且**涉及文件列漏了前端路径**，2026-09-08 修 —— 任务名带"UI"而文件列只有后端，是本清单的内部矛盾。前端页面 → 模板 3） |
+| T25 | 审计 UI + CSV 导出 | T12 | `services/audit.py` `routes/audit.py` **`frontend/src/app/audit/*`** | **3**（前端页面 → 模板 3）|
 | T26 | 系统诊断页（T3/T10 每个失败模式都有中文修复指引）| T3 T10 | `frontend/src/app/diagnostics/*` | **3** |
 | T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
 | T28 | 续跑（重新索要 Key）+ 并发队列 + 留存清理任务 | T10 | `routes/scans.py` `services/scan_supervisor.py` | **2 —— ⚠️ 破坏性操作**（留存清理会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run、绝不递归删 `${DATA}` 下其他任何目录 |
-| T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1**（原标 2，2026-09-08 **下调** —— 全清单唯一一条下调）：断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
-| T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 |　**T8 追加的一条残余风险**：`POST /api/targets/validate` 拒绝 `https://user:pass@host` 时，会把那串口令在 200 正文的 `raw` 字段里**原样回显一次**（`normalized` 为 `null`，所以只有这一处；`routes/targets.py` 零日志调用，不进日志；走 TLS 回给刚打出它的那个人）。如实记录，不靠“整理干净再回显”消除 —— 那会把用户唯一的线索擦掉。**注意 `README.md` 已有一份临时版（2026-09-09 提前写，因为仓库是 public 而合规声明不该等到 M8）**，内含合规声明、"未完成不可用"状态表、安全姿态摘要。T30a 是**改写**它而不是新建，且要**保留合规声明原文**（见 §合规声明）。状态表到那时应当整段删掉 —— 一份要靠手工维护的进度表在产品做完之后就是纯负债 |
-| T30b | `make verify-e2e`（28 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2**（原与 T30a 合并标 1，2026-09-08 拆开并上调）—— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18（`grep 2>/dev/null \|\| echo 通过` 会把"文件不存在"报成"通过"）、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
+| T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
+| T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索 |
+| T30b | `make verify-e2e`（28 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
 
 **可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。
 其余全部串行 —— T2 与 T13 是两个瓶颈，几乎所有东西挂在它们后面。同时在跑的 subagent **≤3**。
