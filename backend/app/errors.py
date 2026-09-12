@@ -160,6 +160,28 @@ class BudgetExceedsCeilingError(ConsoleError):
     status = 409
 
 
+class AllowlistFileBrokenError(ConsoleError):
+    """`allowlist.yaml` 当前读不懂，所以**增量编辑**（加一条 / 删一条）没有基准。
+
+    T8 新增。409 而不是 500：这不是 bug，是一个操作者能自己解决的状态冲突 ——
+    去修那个文件，或者用"整份替换"（`PUT /api/allowlist`）覆盖掉它。
+
+    为什么只挡增量编辑、不挡整份替换：增量编辑的语义是"在现有配置上改一处"，而现在
+    没有可读的现有配置 —— 硬做的话会拿一份**空配置**当基准，于是"加一条"实际上等于
+    "删掉文件里其它所有条目"，一次静默的数据丢失。整份替换本来就要覆盖全部内容，
+    它正是这个状态的恢复手段。
+
+    `params` 里带 `file_error`（`AllowlistFileErrorCode` 的值）让前端能直接指出是
+    语法错还是字段错。但文案表里**刻意没有**把它列进 `params` 数组：那是一个机器码，
+    `ErrorNotice` 的键值行会把 `allowlist_syntax_error` 原样显示出来。要把它翻成人话
+    是清单编辑界面的事（`targetGuard` 之外另开一棵 `allowlistFile.*`），那时它会有
+    行号一起显示，而不是孤零零一个码。
+    """
+
+    code = "allowlist_file_broken"
+    status = 409
+
+
 # =============================================================================
 # 凭据（T7：key_vault / routes/keys）—— PLAN.md §N1
 # =============================================================================
@@ -283,6 +305,7 @@ ALL_ERRORS: tuple[type[ConsoleError], ...] = (
     SplitHorizonError,
     MissingTypedConfirmationError,
     BudgetExceedsCeilingError,
+    AllowlistFileBrokenError,
     KeyRequiredError,
     KeyVerifyFailedError,
     UnexpectedSecretKeyError,

@@ -58,9 +58,8 @@ from app.services.auth import (
     write_auth_file,
 )
 from app.settings import Settings
+from tests.conftest import PASSWORD, USERNAME
 
-USERNAME = "operator"
-PASSWORD = "correct-horse-battery-staple"
 WRONG_PASSWORD = "wrong-horse-battery-staple"
 
 # 一个 UI 上的常见事故：用户把口令粘进了用户名框。下面有一条测试专门确认它不会进日志。
@@ -90,14 +89,6 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
-
-
-@pytest.fixture
-def auth_file(tmp_path: Path) -> Path:
-    """一个真的 `auth.json`，经 `write_auth_file` 落盘（所以权限位也是真的）。"""
-    path = tmp_path / "auth.json"
-    write_auth_file(path, AuthRecord.create(USERNAME, PASSWORD).to_json_text())
-    return path
 
 
 @pytest.fixture

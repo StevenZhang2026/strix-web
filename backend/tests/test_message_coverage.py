@@ -47,6 +47,17 @@ from typing import Any
 import pytest
 
 from app.errors import ALL_ERRORS, SCAN_FAILURE_CODES, ConsoleError
+from app.services.dns_resolver import RESOLUTION_ERROR_CODES
+from app.services.target_guard import (
+    GuardRequirement,
+    OperatorOptIn,
+    OptInFlag,
+    RejectionReason,
+    TargetCategory,
+    evaluate_target,
+    no_allowlist,
+    normalize_target,
+)
 
 _MESSAGES_ENV = "CONSOLE_MESSAGES_JSON"
 _REL_PATH = Path("frontend") / "messages" / "zh-CN.json"
@@ -215,7 +226,92 @@ def test_no_orphan_param_labels(messages: dict[str, Any]) -> None:
 
 
 # =============================================================================
-# 三、预算措辞
+# 三、`targetGuard.*` —— 第三棵机器码树（T8）
+#
+# 它不参与上面那组按 `tree` 参数化的测试：那些条目是 `{title, detail, action}` 三段的
+# 错误卡片，而这里的每一条是**一个字符串** —— 渲染在输入框下面的一行提示里，或者一个
+# 类别徽章上。硬套三段形状会逼出两个空字段，而空字段迟早会被人填上一句凑数的话。
+#
+# 码的权威源是 `services/target_guard.py` 与 `services/dns_resolver.py` 的枚举，
+# 不是 `errors.py`：这些值出现在 `POST /api/targets/validate` 的 **200 正文**里，
+# 一个也不是 HTTP 错误（见 `frontend/messages/README.md` 那一节）。
+# =============================================================================
+_GUARD_TREE = "targetGuard"
+
+# `(子树名, 后端真实取值域)`。加一个枚举成员就必须在这里露出来 —— 这张表本身就是
+# "别忘了写文案"的提醒，而不是一份可以偷偷落后的副本。
+_GUARD_SUBTREES: tuple[tuple[str, frozenset[str]], ...] = (
+    ("reasons", frozenset(item.value for item in RejectionReason)),
+    ("categories", frozenset(item.value for item in TargetCategory)),
+    ("requirements", frozenset(item.value for item in GuardRequirement)),
+    ("optIn", frozenset(item.value for item in OptInFlag)),
+    ("resolution", RESOLUTION_ERROR_CODES),
+)
+
+
+def _guard_subtree(messages: dict[str, Any], name: str) -> dict[str, Any]:
+    subtree = messages[_GUARD_TREE][name]
+    assert isinstance(subtree, dict), f"{_GUARD_TREE}.{name} 必须是对象"
+    return subtree
+
+
+@pytest.mark.parametrize(("name", "codes"), _GUARD_SUBTREES, ids=[n for n, _ in _GUARD_SUBTREES])
+def test_every_guard_code_has_copy(
+    messages: dict[str, Any], name: str, codes: frozenset[str]
+) -> None:
+    missing = codes - set(_guard_subtree(messages, name).keys())
+    assert not missing, (
+        f"这些码没有中文文案，去 zh-CN.json 的 {_GUARD_TREE}.{name} 里加：{sorted(missing)}"
+    )
+
+
+@pytest.mark.parametrize(("name", "codes"), _GUARD_SUBTREES, ids=[n for n, _ in _GUARD_SUBTREES])
+def test_no_orphan_guard_copy(messages: dict[str, Any], name: str, codes: frozenset[str]) -> None:
+    orphans = set(_guard_subtree(messages, name).keys()) - codes
+    assert not orphans, f"{_GUARD_TREE}.{name} 里这些码后端已经不存在了：{sorted(orphans)}"
+
+
+@pytest.mark.parametrize("name", [name for name, _ in _GUARD_SUBTREES] + ["notes"])
+def test_guard_copy_entries_are_plain_sentences(messages: dict[str, Any], name: str) -> None:
+    """每条都是非空字符串。**不许是对象** —— 那意味着有人在往这棵树上套错误卡片的形状。"""
+    for code, value in _guard_subtree(messages, name).items():
+        assert isinstance(value, str) and value.strip(), f"{_GUARD_TREE}.{name}.{code} 缺失或为空"
+
+
+def test_loopback_note_names_the_rewrite_target(messages: dict[str, Any]) -> None:
+    """环回目标的那句提示**必须点名** `host.docker.internal`。
+
+    这是验收 3 的一条：Strix 会把 `127.0.0.1` 改写成 `host.docker.internal`
+    （`scan_setup.py:51`），也就是沙箱访问的是**宿主机**上的服务。不说清这件事，
+    用户会以为自己在测沙箱容器内部，然后对"什么都没测到"完全无法归因。
+
+    码不从 `target_guard` 的私有常量 import，而是**跑一遍真实判定**拿出来的：
+    直接 import `_LOOPBACK_NOTE_CODE` 只能证明"文案表和那个常量一致"，证明不了
+    "这条判定真的会产出这个码"。中间那个 `assert note_code is not None` 就是
+    pitfalls 条 36 要求的反面对照 —— 少了它，护栏哪天不再产出 note_code，
+    下面的断言会因为"没有要检查的东西"而静默通过。
+    """
+    target = normalize_target("http://127.0.0.1:8080")
+    verdict = evaluate_target(
+        target,
+        ("127.0.0.1",),
+        allowlist=no_allowlist(),
+        opt_in=OperatorOptIn(loopback=True),
+    )
+    note_code = verdict.note_code
+    assert note_code is not None, (
+        "环回目标没有产出 note_code —— 要检查的事根本没发生，这条断言等于空转。"
+        "先去看 target_guard.evaluate_target 是不是改了。"
+    )
+    note = _guard_subtree(messages, "notes")[note_code]
+    assert "host.docker.internal" in note, (
+        f"{_GUARD_TREE}.notes.{note_code} 没有点名 host.docker.internal，"
+        "用户会以为测的是沙箱容器内部的服务。"
+    )
+
+
+# =============================================================================
+# 四、预算措辞
 #
 # 只断这两处具体的 key，不做全文扫描（理由见模块 docstring）。
 # =============================================================================

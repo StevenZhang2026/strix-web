@@ -6,9 +6,10 @@
 
 ## 键的约定
 
-1. key 一律 **lowerCamelCase**，**唯一例外**是 `errors.*` 与 `scanFailures.*` 的第二段 ——
-   它就是后端 `app/errors.py` 里的机器码本身（snake_case）。任何改写都会引入失配，
-   而失配的表现是"用户看到一个空白的错误提示"，不是编译错误。
+1. key 一律 **lowerCamelCase**，例外是**机器码本身**（snake_case）—— 它出现在
+   `errors.*` / `scanFailures.*` 的第二段，以及 `targetGuard.*` 的**第三段**
+   （`targetGuard.reasons.invalid_port`、`targetGuard.resolution.dns_timeout` …）。
+   任何改写都会引入失配，而失配的表现是"用户看到一个空白的提示"，不是编译错误。
 2. 嵌套**最多三段** `<域>.<组件>.<元素>`。
 3. **一个 key = 一句完整的话。组件里禁止拼接字符串。** 中文语序和拉丁不同，拼接必然
    在某个分支里读起来是病句。需要"标签 + 值"时渲染成**两个节点**（键值行），
@@ -33,16 +34,25 @@
    （`resolved_ip` 那组「解析到 / 声明时解析到 / 现在解析到」是**边界情形**：值是
    一个 IP，标签读成关系词尚可，暂不动；再出第三例就该统一成名词。）
 
-## 为什么 `errors.*` 与 `scanFailures.*` 是两棵树
+## 为什么机器码分成三棵树
 
-镜像 `backend/app/errors.py` 的分法，**刻意不合并**：
+镜像后端的分法，**刻意不合并**：
 
 - `errors.*` ← `ConsoleError` 的子类。**HTTP 错误**，请求本身失败了，有 HTTP status。
 - `scanFailures.*` ← `SCAN_FAILURE_CODES`。**扫描归因**，请求成功了、那次扫描失败了，
   只出现在 `scans.error_code` 里。
+- `targetGuard.*` ← `app/services/target_guard.py` 与 `dns_resolver.py` 的枚举。
+  **目标预览的逐条结论**，出现在 `POST /api/targets/validate` 的 200 正文里，
+  一个也不是 HTTP 错误。
 
 合成一棵的后果很具体：前端某天会想给 `llm_tls_intercepted` 找一个 HTTP status，
-而没有任何接口会用它做响应码 —— 假字段最终一定会被人当真用。
+而没有任何接口会用它做响应码 —— 假字段最终一定会被人当真用。`targetGuard.*` 同理，
+`invalid_port` 若躺在 `errors.*` 里，就会有人拿它去 `raise`。
+
+`targetGuard.*` 的条目是**纯字符串**，不是 `{title, detail, action}` 三段 ——
+它们渲染在输入框下面的一行里（或一个类别徽章上），不是一张错误卡片。
+所以它不参与 `test_copy_entries_are_complete` 那组按 `tree` 参数化的测试，
+有自己一组形状断言。
 
 ## 新增机器码时
 

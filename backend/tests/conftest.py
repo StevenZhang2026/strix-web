@@ -14,7 +14,19 @@ from pathlib import Path
 import pytest
 
 from app.db import Database
+from app.services.auth import AuthRecord, write_auth_file
 from app.settings import Settings
+
+# ---- 单账号登录的测试凭据 ----------------------------------------------------
+# 三个文件要用（test_auth / test_system_status / test_allowlist）。第三次出现时按
+# CLAUDE.md §编码哲学 3 提取到这里 —— test_system_status.py 的 app 夹具上那句
+# 「等第三次出现再提取」就是指这一刻。
+#
+# **只提取 `auth_file` 这一个夹具。** 三处的 `app` / `client` 夹具已经真的分叉了
+# （一处要挂两条探针路由、一处要在 lifespan 之后替换 docker 传输层、一处要原样的
+# 应用），合并它们只会造出一个带三个开关的夹具 —— 那比重复三遍更难读。
+USERNAME = "operator"
+PASSWORD = "correct-horse-battery-staple"
 
 # ---- 一行合法的 authorizations / scans 需要填的列 ----------------------------
 # 抽出来是因为 NOT NULL 的列有十来个，每个测试各写一遍会让"这个测试到底在测什么"
@@ -37,6 +49,19 @@ def settings(tmp_path: Path) -> Settings:
     而且 `Settings` 是 frozen 的，注入构造参数是它设计好的入口。
     """
     return Settings(console_data_dir=tmp_path)
+
+
+@pytest.fixture
+def auth_file(tmp_path: Path) -> Path:
+    """一个真的 `auth.json`，经 `write_auth_file` 落盘（所以权限位也是真的）。
+
+    **必须在 `create_app` 之前建好**：lifespan 会读它，读不到就拒绝启动 ——
+    那条语义本身也有测试（`test_auth.py::test_missing_auth_file_blocks_startup`），
+    所以这里刻意不加"文件已存在就跳过"之类的宽容。
+    """
+    path = tmp_path / "auth.json"
+    write_auth_file(path, AuthRecord.create(USERNAME, PASSWORD).to_json_text())
+    return path
 
 
 @pytest.fixture

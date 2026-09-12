@@ -47,7 +47,6 @@ from app.models import (
     TelemetrySection,
 )
 from app.routes.auth import EXEMPT_PATHS, SESSION_COOKIE_NAME
-from app.services.auth import AuthRecord, write_auth_file
 from app.services.docker_probe import DockerProbe
 from app.services.system_status import (
     ALL_BLOCKER_CODES,
@@ -67,6 +66,7 @@ from app.services.system_status import (
     parse_strix_telemetry,
 )
 from app.settings import Settings
+from tests.conftest import PASSWORD, USERNAME
 from tests.test_docker_probe import (
     NETWORK,
     SANDBOX_IMAGE,
@@ -77,8 +77,6 @@ from tests.test_docker_probe import (
     sandbox_item,
 )
 
-USERNAME = "operator"
-PASSWORD = "correct-horse-battery-staple"
 STATUS_PATH = "/api/system/status"
 
 
@@ -744,19 +742,12 @@ def test_response_does_not_dump_the_environment(tmp_path: Path) -> None:
 # 六、路由 —— 鉴权与形状
 # =============================================================================
 @pytest.fixture
-def auth_file(tmp_path: Path) -> Path:
-    path = tmp_path / "auth.json"
-    write_auth_file(path, AuthRecord.create(USERNAME, PASSWORD).to_json_text())
-    return path
-
-
-@pytest.fixture
 def app(tmp_path: Path, auth_file: Path, restore_logging: None) -> FastAPI:
-    """真实应用（不是精简版）。夹具在 test_auth.py 里也有一份 —— 这是第二次出现。
+    """真实应用（不是精简版）。
 
-    刻意不提取到 conftest：两处的 app 夹具需求已经开始分叉（那边要挂两条探针路由，
-    这边要在 lifespan 之后替换 `app.state`）。等第三次出现再提取
-    （CLAUDE.md §编码哲学 3：不要过早抽象）。
+    T8 里这个夹具第三次出现，于是 `auth_file` 与那两个凭据常量按 CLAUDE.md
+    §编码哲学 3 搬进了 `conftest.py`。**`app` 自己没有合并**：三处的需求真的分叉了 ——
+    那边要挂两条探针路由，这边要在 lifespan 之后替换 `app.state`，T8 那边要原样的应用。
     """
     return create_app(ready_settings(tmp_path))
 

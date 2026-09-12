@@ -59,9 +59,13 @@ from app.errors import (
     NotFoundError,
 )
 from app.logging_setup import Redactor, configure_logging, trace_id_var
+from app.routes import allowlist as allowlist_routes
 from app.routes import auth as auth_routes
 from app.routes import health as health_routes
 from app.routes import system as system_routes
+from app.routes import targets as targets_routes
+from app.services import dns_resolver
+from app.services.allowlist import AllowlistStore
 from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
 from app.settings import Settings, assert_no_credential_env, load_settings
@@ -328,6 +332,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 内的常量（容器 id 不会变），而单测要替换它时改一个 state 字段就够了。
         app.state.docker_transport = UnixSocketTransport()
         app.state.self_container_ref = read_self_container_ref()
+        # T8。授权清单是**文件**，不是表 —— 操作者可以直接编辑它，所以 store 每次读取都
+        # 顺带做一次热重载检查。这里主动加载一次，只为了让"清单是坏的"这件事出现在**启动
+        # 日志**里而不是第一个请求的响应里；加载失败不影响启动（没有清单是合法状态，
+        # 坏清单则失败关闭，两者都由 `allowlist.decide` 决定，见那个模块的 docstring）。
+        allowlist_store = AllowlistStore(resolved.allowlist_path)
+        app.state.allowlist = allowlist_store
+        snapshot = allowlist_store.current()
+        if snapshot.error is not None:
+            logger.warning(
+                "授权清单当前不可用，按失败关闭处理",
+                extra={"file_error": snapshot.error.code.value, "line": snapshot.error.line},
+            )
+        else:
+            logger.info(
+                "授权清单已加载",
+                extra={
+                    "file_present": snapshot.file_present,
+                    "entries": 0 if snapshot.config is None else len(snapshot.config.entries),
+                },
+            )
+        # T8。`/api/targets/validate` 的 DNS 解析器。挂在 state 上而不是直接 import ——
+        # 单测禁止碰真实网络（CLAUDE.md §测试），这是那条规则的注入点。
+        app.state.dns_resolver = dns_resolver.resolve
 
         logger.info("启动完成")
         try:
@@ -363,6 +390,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 会让 docker 抖一下就重启 api，而重启 api 会清空内存 KeyVault。
     app.include_router(health_routes.router)
     app.include_router(system_routes.router)
+    # T8。两者都在全局鉴权之后（**没有**往 EXEMPT_PATHS 加任何路径）：
+    # `/api/targets/validate` 会对任意主机名发 DNS 查询，而这个进程在 `strix_sandbox`
+    # 网络里能解析内网名字；`/api/allowlist` 写的就是"谁批准扫什么"。
+    app.include_router(allowlist_routes.router)
+    app.include_router(targets_routes.router)
 
     return app
 

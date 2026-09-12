@@ -218,6 +218,11 @@
       "action": "把上限调低。确实需要更高，就改本机配置里的全局上限并重启后端。",
       "params": ["requested_usd", "ceiling_usd"]
     },
+    "allowlist_file_broken": {
+      "title": "授权清单文件读不出来",
+      "detail": "磁盘上的授权清单当前解析不了，所以「加一条」「删一条」没有可以修改的基准。为了不把文件里其它条目弄丢，这两种改动被拒绝了。",
+      "action": "去修那个文件，或者用整份替换覆盖它。修好之前扫描按最严的方式处理：没列进清单的目标一律不放行。"
+    },
     "key_required": {
       "title": "需要重新提供凭据",
       "detail": "凭据只存在于内存中，后端一重启就没了。这是「绝不落盘」的直接代价，不是故障。",
@@ -336,6 +341,46 @@
       "title": "结论不完整",
       "detail": "费用或轮次先用完了，这次扫描是被提前结束的，不是跑完的。已经找到的问题都还在，但没测到的部分无从判断 —— 这次结果不能当作「目标没有问题」。",
       "action": "提高费用上限后继续这次扫描，接着上次的进度往下测。"
+    }
+  },
+
+  "targetGuard": {
+    "reasons": {
+      "empty_target": "这一行是空的。",
+      "forbidden_characters": "含有 shell 特殊字符，不能当作目标。",
+      "unsupported_scheme": "只支持 http:// 与 https:// 开头的地址。",
+      "credentials_in_url": "地址里带了用户名或口令，去掉 @ 前面那一段再填。",
+      "git_repository_path": "这看起来是代码仓库地址，本控制台只测正在运行的网站。",
+      "invalid_host": "主机名不合法，检查有没有多打字符。",
+      "invalid_port": "端口号不合法，它必须是 1 到 65535 之间的整数。",
+      "query_or_fragment_not_allowed": "去掉 ? 和 # 后面的内容，只填到路径为止。"
+    },
+    "categories": {
+      "metadata": "云元数据地址",
+      "loopback": "本机地址",
+      "private": "内网地址",
+      "carrier_reserved": "运营商保留地址",
+      "public": "公网地址",
+      "mixed": "同时指向公网和内网"
+    },
+    "requirements": {
+      "none": "公网目标，当前是提示模式，可以直接扫。",
+      "operator_opt_in": "需要你勾选下面对应的确认项。",
+      "allowlist_entry": "需要它出现在授权清单里。",
+      "allowlist_file_only": "只能由手工编辑授权清单文件放行，界面上不提供这个开关。",
+      "impossible": "这个目标没有任何放行途径。"
+    },
+    "optIn": {
+      "loopback": "我要测这台电脑上的服务",
+      "private": "我确认对这个内网目标有授权"
+    },
+    "resolution": {
+      "dns_not_found": "这个名字解析不出来，检查有没有打错。",
+      "dns_timeout": "解析超时了，稍后再试一次。",
+      "dns_failed": "解析器本身出错了，检查本机的 DNS 设置。"
+    },
+    "notes": {
+      "loopback_rewrite": "沙箱会把这个地址改写成 host.docker.internal，也就是说测的是你这台电脑上的服务，不是沙箱容器内部的服务。"
     }
   },
 

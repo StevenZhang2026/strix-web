@@ -161,6 +161,16 @@ class Settings(BaseSettings):
         return self.console_data_dir / "config"
 
     @property
+    def allowlist_path(self) -> Path:
+        """目标白名单（T8）。**文件不存在是合法状态** —— 首次启动就是这样。
+
+        为什么在 `config/` 而不是数据目录根：它是操作者手写、也可以经
+        `PUT /api/allowlist` 改的**配置**，与 `console.sqlite`（运行期数据）分开放，
+        备份和 review 的对象因此是一个目录而不是一堆散文件。
+        """
+        return self.config_dir / "allowlist.yaml"
+
+    @property
     def auth_path(self) -> Path:
         """单账号登录的口令散列文件（0600），由 `./setup.sh` 的 C17f 创建。
 

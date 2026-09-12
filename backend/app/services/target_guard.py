@@ -12,7 +12,7 @@
    要么被 mock 成"测 mock 而不测规则"。
 
 因此本模块**不抛 `ConsoleError`**，也不知道 HTTP 状态码。它只输出判定结果与
-（规范化阶段的）拒绝原因，由路由层（T8 `/api/targets/check`、T12 `POST /api/scans`）
+（规范化阶段的）拒绝原因，由路由层（T8 `/api/targets/validate`、T12 `POST /api/scans`）
 决定映射成 200 的预览、还是 403/409/422。
 
 # 三条"看着像洁癖、其实各有出处"的规则
@@ -119,7 +119,7 @@ class RejectionReason(StrEnum):
     向导第 1 步输入框下方的即时提示 —— 那不是错误页，用户还在打字。给它们各编一个
     HTTP 码会得到八个永远不会被当成 HTTP 响应的"错误"。
 
-    路由层怎么用它们：`/api/targets/check`（T8）在 200 响应体里原样返回；
+    路由层怎么用它们：`/api/targets/validate`（T8）在 200 响应体里原样返回；
     `POST /api/scans`（T12）在服务端重校验时映射成 `InvalidRequestError(field="targets")`
     —— 因为到了那一步，一个形状不合法的目标确实只是"请求体不合法"。
     """
