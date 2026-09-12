@@ -1,5 +1,29 @@
 # Strix Web 控制台 — 实施计划
 
+## 交接（2026-09-12）
+
+> **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
+
+**代码状态**：工作区干净；`main` 比 `origin/main`（`887cd80`）**领先 4 个提交，从未 push**
+（这里刻意不写当前提交的 SHA —— 写了就会被下一次 amend 打脸，`git log -1` 一秒就能看）。
+闸门最后一次全绿是在 `bf92e45`：
+`make test` 580 passed / 0 skipped、`make lint-api` 干净；之后只改过文档，未重跑。
+已完成 T0–T6、T8；**下一个要做的是 T7**。
+
+**待办（按优先级）**：
+1. **T7 拆分待放行** —— T7 的涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的形状
+   （`agent-rules.md` §九.5）。我的提案：**T7a** = `key_vault.py` 内存实现 + 单测；
+   **T7b** = `routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试。串行，各自预算 ≤80 次工具调用。
+   T7 是模板 3，**方案还要先上报评审**（§八.2）。等用户放行。
+2. **`CLAUDE.md` 能不能精简** —— 用户 2026-09-12 问的，我还没查（被成本核算打断）。
+   查法见 memory `keep-claude-md-lean`：按本文件 §规则分流 的三层归属找该下沉的条目。
+3. `agent-rules.md` 那笔文档改动要不要单独提交。
+
+**2026-09-12 的成本核算结论**（数字在未跟踪的 `pitfalls/local-env.md`，一个都不许搬进被跟踪的文件）：
+`agent-rules.md` §九 原先写的「auto-compact 是最贵的单项」**实测是错的**（只占 4%），已重写。
+真正的大头是 `调用次数 × 平均上下文`，以及 **prompt cache 5 分钟过期后整个上下文按 12.5 倍单价重写**
+—— 所以**长停顿前先更新本节再 `/clear`**，这一节就是那条纪律的落点。
+
 ## Context
 
 要做一个渗透测试平台，底层复用开源 AI 渗透测试 agent **Strix**（`strix-agent` 1.5.3, Apache-2.0）。
@@ -891,12 +915,12 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T5b | **单账号登录 —— 前端**：登录页 + 未登录重定向 + 401 统一拦截（复用 `key_required` 那套交互，因为会话与 KeyVault 同生共死）+ 登出。文案进 `zh-CN.json` | T4b T5 | `frontend/src/app/login/*` `frontend/src/lib/api.ts` `frontend/messages/zh-CN.json` | **3**（`agent-rules.md` §四：前端页面必须模板 3。读 T5 的约定，**不再开** frontend-design）。prompt 必须写死：口令框 `type=password` + **标准 `name` + `autoComplete="current-password"`**（2026-09-10 拍板，**推翻本行原先写的"随机 `name`"**，理由见下）；**会话 id 由 cookie 承载，前端一行都不许碰它** —— 不读、不存 `sessionStorage`、不放 URL（与 `vault_handle` 刻意相反，理由见 §单账号登录 方案表最后一行）|
 | | **↑ 为什么登录口令框与 API Key 输入框的规则相反**（别把这两条并成一条）：「随机 `name` 破自动填充」的出处是**泄漏矩阵第 11 行**，讲的是 `POST /api/keys` 的 **API Key 输入框** —— 对别人家的 provider 密钥，被浏览器存下来是**净损失**，那一条**不变**。控制台**登录口令**是相反的情形：`setup.sh` 强制 ≥12 位（`MIN_PASSWORD_LENGTH = 12`），不让密码管理器帮忙，用户就会挑一个记得住的弱口令、或把它抄进便签 —— 那比让浏览器记住更糟。且在本项目的威胁模型下自动填充不引入攻击面：要挡的是"本机另一个 OS 账号"（macOS 浏览器配置 per-OS-user，另一个账号的浏览器里没有你存的口令）和"浏览器里的其它标签页"（拿不到自动填充）；而坐在你已解锁浏览器前的人早就带着 `HttpOnly` 会话 cookie 了，口令对他没有增量价值。**已知且接受的残余风险**：浏览器若开了 iCloud 钥匙串 / Chrome 同步，这个口令会**离开本机**，而页脚文案写的是「数据与凭据都不离开这台机器」—— 该句指的是扫描数据与 **LLM API Key**（后者从不进浏览器存储），登录口令是例外。**必须写进 `docs/SECURITY-zh.md`（T30a）**，不得让人以为字面上零外发。同时注意 `autoComplete` 上**没有**"可填充但不要同步"这种值，所以这条风险只能如实记录，不能靠代码消除 | | | |
 | T6 | ✅ 2026-09-11 落地，**181 个用例**（原估 ~80）。`target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；`requirement`/`overridable` 与 `allowed` **正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 | T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 |
-| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处 |
+| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3**（原标 2，2026-09-08 上调）—— `auth_shape` + `secrets` + `params` 的契约被 **T9 / T18 / T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据。改错一处要动三处。<br>**⚠️ 派发前必须拆（2026-09-12 定，等用户放行）**：本行的涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测、**T7b**=`routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试，串行，各自预算 ≤80 次工具调用。模板 3 不变 —— 方案仍要先上报 |
 | T8 | ✅ 2026-09-12 落地，**130 个新用例**（全套 580 passed / 0 skipped）。顺手把四个测试文件各造一份的 `app`/`anonymous`/`client` 夹具与 `make_entry` 收进 `conftest.py`（需要替身的文件**覆写 `anonymous`**，因为替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表在 T2 就建好了但一个写入方都没有）—— 只有一个 `record()`，DB + ndjson 双写共用同一个时刻；T12/T25 在它上面加事件，不要再造第二个。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览，`target.rejected` 属于 T12 的发起路径。白名单加载/校验/热重载。**另接 T6 交回的三件事**：① `zh-CN.json` 新建 `targetGuard` 子树，装 8 个 `RejectionReason` 的中文与 `notes.loopback_rewrite`（T6 只出码，不出文案；这些不是 HTTP 错误，不进 `errors.py`，因为它们是输入框下方的行内提示，请求本身没失败）；② ~~`registrable_domain` 怎么算~~ —— **已定：整条去掉，不做**（2026-09-11 用户拍板）。T6 没有产出它，正确实现要 Public Suffix List；无依赖的近似实现（取最后两段）在 `example.co.uk` 上会算出 `co.uk`，而这个值要进逐字确认串 —— **一个错的注册域名比没有注册域名更糟**，它会让用户确认一个不是他想授权的范围。为它引依赖或内置一份需手工更新的PSL 数据文件，都是为一个纯展示字段付长期维护成本。`errors.not_in_allowlist` 的 `params` 与 `paramLabels` 里对应的两条已删（`test_no_orphan_param_labels` 会让"只删一半"变成测试失败）。那条错误只展示 `target`，文案本来也没引用注册域名。**别再加回来** —— 要加就得先把 PSL 这笔账付掉；③ `TargetRejected` 在 HTTP 层怎么表达（200 带 `ok:false` 还是 4xx 带码）—— 这决定 ① 的文案落在哪棵树 | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 |
 | T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
 | T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
 | T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（2026-09-08 复核：**曾误判"逻辑简单，模板 1 够了"，错**。它删容器，而本机还跑着别人的项目 —— 判据是后果不对称，不是逻辑复杂度）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** ——M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 T3 实测），只按前者过滤会删掉它；而加上后者永不误伤真沙箱（`docker_client.py:113` 早退，Strix 产不出"有 run-type、无 run-id"的容器）。可直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR` / `ORPHAN_REQUIRED_LABEL` 两个常量，别再抄一遍字面串 |
-| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** |
+| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected` / `dns_changed` 两个审计事件**加在 T8 建好的 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`/`dns_timeout`/`dns_failed`）**目前没有测试**，本任务真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`/`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤** |
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3**（原标 2，2026-09-08 上调 —— **本次校对最主要的错标**）：**T14 / T15 / T16 / T21 / T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界。本文件自己都写着"全项目最难的一块"，却是唯一没让它先上报方案的地方 |
 | T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 |
 | T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自**（原和 T15b 合并标 2，2026-09-08 拆开）—— **要真凭据、真扫描，而派发规则第 3 条禁止把 Key 给子 agent。这类任务结构上不可派发** |
