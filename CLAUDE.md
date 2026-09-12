@@ -49,7 +49,7 @@
 
 **已完成：T0（构建/编排骨架）· T1（M0 契约实测，六条断言全过）· T2（后端骨架）· T3（`/api/system/status` 依赖自检）· T4（TLS 全套）· T4b（单账号登录后端）· T5（前端骨架 + 中文文案表）· T5b（登录前端 + 首屏介绍）· T6（目标护栏纯函数）。** git 仓库，remote `StevenZhang2026/strix-web`（**public**）。
 逐条验收记录在 `PLAN.md` 的派发清单对应行与 §里程碑，归因在 `pitfalls`。
-**现在可以跑**：`make lint`（= `lint-api` ruff + **`lint-web` eslint/tsc，跑在宿主 node 上**）、`make test`（**450 passed，0 skipped —— skip 数不为 0 就说明有守卫没在跑**）、`docker compose -p strix-console up -d api web nginx` → `https://127.0.0.1/`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
+**现在可以跑**：`make lint`（= `lint-api` ruff + **`lint-web` eslint/tsc，跑在宿主 node 上**）、`make test`（**580 passed，0 skipped —— skip 数不为 0 就说明有守卫没在跑**）、`docker compose -p strix-console up -d api web nginx` → `https://127.0.0.1/`（证书在 `${STRIX_HOST_DATA_DIR}/tls/cert.pem`）。
 `lint-web` 依赖 `frontend/node_modules`，装它必须显式 `npm ci --registry=https://registry.npmjs.org/`（宿主 `~/.npmrc` 的镜像源被 TLS 解密，**不许动那个文件**）。
 **T4b 之后 `api` 起不来除非 `${DATA}/auth.json` 存在** —— 缺它就拒绝启动（否则删掉该文件即绕过登录）。跑一次 `./setup.sh` 的 C17f 建账号。
 `make verify-e2e` / `make reap` 仍是计划中的接口（T30）。

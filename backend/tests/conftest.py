@@ -12,19 +12,17 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.db import Database
+from app.main import create_app
+from app.routes.auth import SESSION_COOKIE_NAME
+from app.services.allowlist import AllowlistEntry
 from app.services.auth import AuthRecord, write_auth_file
 from app.settings import Settings
 
 # ---- 单账号登录的测试凭据 ----------------------------------------------------
-# 三个文件要用（test_auth / test_system_status / test_allowlist）。第三次出现时按
-# CLAUDE.md §编码哲学 3 提取到这里 —— test_system_status.py 的 app 夹具上那句
-# 「等第三次出现再提取」就是指这一刻。
-#
-# **只提取 `auth_file` 这一个夹具。** 三处的 `app` / `client` 夹具已经真的分叉了
-# （一处要挂两条探针路由、一处要在 lifespan 之后替换 docker 传输层、一处要原样的
-# 应用），合并它们只会造出一个带三个开关的夹具 —— 那比重复三遍更难读。
 USERNAME = "operator"
 PASSWORD = "correct-horse-battery-staple"
 
@@ -62,6 +60,48 @@ def auth_file(tmp_path: Path) -> Path:
     path = tmp_path / "auth.json"
     write_auth_file(path, AuthRecord.create(USERNAME, PASSWORD).to_json_text())
     return path
+
+
+@pytest.fixture
+def app(settings: Settings, auth_file: Path, restore_logging: None) -> FastAPI:
+    """真实应用，什么都不替换。
+
+    两个依赖的存在本身就是不变式：`auth_file` 必须先落盘（lifespan 读不到它就拒绝
+    启动），`restore_logging` 必须在场（lifespan 会改 root logger 这个进程级单例）。
+    需要替身的文件**覆写 `anonymous`**，在 lifespan 跑完之后往 `app.state` 里塞 ——
+    在这里塞会被 lifespan 原地盖掉。
+    """
+    return create_app(settings)
+
+
+@pytest.fixture
+def anonymous(app: FastAPI) -> Iterator[TestClient]:
+    """未登录的客户端。`with` 已经进过了，所以 lifespan 跑完了。
+
+    `base_url` 必须是 https：会话 cookie 带 `Secure`，http 下 TestClient 不回传它。
+    """
+    with TestClient(app, base_url="https://testserver") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def client(anonymous: TestClient) -> TestClient:
+    """已登录的客户端。与 `anonymous` 是同一个对象，只是多了一个会话 cookie。"""
+    anonymous.post("/api/auth/login", json={"username": USERNAME, "password": PASSWORD})
+    assert anonymous.cookies.get(SESSION_COOKIE_NAME), "登录没成功，后面的断言会全是 401"
+    return anonymous
+
+
+def make_entry(label: str = "预生产", **overrides: object) -> AllowlistEntry:
+    """一条合法的授权清单条目。`hosts` 默认只有 `example.com`。"""
+    fields: dict[str, object] = {
+        "label": label,
+        "owner": "安全组",
+        "authorization_ref": "TICKET-1",
+        "hosts": ("example.com",),
+    }
+    fields.update(overrides)
+    return AllowlistEntry.model_validate(fields)
 
 
 @pytest.fixture

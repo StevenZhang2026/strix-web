@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -37,7 +36,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.errors import ALL_ERRORS
-from app.main import create_app
 from app.models import (
     DataDirSection,
     DockerSection,
@@ -46,7 +44,7 @@ from app.models import (
     SystemStatusResponse,
     TelemetrySection,
 )
-from app.routes.auth import EXEMPT_PATHS, SESSION_COOKIE_NAME
+from app.routes.auth import EXEMPT_PATHS
 from app.services.docker_probe import DockerProbe
 from app.services.system_status import (
     ALL_BLOCKER_CODES,
@@ -66,7 +64,6 @@ from app.services.system_status import (
     parse_strix_telemetry,
 )
 from app.settings import Settings
-from tests.conftest import PASSWORD, USERNAME
 from tests.test_docker_probe import (
     NETWORK,
     SANDBOX_IMAGE,
@@ -742,36 +739,35 @@ def test_response_does_not_dump_the_environment(tmp_path: Path) -> None:
 # 六、路由 —— 鉴权与形状
 # =============================================================================
 @pytest.fixture
-def app(tmp_path: Path, auth_file: Path, restore_logging: None) -> FastAPI:
-    """真实应用（不是精简版）。
+def settings(tmp_path: Path) -> Settings:
+    """覆写 conftest 的 `settings`：本文件的路由测试都从"一切就绪"出发。
 
-    T8 里这个夹具第三次出现，于是 `auth_file` 与那两个凭据常量按 CLAUDE.md
-    §编码哲学 3 搬进了 `conftest.py`。**`app` 自己没有合并**：三处的需求真的分叉了 ——
-    那边要挂两条探针路由，这边要在 lifespan 之后替换 `app.state`，T8 那边要原样的应用。
+    覆写这一个，`app` / `anonymous` / `client` 三个夹具就都能用 conftest 里的。
     """
-    return create_app(ready_settings(tmp_path))
+    return ready_settings(tmp_path)
 
 
 @pytest.fixture
-def client(app: FastAPI, tmp_path: Path) -> Iterator[TestClient]:
-    # base_url 必须是 https：会话 cookie 带 `Secure`，http 下 TestClient 不会回传它。
-    with TestClient(app, base_url="https://testserver") as test_client:
-        # **在 lifespan 跑完之后**替换传输层与容器 ref。lifespan 里装的是真
-        # UnixSocketTransport（它构造时不连接，所以没问题），这里换成替身 ——
-        # 这就是 routes/system.py::_probe 那个注入点的实际用法。
-        app.state.docker_transport = FakeTransport(happy_routes(tmp_path))
-        app.state.self_container_ref = SELF_REF
-        yield test_client
+def anonymous(anonymous: TestClient, app: FastAPI, tmp_path: Path) -> TestClient:
+    """覆写 conftest 的 `anonymous`，只为了替换传输层与容器 ref。
+
+    **必须在 lifespan 跑完之后**（父夹具已经进过 `with`）：lifespan 里装的是真
+    UnixSocketTransport，在它之前塞替身会被原地盖掉。这就是 routes/system.py::_probe
+    那个注入点的实际用法。
+    """
+    app.state.docker_transport = FakeTransport(happy_routes(tmp_path))
+    app.state.self_container_ref = SELF_REF
+    return anonymous
 
 
-def test_status_requires_a_session(client: TestClient) -> None:
+def test_status_requires_a_session(anonymous: TestClient) -> None:
     """没登录就是 401。
 
     **这个接口绝不能进免鉴权名单**：它的正文是一份侦察报告（数据目录绝对路径、
     镜像名、docker 版本、孤儿容器名），而它还会**起一个容器** —— 那是一个未鉴权
     就能触发的资源消耗面。
     """
-    response = client.get(STATUS_PATH)
+    response = anonymous.get(STATUS_PATH)
     assert response.status_code == 401
     assert response.json()["code"] == "unauthenticated"
 
@@ -788,10 +784,6 @@ def test_status_is_not_in_the_exempt_list() -> None:
 
 def test_status_returns_200_with_diagnostics(client: TestClient) -> None:
     """登录之后 200，而且**即使有阻断项也是 200**（见下一条）。"""
-    login = client.post("/api/auth/login", json={"username": USERNAME, "password": PASSWORD})
-    assert login.status_code == 200
-    assert client.cookies.get(SESSION_COOKIE_NAME)
-
     response = client.get(STATUS_PATH)
     assert response.status_code == 200
     body = response.json()
@@ -806,7 +798,6 @@ def test_status_stays_200_when_docker_is_down(app: FastAPI, client: TestClient) 
     用 503 会让前端走错误分支，显示一句"服务暂时不可用" —— 而用户真正需要看见的是
     那份写着"哪一项不就绪、怎么修"的正文。诊断结果是内容，不是状态码。
     """
-    client.post("/api/auth/login", json={"username": USERNAME, "password": PASSWORD})
     app.state.docker_transport = FakeTransport(
         [("GET", "/version", const(500, {"message": "boom"}))]
     )
@@ -818,19 +809,19 @@ def test_status_stays_200_when_docker_is_down(app: FastAPI, client: TestClient) 
     assert body["blockers"] == [BLOCKER_DOCKER_UNREACHABLE]
 
 
-def test_health_still_works_and_needs_no_session(client: TestClient) -> None:
+def test_health_still_works_and_needs_no_session(anonymous: TestClient) -> None:
     """`/api/health` 从 main.py 搬进 routes/health.py，形状一个字都不许变。
 
     它的消费者是 nginx 与 compose healthcheck —— 它们没有 cookie，也不会因为
     响应多了一个字段而报错，但**少**一个字段会让 T5 前端的启动检查失效。
     """
-    response = client.get("/api/health")
+    response = anonymous.get("/api/health")
     assert response.status_code == 200
     assert set(response.json()) == {"status", "app_version", "strix_version"}
     assert response.json()["status"] == "ok"
 
 
-def test_health_does_not_probe_docker(app: FastAPI, client: TestClient) -> None:
+def test_health_does_not_probe_docker(app: FastAPI, anonymous: TestClient) -> None:
     """健康检查不许碰 docker。
 
     碰了的后果很具体：docker 抖一下 → healthcheck 失败 → compose 重启 `api` →
@@ -839,5 +830,5 @@ def test_health_does_not_probe_docker(app: FastAPI, client: TestClient) -> None:
     """
     exploding = FakeTransport([])
     app.state.docker_transport = exploding
-    assert client.get("/api/health").status_code == 200
+    assert anonymous.get("/api/health").status_code == 200
     assert exploding.calls == []

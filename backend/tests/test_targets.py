@@ -20,21 +20,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.main import create_app
-from app.routes.auth import EXEMPT_PATHS, SESSION_COOKIE_NAME
-from app.services.allowlist import AllowlistConfig, AllowlistEntry, AllowlistStore
+from app.routes.auth import EXEMPT_PATHS
+from app.services.allowlist import AllowlistConfig, AllowlistStore
 from app.services.dns_resolver import Resolution, ResolutionError
 from app.services.target_guard import AllowlistMode
 from app.settings import Settings
-from tests.conftest import PASSWORD, USERNAME
+from tests.conftest import make_entry
 
 VALIDATE_PATH = "/api/targets/validate"
 
@@ -70,20 +67,15 @@ def resolver() -> FakeResolver:
 
 
 @pytest.fixture
-def app(settings: Settings, auth_file: Path, restore_logging: None) -> FastAPI:
-    return create_app(settings)
+def anonymous(anonymous: TestClient, app: FastAPI, resolver: FakeResolver) -> TestClient:
+    """覆写 conftest 的 `anonymous`，只为了插一句替换解析器。
 
-
-@pytest.fixture
-def client(app: FastAPI, resolver: FakeResolver) -> Iterator[TestClient]:
-    # base_url 必须是 https：会话 cookie 带 `Secure`。
-    with TestClient(app, base_url="https://testserver") as test_client:
-        # **在 lifespan 跑完之后**替换解析器：lifespan 装的是真 `dns_resolver.resolve`，
-        # 这里换成替身 —— 就是 `routes/targets.py::_resolver` 那个注入点的实际用法。
-        app.state.dns_resolver = resolver
-        test_client.post("/api/auth/login", json={"username": USERNAME, "password": PASSWORD})
-        assert test_client.cookies.get(SESSION_COOKIE_NAME), "登录没成功，后面会全是 401"
-        yield test_client
+    时机是唯一的讲究：父夹具已经进过 `with`，所以 lifespan 跑完了，`app.state` 里此刻
+    装的是真 `dns_resolver.resolve`。在这之前替换会被 lifespan 盖掉。`client` 依赖
+    `anonymous`，所以登录那一路也拿到替身。
+    """
+    app.state.dns_resolver = resolver
+    return anonymous
 
 
 def validate(client: TestClient, *raw: str, **overrides: bool) -> list[dict[str, object]]:
@@ -117,48 +109,28 @@ def write_allowlist(app: FastAPI, config: AllowlistConfig) -> None:
     store.write(config)
 
 
-def entry(label: str, **overrides: object) -> AllowlistEntry:
-    fields: dict[str, object] = {
-        "label": label,
-        "owner": "安全组",
-        "authorization_ref": "TICKET-1",
-        "hosts": ("example.com",),
-    }
-    fields.update(overrides)
-    return AllowlistEntry.model_validate(fields)
-
-
 # =============================================================================
 # 一、鉴权
 # =============================================================================
-def test_validate_requires_a_session(app: FastAPI) -> None:
-    """没登录就是 401。
+def test_unauthenticated_request_is_401_before_any_dns(
+    anonymous: TestClient, resolver: FakeResolver
+) -> None:
+    """没登录就是 401，**而且 401 发生在 DNS 之前**。
 
     未鉴权的话这个接口就是一台开放的 DNS 探测器 —— 而 `api` 在 `strix_sandbox`
     网络里，能解析内网名字。请求体故意是合法的：要证明拦下它的是鉴权，不是校验。
+    两条断言合在一个用例里，因为它们要的是**同一个请求** —— 先鉴权再解析和先解析
+    再鉴权都返回 401，只有 `resolver.calls` 能把两者区分开。
     """
-    with TestClient(app, base_url="https://testserver") as anonymous:
-        response = anonymous.post(VALIDATE_PATH, json={"raw": ["https://example.com"]})
+    response = anonymous.post(VALIDATE_PATH, json={"raw": ["https://example.com"]})
     assert response.status_code == 401
     assert response.json()["code"] == "unauthenticated"
+    assert resolver.calls == [], "未鉴权的请求触发了 DNS 查询"
 
 
 def test_validate_is_not_in_the_exempt_list() -> None:
     """上面那条测的是"现在是对的"，这条测的是"以后也别加进去"。"""
     assert VALIDATE_PATH not in EXEMPT_PATHS
-
-
-def test_unauthenticated_request_does_not_resolve_anything(
-    app: FastAPI, resolver: FakeResolver
-) -> None:
-    """401 必须发生在 DNS 之前。
-
-    先鉴权再解析和先解析再鉴权都会返回 401，但后者已经把内网名字探出去了。
-    """
-    with TestClient(app, base_url="https://testserver") as anonymous:
-        app.state.dns_resolver = resolver
-        anonymous.post(VALIDATE_PATH, json={"raw": ["https://example.com"]})
-    assert resolver.calls == [], "未鉴权的请求触发了 DNS 查询"
 
 
 # =============================================================================
@@ -323,7 +295,9 @@ def test_public_target_with_no_allowlist_is_allowed(client: TestClient) -> None:
 def test_enforce_mode_without_a_match_reports_not_in_allowlist(
     app: FastAPI, client: TestClient
 ) -> None:
-    write_allowlist(app, AllowlistConfig(entries=(entry("别的", hosts=("other.example.org",)),)))
+    write_allowlist(
+        app, AllowlistConfig(entries=(make_entry("别的", hosts=("other.example.org",)),))
+    )
     item = only(client, "https://example.com")
     assert item["ok"] is False
     assert item["code"] == "not_in_allowlist"
@@ -333,7 +307,7 @@ def test_enforce_mode_without_a_match_reports_not_in_allowlist(
 
 def test_a_matched_entry_is_named_in_the_response(app: FastAPI, client: TestClient) -> None:
     """命中的 label 要露出来 —— 用户需要知道自己是凭哪一份授权在扫。"""
-    write_allowlist(app, AllowlistConfig(entries=(entry("客户预生产"),)))
+    write_allowlist(app, AllowlistConfig(entries=(make_entry("客户预生产"),)))
     item = only(client, "https://example.com")
     assert item["ok"] is True
     assert item["allowlist_entry"] == "客户预生产"
@@ -361,7 +335,7 @@ def test_advisory_mode_in_the_file_lets_an_unmatched_target_through(
     write_allowlist(
         app,
         AllowlistConfig(
-            mode=AllowlistMode.ADVISORY, entries=(entry("别的", hosts=("other.example.org",)),)
+            mode=AllowlistMode.ADVISORY, entries=(make_entry("别的", hosts=("other.example.org",)),)
         ),
     )
     item = only(client, "https://example.com")

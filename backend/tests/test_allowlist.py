@@ -24,21 +24,17 @@ import json
 import os
 import sqlite3
 import stat
-from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.main import create_app
-from app.routes.auth import EXEMPT_PATHS, SESSION_COOKIE_NAME
+from app.routes.auth import EXEMPT_PATHS
 from app.services.allowlist import (
     AllowlistConfig,
-    AllowlistEntry,
     AllowlistFileErrorCode,
     AllowlistSnapshot,
     AllowlistStore,
@@ -48,23 +44,12 @@ from app.services.allowlist import (
 )
 from app.services.target_guard import AllowlistDecision, AllowlistMode
 from app.settings import Settings
-from tests.conftest import PASSWORD, USERNAME
+from tests.conftest import USERNAME, make_entry
 
 ALLOWLIST_PATH = "/api/allowlist"
 ENTRIES_PATH = "/api/allowlist/entries"
 
 TODAY = date(2026, 9, 12)
-
-
-def make_entry(label: str = "预生产", **overrides: object) -> AllowlistEntry:
-    fields: dict[str, object] = {
-        "label": label,
-        "owner": "安全组",
-        "authorization_ref": "TICKET-1",
-        "hosts": ("example.com",),
-    }
-    fields.update(overrides)
-    return AllowlistEntry.model_validate(fields)
 
 
 def entry_payload(label: str = "预生产", **overrides: object) -> dict[str, object]:
@@ -599,26 +584,9 @@ def test_write_is_immediately_visible_without_a_fingerprint_check(tmp_path: Path
 # =============================================================================
 # 六、路由
 # =============================================================================
-@pytest.fixture
-def app(settings: Settings, auth_file: Path, restore_logging: None) -> FastAPI:
-    """真实应用。`auth_file` 与那两个凭据常量在 conftest 里（第三次出现时搬过去的）。
-
-    这里**什么都不替换**：`AllowlistStore` 读写的是 `tmp_path` 下的真文件，审计写的是
-    `tmp_path` 下的真库与真 ndjson。本任务要证明的事全都发生在磁盘上，替身会把它们
-    一起替掉。这也是本文件不需要 DNS 替身的原因 —— 授权清单这一路完全不碰网络。
-    """
-    return create_app(settings)
-
-
-@pytest.fixture
-def client(app: FastAPI) -> Iterator[TestClient]:
-    # base_url 必须是 https：会话 cookie 带 `Secure`，http 下 TestClient 不会回传它。
-    with TestClient(app, base_url="https://testserver") as test_client:
-        test_client.post("/api/auth/login", json={"username": USERNAME, "password": PASSWORD})
-        assert test_client.cookies.get(SESSION_COOKIE_NAME), "登录没成功，后面的断言会全是 401"
-        yield test_client
-
-
+# `app` / `anonymous` / `client` 都用 conftest 里那三个，本文件**一个替身都不装**：
+# `AllowlistStore` 读写的是 `tmp_path` 下的真文件，审计写的是真库与真 ndjson。
+# 本任务要证明的事全都发生在磁盘上，替身会把它们一起替掉。
 def audit_entries(settings: Settings) -> list[dict[str, Any]]:
     """ndjson 镜像里的全部记录，解析成对象。
 
@@ -656,25 +624,24 @@ def audit_row_count(settings: Settings) -> int:
         conn.close()
 
 
-def test_allowlist_routes_need_a_session(app: FastAPI) -> None:
+def test_allowlist_routes_need_a_session(anonymous: TestClient) -> None:
     """没登录一律 401。
 
     `GET` 的正文是一份内网主机名与授权编号清单（现成的侦察结果），`PUT` 能直接
     把 `enforce` 改成 `advisory`。两者都绝不能进免鉴权名单。
     """
-    with TestClient(app, base_url="https://testserver") as anonymous:
-        for method, path in (
-            ("GET", ALLOWLIST_PATH),
-            ("PUT", ALLOWLIST_PATH),
-            ("POST", ENTRIES_PATH),
-            ("DELETE", f"{ENTRIES_PATH}/x"),
-        ):
-            # 走 `request()` 而不是 `anonymous.get(...)`：`TestClient.get` 没有 `json=`
-            # 参数（httpx 不给 GET/DELETE 带 body 的快捷方式）。四个动词必须**同一种**
-            # 调用方式，否则"GET 那条到底带没带 body"会成为一个看不出来的差异。
-            response = anonymous.request(method, path, json={})
-            assert response.status_code == 401, f"{method} {path} 没要求登录"
-            assert response.json()["code"] == "unauthenticated"
+    for method, path in (
+        ("GET", ALLOWLIST_PATH),
+        ("PUT", ALLOWLIST_PATH),
+        ("POST", ENTRIES_PATH),
+        ("DELETE", f"{ENTRIES_PATH}/x"),
+    ):
+        # 走 `request()` 而不是 `anonymous.get(...)`：`TestClient.get` 没有 `json=`
+        # 参数（httpx 不给 GET/DELETE 带 body 的快捷方式）。四个动词必须**同一种**
+        # 调用方式，否则"GET 那条到底带没带 body"会成为一个看不出来的差异。
+        response = anonymous.request(method, path, json={})
+        assert response.status_code == 401, f"{method} {path} 没要求登录"
+        assert response.json()["code"] == "unauthenticated"
 
 
 def test_allowlist_paths_are_not_exempt() -> None:
