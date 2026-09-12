@@ -4,12 +4,21 @@
 
     1. load_settings()                 配置不合法就没有下一步
     2. assert_no_credential_env()      **在打出任何一行日志之前**确认环境干净
+    2b. assert_single_worker()         判据在 `key_vault`（那条约束的理由就是 vault 是
+                                       进程内 dict）；紧挨第 2 步调，理由同上
+    2c. KeyVault()                     **必须在第 3 步之前** —— Redactor 要在日志配好
+                                       之前就拿到凭据来源。不用"先占位再 rebind"：那会
+                                       造出一个"装上了但还是旧的"中间态，失败模式是
+                                       日志照打、只是不脱敏（静默）
     3. configure_logging()             从这里起日志才带脱敏
     4. 数据目录可写 + 建子目录         下面每一步都要写这个目录
     5. db.connect() / migrate()        建表
     6. db.assert_no_secret_columns()   **必须在 migrate 之后** —— 要检查的是迁移
                                        实际建出来的 schema，不是迁移文件的文本
     7. AuthService.load()              读 auth.json；读不出来就**拒绝启动**
+    8. create_task(run_sweeper)        本进程唯一的后台任务。`finally` 里 cancel
+                                       **并 await**，否则每次正常停机都会打出
+                                       "Task was destroyed but it is pending"
 
 第 2 步排在第 3 步之前是刻意的：如果环境里真有凭据，我们希望在**任何日志代码运行
 之前**就失败。日志系统本身不会打凭据，但"启动过程中新增一行 logger.info(...)"是随时
@@ -26,8 +35,9 @@
 
 # 刻意不在这里做的事
 
-- **`WEB_CONCURRENCY` / `--workers 1` 的启动校验** 是 T7（跟 KeyVault 一起，
-  因为那条约束的理由就是 KeyVault 是进程内 dict）。
+- **`WEB_CONCURRENCY` / `--workers 1` 的启动校验**的判据不在本文件：它是
+  `key_vault.assert_single_worker`（跟 KeyVault 同一个模块，因为那条约束的理由就是
+  KeyVault 是进程内 dict）。本文件只在第 2b 步调它。
 - **任何 docker 探测。** T3 的 `/api/system/status` 由**人**主动触发，启动期一次都
   不探。启动时探 docker 会让"docker daemon 正在重启"变成"api 起不来"，而
   `api` 起不来就没有任何界面能告诉用户是 docker 的问题。lifespan 里只做一件与
@@ -37,11 +47,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import Depends, FastAPI, Request
@@ -62,26 +73,20 @@ from app.logging_setup import Redactor, configure_logging, trace_id_var
 from app.routes import allowlist as allowlist_routes
 from app.routes import auth as auth_routes
 from app.routes import health as health_routes
+from app.routes import keys as keys_routes
+from app.routes import providers as providers_routes
 from app.routes import system as system_routes
 from app.routes import targets as targets_routes
-from app.services import dns_resolver
+from app.services import dns_resolver, llm_client
 from app.services.allowlist import AllowlistStore
 from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
+from app.services.key_vault import KeyVault, assert_single_worker
 from app.settings import Settings, assert_no_credential_env, load_settings
 
 logger = logging.getLogger(__name__)
 
 TRACE_ID_HEADER = "X-Trace-Id"
-
-
-def _no_secrets_yet() -> frozenset[str]:
-    """T2 阶段的 `SecretProvider`：内存 KeyVault 还不存在（T7），所以没有活跃凭据。
-
-    写成一个具名函数而不是 `lambda: frozenset()`：这样它在 grep 里是可见的 ——
-    T7 落地时要找到并替换掉的就是这一个符号。
-    """
-    return frozenset()
 
 
 def _resolve_strix_version() -> str:
@@ -280,11 +285,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         # 顺序见模块 docstring。
         assert_no_credential_env(os.environ)
+        assert_single_worker(os.environ)
 
-        # T2 传空集合：内存 KeyVault 是 T7 的交付物，现在还没有活跃凭据。
-        # T7 落地后这里换成 `key_vault.secret_values`，**其余一行都不用改** ——
-        # 这就是把凭据来源做成 provider 而不是模块级全局集合的收益。
-        redactor = Redactor(secret_provider=_no_secrets_yet)
+        # KeyVault 必须**在 configure_logging 之前**构造：Redactor 要在日志配好之前
+        # 拿到凭据来源。这一步可行是因为 `KeyVault.__init__` 的唯一依赖是 clock ——
+        # 不要 settings、不碰 DB、不碰文件，此刻它必然是空的。
+        #
+        # 刻意不用"先传占位 provider、建完 vault 再 rebind"：那会造出一个
+        # "provider 装上了但还是旧的"的中间态，而它的失败模式是**静默**的
+        # （日志照打、只是不脱敏）—— 与 logging_setup docstring 里那个已实测的坑同型。
+        # 一次性、不可变的绑定没有那个窗口。
+        key_vault = KeyVault()
+        redactor = Redactor(secret_provider=key_vault.secret_values)
         configure_logging(resolved.console_log_level, redactor)
 
         strix_version = _resolve_strix_version()
@@ -322,6 +334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         app.state.settings = resolved
         app.state.redactor = redactor
+        app.state.key_vault = key_vault
         app.state.db = db
         app.state.strix_version = strix_version
         app.state.auth = auth_service
@@ -355,11 +368,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # T8。`/api/targets/validate` 的 DNS 解析器。挂在 state 上而不是直接 import ——
         # 单测禁止碰真实网络（CLAUDE.md §测试），这是那条规则的注入点。
         app.state.dns_resolver = dns_resolver.resolve
+        # T7b。`POST /api/keys` 的验活器。与上面那个 resolver 同一条理由：单测必须能
+        # 换掉它（真实验活会拿凭据往模型端点发一次请求）。
+        app.state.llm_verifier = llm_client.verify
+
+        # T7a。本项目的第一个后台任务。凭据的过期是懒判定（取用时判）为主，但没人再来
+        # 取用的凭据不会被懒判定碰到，而"凭据在内存里待多久"就是 KeyVault 的安全属性
+        # 本身 —— 所以必须有人主动去清。见 key_vault 模块 docstring。
+        sweeper = asyncio.create_task(key_vault.run_sweeper())
 
         logger.info("启动完成")
         try:
             yield
         finally:
+            # 必须 cancel **并 await**：只 cancel 不等的话，事件循环关闭时会打出
+            # "Task was destroyed but it is pending"，而那行字会出现在每一次正常停机的
+            # 日志里，把真问题埋掉。`run_sweeper` 刻意不吞 CancelledError，所以这里
+            # 必须接住它。
+            sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweeper
             db.close()
             logger.info("已停止")
 
@@ -395,6 +423,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 网络里能解析内网名字；`/api/allowlist` 写的就是"谁批准扫什么"。
     app.include_router(allowlist_routes.router)
     app.include_router(targets_routes.router)
+    # T7b。`/api/providers` 是目录（无凭据），`/api/keys` 收凭据 —— 两者都在全局鉴权
+    # 之后：一个未鉴权的 `/api/keys` 等于让任意网页替用户登记（并验活）凭据。
+    app.include_router(providers_routes.router)
+    app.include_router(keys_routes.router)
 
     return app
 

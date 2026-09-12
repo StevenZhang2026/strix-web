@@ -163,7 +163,7 @@
       "title": "请求内容不合法",
       "detail": "后端没能解析这次提交的内容，通常是有必填项没填，或者格式不对。",
       "action": "回到上一步检查标记出来的字段，改好后重新提交。",
-      "params": ["field"]
+      "params": ["field", "key_name"]
     },
     "not_found": {
       "title": "找不到这个地址",
@@ -382,6 +382,45 @@
     "notes": {
       "loopback_rewrite": "沙箱会把这个地址改写成 host.docker.internal，也就是说测的是你这台电脑上的服务，不是沙箱容器内部的服务。"
     }
+  },
+
+  "providers": {
+    "vendors": {
+      "bedrock": "AWS Bedrock",
+      "gemini": "Google Gemini",
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "openrouter": "OpenRouter",
+      "deepseek": "DeepSeek"
+    },
+    "shapes": {
+      "single": "API Key",
+      "bedrock_sigv4": "AWS 访问密钥（SigV4）",
+      "bedrock_bearer": "Bedrock API Key（bearer token）"
+    },
+    "shapeNotes": {
+      "single": "一个 Key 就够。它只进内存，也只经环境变量交给扫描进程。",
+      "bedrock_sigv4": "推荐这一种。它保留模型的提示词缓存，同样的活大致只花 bearer 形状的四分之一到六分之一。",
+      "bedrock_bearer": "费用会比 SigV4 高 4～6 倍，这不是估计：bearer token 必须走 invoke 路由，而那条路由不接受提示词缓存，只能关掉。实测一次 13 个请求的扫描烧掉 2.06 美元、缓存命中为 0，而且什么都没找到。要用它就把费用上限相应调高；能拿到 Access Key 就选上面那一种。"
+    },
+    "secretLabels": {
+      "LLM_API_KEY": "API Key",
+      "AWS_ACCESS_KEY_ID": "Access Key ID",
+      "AWS_SECRET_ACCESS_KEY": "Secret Access Key",
+      "AWS_BEARER_TOKEN_BEDROCK": "Bedrock API Key"
+    },
+    "paramFields": {
+      "AWS_REGION_NAME": "区域"
+    },
+    "paramHints": {
+      "AWS_REGION_NAME": "例如 us-east-1。区域必填 —— 即便用 bearer token，也要靠它拼出接入地址。"
+    },
+    "modelLabel": "模型名",
+    "modelHint": "带 bedrock/ 前缀不用自己写，我们按凭据形状补。",
+    "modelsEmpty": "这一家我们没有实测过的模型名可以给你抄，照它的文档填。",
+    "apiBaseLabel": "自定义接入地址",
+    "apiBaseHint": "留空即用官方地址。只有自建网关才需要填。",
+    "verifyingLabel": "正在用这组凭据发一次最小请求…"
   },
 
   "paramLabels": {

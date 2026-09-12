@@ -30,7 +30,9 @@ Handler / Formatter 才是真正的收口点：所有记录最终都要经过 ha
 # 凭据来源怎么接进来，而不引入模块级可变全局状态
 
 `Redactor` 持有一个 `SecretProvider`（无参可调用，返回当前全部活跃凭据值）。
-T2 传 `lambda: frozenset()`；T7 的 KeyVault 落地后传 `key_vault.secret_values`。
+现在传的是 `key_vault.secret_values`（T7a 起，绑定在 `main.py` 的 lifespan 里，一次性、
+不可 rebind）。**provider 会在工作线程里被调用** —— 实现方要保证自己线程安全，
+判据见 `key_vault.secret_values` 的 docstring。
 **注册表不在本模块里** —— 本模块只知道"有人会告诉我当前的秘密是什么"。
 这样就没有模块级 `_SECRETS: set[str]` 那种任何代码都能改、测试之间会互相污染的状态。
 `Redactor` 实例挂在 `app.state.redactor` 上，T14 推给前端之前复用同一个实例。
@@ -46,7 +48,7 @@ import time
 from collections.abc import Callable
 from contextvars import ContextVar
 
-# 返回"当前全部活跃凭据的明文值"。由 KeyVault（T7）实现。
+# 返回"当前全部活跃凭据的明文值"。由 `key_vault.KeyVault.secret_values` 实现。
 SecretProvider = Callable[[], frozenset[str]]
 
 REDACTED = "[REDACTED]"

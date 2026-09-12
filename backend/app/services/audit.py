@@ -47,7 +47,13 @@ from app.db import Database
 logger = logging.getLogger(__name__)
 
 EVENT_ALLOWLIST_CHANGED = "allowlist.changed"
-"""唯一一个事件名。字面串只出现在这里，路由层 import 它。"""
+EVENT_KEY_REGISTERED = "key.registered"
+EVENT_KEY_DROPPED = "key.dropped"
+"""事件名。**字面串只出现在这里**，路由层 import 它们。
+
+集中在本模块而不是各自写在抛出方的路由里：这份名单就是"审计里会出现哪些事件"的全部
+答案，而回答这个问题的人（写查询的、写告警的）不该需要先知道有哪几个路由文件。
+`key.*` 两个是 T7b 加的，登记与忘掉各一条 —— **`detail` 里只许有掩码标签与机器码**。"""
 
 AuditDetailValue = str | int | float | bool | None | list[str]
 """`detail` 里允许的值域。
