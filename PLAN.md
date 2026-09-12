@@ -1,22 +1,79 @@
 # Strix Web 控制台 — 实施计划
 
-## 交接（2026-09-12）
+## 交接（2026-09-13）
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-**代码状态**：工作区干净。`main` 比 `origin/main`（`887cd80`）**领先 11 个提交，从未 push**
+**代码状态**：T7a + T7b 已复验并**已于 2026-09-13 提交**（代码一个提交、文档一个提交）。
+**工作区干净**，只剩未跟踪的 `pitfalls/local-env.md`（在 `.gitignore` 里，别提交它）。
+`main` 比 `origin/main`（`887cd80`）**领先 13 个提交，从未 push**
 （数字用 `git rev-list --count origin/main..HEAD` 复核；这里刻意不写当前提交的 SHA ——
 写了就会被下一次 amend 打脸，`git log -1` 一秒就能看）。**push 与否用户还没表态，别自己推。**
-闸门最后一次全绿是在 `bf92e45`：
-`make test` 580 passed / 0 skipped、`make lint-api` 干净；之后只改过文档，未重跑。
-已完成 T0–T6、T8；**下一个要做的是 T7**。
+闸门 2026-09-13 在含 T7a+T7b 的工作区上全绿：`make test` **641 passed / 0 skipped**、
+`ruff check` + `ruff format --check` 干净。已完成 T0–T8（T7a、T7b 均已复验）。
+
+**规则变更（2026-09-13 用户拍板，已落地，下一份派发 prompt 起生效）**：**要 TDD 的内核，不要那
+320 行 skill。** `superpowers/test-driven-development` 一律不整包挂，只把两句抄进 prompt
+（先看着它红一次 + 说得出一个能让它变红的改动）；收货侧按 `CLAUDE.md` §安全不变式逐条 mutation。
+条文与理由见 `agent-rules.md` §六.5 / §八.3 / §十.5 与本文件 §派发清单 规则 7 —— **本节不复述。**
+
+**常驻文件的上限改成同时卡字数（2026-09-13，两份都已落地）**：`agent-rules.md` **130 行**（现 130，§一.4）、
+`CLAUDE.md` **123 行且 10,100 字**（现 123 行 / 10,028 字，第 8 行）—— 起因是实测子 agent 首轮就收到这两份
+全文（`CLAUDE.md` 11,314 字是最大的可控项，而 150 行的旧上限被 77 字/行的长行绕开了）。这一轮 `CLAUDE.md`
+从 147 行 / 11,315 字压到 123 / 10,028，**没有删掉任何一条硬规则或判据**：合行、删掉已有权威副本的论证、
+把 `make reap` 为什么必须要 `strix-run-id` 那一半的归因下沉到未跟踪的 `pitfalls/local-env.md`（禁区规则原文一条没动）。
+**两个待决**：① 要不要拆 `agent-rules.md`、让子 agent 只收 §十（§二/§四/§七/§九.1–.7 约 60 行对它们是死重）；
+② 那 11 个提交要不要 push。
 
 **待办（按优先级）**：
-1. **T7 拆分待放行** —— T7 的涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的形状
-   （`agent-rules.md` §九.5）。我的提案：**T7a** = `key_vault.py` 内存实现 + 单测；
-   **T7b** = `routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试。串行，各自预算 ≤80 次工具调用。
-   T7 是模板 3，**方案还要先上报评审**（§八.2）。等用户放行。
+1. **T7b 已于 2026-09-13 落地并复验完**（详情、实测账单、我查出的那个 `params` 缺陷都在 T7 行）。
+   复验做法：闸门自证 641 passed + ruff 干净，另做 **8 次 mutation**（验活失败照样存 vault／多余
+   secret 键放行／缺 secret 键放行／响应回明文／bearer 用错路由／DELETE 不真删／params 多余键放行／
+   params 缺键放行），每次**只红该红的那条**。
+   **T7b 还剩三个已知缺口（不阻塞，但 T9 起必须知道）**：
+   ① **`secrets` 的值没有长度下限**，`verify=false` 时空串会被存下来（`verify=true` 走不到，真实
+   请求会失败）。没修是因为 `logging_setup.MIN_SECRET_LENGTH=8` 本来就不脱敏短值，两处判据要一起定。
+   ② **`providers.*` 文案树没有任何测试守着** —— `test_message_coverage.py` 只覆盖 `errors`/
+   `scanFailures`/`targetGuard` 三棵。bearer 的成本警告（`PLAN.md:346` 要求给出 4～6 倍的量级对比、
+   不许只说"可能更贵"）目前**靠人看**。T18 做前端时补。
+   ③ **`strix_llm` 在 vault 里存的是用户原样填的名字**，拼前缀的责任在 `llm_client.model_for()`。
+   T9 必须调它，并按**模型名含 `invoke/`** 决定是否注入 `STRIX_PROMPT_CACHE=false`
+   （判据是**路由**不是 auth_shape，`PLAN.md:333`）。
+   方案里**由主会话决定、与旧 `PLAN.md` 文本不一致的五处**（用户已批，别当成 agent 的越界）：
+   ① **取消 `POST /api/keys/{h}/touch`**（原 §后端接口 列了它）—— `KeyVault.get()` 本身刷新 idle，
+   `GET /api/keys/{h}` 已经是 touch，再加一个 POST 只是同一动作的第二个名字；
+   ② **不做集合版 `GET /api/keys`** —— 前端只握自己那一个 handle，列举全部 handle 没有使用者，
+   而 handle 就是"谁能用这组凭据"的凭证，能列举就多一个面；
+   ③ **缺键不新增 `missing_secret_key` 码**，走 422 `invalid_request` + `params{field,key_name}`
+   ——"多填"是安全防线（防 litellm 静默忽略一套 Bedrock 凭据）所以值一个专码，"少填"只是请求体不合法；
+   ④ **`POST`/`DELETE` 写审计**（`key.registered`/`key.dropped`，只记 provider/auth_shape/labels），
+   复用 T8 的 `services/audit.py`，不造第二个写入方；
+   ⑤ **模型名不做白名单** —— 目录里的 `models` 只是建议列表，真正的校验是验活那一次请求；
+   硬编码清单会过期，而过期的清单会拒掉一个真实可用的模型。
+   **派发前已查证、不要重查**：litellm 1.100.0 **没有** `aws_bearer_token_bedrock` kwarg，
+   `llms/bedrock/base_aws_llm.py:1455-1459` 与 `:1554-1557` 是 `if api_key is not None: aws_bearer_token = api_key`
+   → bearer token 作为 **`api_key`** 传入即可，`os.environ` 一个字都不用动。
+   **T7b 的边界**：`auth_shape` 声明哪几个键的校验（`400 unexpected_secret_key`）、供应商目录、
+   真实验活都**不在** T7a 里 —— vault 只按传进来的数据存取，不判断形状合不合法。
+   **T7a 落地了什么**：`services/key_vault.py`(322) + `tests/test_key_vault.py`(23 条) + `main.py` 五处接线。
+   四条契约判定（idle 挂起 / hard 照删 / `drop` 不看 `ref_count` / 一次性不可变绑定 Redactor）与
+   `assert_single_worker` 拦的到底是哪条路径，**都已写进代码 docstring**，本节不再重复：
+   生命周期判定表见 `key_vault.py` 模块 docstring，启动顺序见 `main.py:3-26`（2b/2c/8 是 T7a 新增的三步）。
+   **复验是我自己跑的，没采信子 agent 的报告**：闸门全绿（见上）；另独立做 4 次 mutation
+   （idle 忽略 `ref_count`／hard 给 `ref_count` 开豁免／`drop` 看 `ref_count`／`store` 不拷贝映射），
+   每次**只红该红的那条** → 子 agent 自陈的偏差"TDD 的 RED 只是整文件红、不是每条各自红"**判定为够**。
+   **复验查出一个它没发现的缺陷，已修**：`secret_values()` 会在 `asyncio.to_thread` 的工作线程里被
+   Formatter 调用（`logging_setup.py:143`；例如 `allowlist.current()` 的 warning 经 `routes/targets.py:352`），
+   而 sweeper 在事件循环线程 `del self._entries[...]` → `RuntimeError: dictionary changed size
+   during iteration`，被 `Handler.handleError` 吞掉，后果是**那一行日志整条消失**。改成先 `tuple()` 取快照。
+   **刻意没配测试**：竞态没法确定性断言，判据只写在那个方法的 docstring 里。
 2. 本地 11 个提交要不要 push 到 `origin/main`（仓库是 public，push 前自己再扫一遍具名内网信息）。
+3. **T3 的前端一小步**（`systemStatus` 文案 + 首页侧栏四行接真值，`null` 必须画「未知」）还挂着，见 T3 行。
+
+**2026-09-12 已拍板（别再当待办）**：T8 交回的第 ③ 件 —— `TargetRejected` 在 HTTP 层的表达。
+`/api/targets/validate` 恒 200（已落地），`POST /api/scans` 服务端重校验 → **422 `invalid_request`
++ `params{field,index,reason}` + fail-fast**，不新增 `target_rejected` 码。完整判据表在 **T12 行**，
+T12 派发时整段抄进 prompt。
 
 **2026-09-12 文档瘦身（已完成，别重做）**：`CLAUDE.md` 173→147 行、本文件 1190→1143 行
 （§派发清单 -21%、§M0 两条需求 -24%、T2/T4 的复核记录搬进 §里程碑）。新增层三第一份
@@ -874,12 +931,12 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T5b | **单账号登录 —— 前端**：登录页 + 未登录重定向 + 401 统一拦截（复用 `key_required` 那套交互，因为会话与 KeyVault 同生共死）+ 登出 | T4b T5 | `frontend/src/app/login/*` `frontend/src/lib/api.ts` `frontend/messages/zh-CN.json` | **3** ✅ 2026-09-10。两条定死的：口令框 `type=password` + **标准 `name` + `autoComplete="current-password"`**（2026-09-10 拍板，**推翻本行原先写的"随机 `name`"**，理由见下行）；**会话 id 由 cookie 承载，前端一行都不许碰它** —— 不读、不存 `sessionStorage`、不放 URL（与 `vault_handle` 刻意相反，理由见 §单账号登录 方案表最后一行）|
 | | **↑ 为什么登录口令框与 API Key 输入框的规则相反**（别把这两条并成一条）：「随机 `name` 破自动填充」的出处是**泄漏矩阵第 11 行**，讲的是 `POST /api/keys` 的 **API Key 输入框** —— 对别人家的 provider 密钥，被浏览器存下来是净损失，**那一条不变**。登录口令是相反情形：`setup.sh` 强制 ≥12 位，不让密码管理器帮忙，用户就会挑记得住的弱口令或抄进便签，比让浏览器记住更糟；且要挡的两类人（本机另一个 OS 账号、浏览器里其它标签页）都拿不到自动填充，而坐在你已解锁浏览器前的人早就有 `HttpOnly` 会话 cookie 了。**已知且接受的残余风险**：若开了 iCloud 钥匙串／Chrome 同步，这个口令会**离开本机**，而页脚文案写的是「数据与凭据都不离开这台机器」（该句指扫描数据与 **LLM API Key**，后者从不进浏览器存储）。`autoComplete` **没有**"可填充但不要同步"这种值，所以只能如实记录、不能靠代码消除 —— **必须写进 `docs/SECURITY-zh.md`（T30a）** | | | |
 | T6 | `target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 ✅ 2026-09-11，**181 个用例**（原估 ~80）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；**`requirement`／`overridable` 与 `allowed` 正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 |
-| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3** —— `auth_shape` + `secrets` + `params` 的契约被 **T9／T18／T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据，改错一处要动三处。<br>**⚠️ 派发前必须拆（2026-09-12 定，等用户放行）**：本行涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测、**T7b**=`routes/{keys,providers}.py` + `zh-CN.json` + 路由层测试，串行，各自预算 ≤80 次工具调用。模板 3 不变，方案仍要先上报 |
-| T8 | 授权清单（加载／校验／热重载）+ `/api/targets/validate` | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 ✅ 2026-09-12，**130 个新用例**。四个测试文件各造一份的 `app`／`anonymous`／`client` 夹具与 `make_entry` 收进了 `conftest.py`（需要替身的文件**覆写 `anonymous`**，替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表 T2 就建好了但没有写入方）—— 只有一个 `record()`，DB + ndjson 双写共用同一时刻，**T12／T25 在它上面加事件，不要造第二个写入方**。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览。<br>**T6 交回的三件事**：① `zh-CN.json` 的 `targetGuard` 子树（8 个 `RejectionReason` 的中文 + `notes.loopback_rewrite`；**不进 `errors.py`**，它们是输入框下方的行内提示，请求本身没失败）—— 已做；② ~~`registrable_domain`~~ **已定不做**（2026-09-11 用户拍板）：正确实现要 Public Suffix List，而近似实现（取末两段）在 `example.co.uk` 上算出 `co.uk`，这个值要进逐字确认串 —— **一个错的注册域名比没有更糟**，会让用户确认一个不是他想授权的范围。**别再加回来**，要加就先把 PSL 那笔维护账付掉；③ **⏳ `TargetRejected` 在 HTTP 层怎么表达**（200 带 `ok:false` 还是 4xx 带码）—— 决定文案落在哪棵树 |
+| T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3** —— `auth_shape` + `secrets` + `params` 的契约被 **T9／T18／T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据，改错一处要动三处。<br>**⚠️ 已按"派发前必须拆"执行（2026-09-12 用户放行）**：本行涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测 + `main.py` 五处接线（**2026-09-12 已落地并复验，闸门全绿**；实测代价：方案 24 次调用 + 实现 45 次工具调用 / 54 分钟，0 次压缩 —— 拆分有效）、**T7b**=`routes/{keys,providers}.py` + `services/llm_client.py` 真实验活 + `zh-CN.json` + 路由层测试（**2026-09-13 已落地并复验**：`llm_client.py`(332) + `keys.py`(272) + `providers.py`(72) + `test_keys.py`(33 条) + `main.py` 3 处接线 + `zh-CN.json` 的 `providers.*`；闸门 **641 passed / 0 skipped**、ruff 干净）。<br>**T7b 是"方案由主会话写 + 快闸门"的第一次执行，账单降 43%**（44 次调用、0 压缩、平均上下文 97.9k 与 T7a 持平，但 `cache_read==0` 从 5 次降到 1 次 —— 数字在 `pitfalls/local-env.md`）。**这两条改动就此从"推测"变成"实测有效"，以后照做。**<br>**复验查出一个它没报的真缺陷，已修**：`params` 的键**完全没校验**，而 `params` 刻意不进 `KeyVault.secret_values()`（永不脱敏）又被 `GET /api/keys/{h}` 原样回显 —— 把凭据填进 `params` 就同时得到"存下来 + 明文回显 + 日志不脱敏"。`ShapeSpec.param_keys` 声明了白名单并经 `/api/providers` 发布，却没有任何代码强制它（pitfalls 条 23 的形状）。现补 `llm_client.check_param_keys()`：多余键与缺键都 **422 `invalid_request` + `params{field:"params",key_name}`**，码不用 `unexpected_secret_key`（收到的按定义不是 secret，用那个码会让前端说"你凭据填错了"）。顺带把 `_completion_kwargs` 的 `params.get("AWS_REGION_NAME","")` 改成直接下标，并把它挪到 `try` 之外 —— 否则 KeyError 会被那个宽口径 `except` 吞成"验活未通过"，让 bug 长期伪装成用户凭据不对。<br>**T7a 交给 T7b 的东西**：`auth_shape` 声明哪几个键的校验（`400 unexpected_secret_key`）、供应商目录、真实验活**都不在 T7a 里** —— vault 只按传进来的数据存取，不判断形状合不合法 |
+| T8 | 授权清单（加载／校验／热重载）+ `/api/targets/validate` | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 ✅ 2026-09-12，**130 个新用例**。四个测试文件各造一份的 `app`／`anonymous`／`client` 夹具与 `make_entry` 收进了 `conftest.py`（需要替身的文件**覆写 `anonymous`**，替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表 T2 就建好了但没有写入方）—— 只有一个 `record()`，DB + ndjson 双写共用同一时刻，**T12／T25 在它上面加事件，不要造第二个写入方**。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览。<br>**T6 交回的三件事**：① `zh-CN.json` 的 `targetGuard` 子树（8 个 `RejectionReason` 的中文 + `notes.loopback_rewrite`；**不进 `errors.py`**，它们是输入框下方的行内提示，请求本身没失败）—— 已做；② ~~`registrable_domain`~~ **已定不做**（2026-09-11 用户拍板）：正确实现要 Public Suffix List，而近似实现（取末两段）在 `example.co.uk` 上算出 `co.uk`，这个值要进逐字确认串 —— **一个错的注册域名比没有更糟**，会让用户确认一个不是他想授权的范围。**别再加回来**，要加就先把 PSL 那笔维护账付掉；③ ~~⏳ `TargetRejected` 在 HTTP 层怎么表达~~ **2026-09-12 定完，判据表搬到 T12 行** |
 | T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
 | T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
 | T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（判据见上方「两条容易搞反的」）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** —— M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 实测），只按前者会删掉它；加上后者永不误伤真沙箱（`docker_client.py:113` 早退）。直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR`／`ORPHAN_REQUIRED_LABEL`，别再抄字面串 |
-| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected`／`dns_changed` 两个审计事件**加在 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`／`dns_timeout`／`dns_failed`）**目前没有测试**，真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`／`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤** |
+| T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected`／`dns_changed` 两个审计事件**加在 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`／`dns_timeout`／`dns_failed`）**目前没有测试**，真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`／`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤**。<br>**服务端重校验的拒绝出口（2026-09-12 拍板，T8 交回 ③ 的答案；两条出处已在代码里：`routes/targets.py:5-8` 与 `target_guard.py:122-124`）**：按"性质"分两类，**不新增 `target_rejected` 码** —— 8 个 `RejectionReason` 各编一个 HTTP 码会得到 8 个永不当响应码用的"错误"（`errors.py` 模块 docstring），合成 1 个新码又与 `invalid_request` 语义重叠。<br>· 规范化失败（`RejectionReason`）→ **422 `invalid_request`**，`params = {field:"targets", index:<下标>, reason:<RejectionReason>}`，**遇到第一个就拒（fail-fast）**：`ParamValue` 只许 JSON 标量（`errors.py:38-40` 刻意不许 dict／list，防止有人往里塞整个请求体进而塞进凭据），逐条列全就得先破那条约束或给错误响应加第四个字段，而这条路径本该被向导第 1 步的 `validate` 拦住，不值得为它付这笔账。**`raw` 绝不进 `params`** —— `user:pass@host` 的原文回显只许存在于 `validate` 的 200 正文那一处（T30a 已如实记录那一条残余风险，别扩大它）<br>· 缺勾选（`required_opt_in` 非空）→ 同样 **422**，`params = {field:"overrides", index:<下标>, missing_opt_in:<OptInFlag>}`<br>· 护栏策略拒绝 → 保持 `GuardVerdict.error_code`：`blocked_metadata` **403**（不可覆盖），`not_in_allowlist`／`split_horizon`／`dns_changed` **409**（可以改状态再来）<br>· 前端（T18）：`params.reason` 在时去 `targetGuard.reasons.*` 取那句人话并高亮第 `index` 行，不在时退回 `errors.invalid_request` 的通用文案。落地要顺手补 `zh-CN.json` 的 `errors.invalid_request.params` 与 `paramLabels` 三个新键（`index`／`reason`／`missing_opt_in`）|
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3** —— **T14／T15／T16／T21／T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界 |
 | T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 |
 | T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自** —— 要真凭据、真扫描，派发规则第 3 条禁止把 Key 给子 agent，**结构上不可派发** |
@@ -913,8 +970,58 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
    且只能走 `make lock` 进 hash lock**；**绝不许**子 agent 自行 `pip install`、绕过 hash lock、
    或放宽 `strix-agent==1.5.3` 的 pin。改 lock 的代价要一并报（重建镜像约 6–15 分钟，见 `pitfalls` 条 10/11/15）
 3. **API Key、真实目标、授权信息绝不进 prompt**；需要密钥的验证一律留给手动步骤
-4. 返回格式 + 可执行验收命令；**我会自己再跑一次验收**，不盲信子 agent 的结论
-5. 相关安全不变式原文抄进 prompt（子 agent 看不到 `CLAUDE.md`）
+4. 返回格式 + 可执行验收命令；**我会自己再跑一次验收**，不盲信子 agent 的结论。
+   **给子 agent 的必须是「快闸门」，不是 `make test`**（`agent-rules.md` §九.4）—— `make test` 会重建
+   镜像并重装 dev 依赖（测试 stage 是 `FROM runtime`，`COPY app` 一改就让依赖层失效，约 15 分钟），
+   子 agent 每跑一次就白烧一次满上下文重写。写进 prompt 的命令是这条（秒级，且不会在仓库里留下
+   root-owned 缓存 —— `PYTHONDONTWRITEBYTECODE` + `-p no:cacheprovider` 是必需的）：
+   ```
+   docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/tests:ro" \
+     -v "$PWD/frontend/messages:/messages:ro" -e CONSOLE_MESSAGES_JSON=/messages/zh-CN.json \
+     -e PYTHONDONTWRITEBYTECODE=1 strix-console/api-test:0.1.0 pytest -p no:cacheprovider
+   ```
+   前提是镜像已存在（`make build-test` 或此前跑过一次 `make test`）。`make lint-api` / `make test`
+   由**我**在收货后跑一次 —— 那才是权威闸门。
+   **`backend/tests` 那一半挂载是 2026-09-13 补的，缺它就是一道假闸门**：测试是**烤进镜像**的
+   （`/app/tests`），只挂 `app` 的话新写的测试文件根本不会被收集，跑出来的 608 全绿里**一条新测试
+   都没有**，而 exit=0 会让人以为通了。实测补上后 11 秒、608 passed。
+   **别加 `-q`**：`-q` 下那行 `608 passed` 不打印，只剩一片点，判绿就只能靠数点或退出码
+5. 相关安全不变式原文抄进 prompt。**理由订正（2026-09-13 实测）**：原文写的是"子 agent 看不到
+   `CLAUDE.md`"，这是**错的** —— 子 agent 首轮就收到 `CLAUDE.md` + `agent-rules.md` + `MEMORY.md`
+   的 instructions 附件（在它自己的 transcript 第一个 `attachment.type=="instructions"` 里可复核）。
+   所以抄进 prompt 是**刻意的重复**，不是补缺：常驻区那份是"它读到过"，prompt 里那份是"本任务的
+   硬约束"，实测后者才被照办（T7b 通篇遵守 prompt 里的约束，而常驻文件当时并没有让它做 TDD）。
+   **代价要认**：同一段文字付两遍钱 —— 所以只抄**这个任务真的碰得到**的那几条，不要整节搬。
+6. **模板 3 从 T7b 起：方案由主会话写，只派一个实现 agent**（2026-09-12 用户拍板 ——
+   当日先定"拆成两个 agent"，同日收紧成本条；起因都是 T7a 的实测）。三步：
+   ① **主会话写方案** —— 它为了写派发 prompt 本来就已经读过那些文件，再派一个方案 agent
+   等于同一批文件付两次钱；② 用户按 `agent-rules.md` §八.2 审 —— 那条要求的是**人**审方案，
+   **没有**要求方案由子 agent 产出；③ 批准后**另起**一个 agent 只做实现，把方案原文 +
+   关键出处（`file:line` 形式，别让它自己再找一遍）塞进 prompt。
+   理由：模板 3「先上报 → 等人审 → 再放行」必然制造一次 5 分钟以上的停顿，而 prompt cache 过期后
+   下一次调用要把**整个上下文**按 12.5 倍单价重写 —— 停顿发生在同一个 agent 身上时，它的上下文
+   正好涨到最大，是最贵的时机。方案写在主会话则把这次停顿挪回主会话（本来就要停在这里等用户批），
+   实现 agent 从零起步、根本不经历它。**实测数字在未跟踪的 `pitfalls/local-env.md`**（仓库 public）。
+   代价不变：实现 agent 没读过那些文件 —— 那份出处清单是必需品，不是可选项。
+7. **省"读文件"的四句必须逐条写进 prompt**（2026-09-13 按 T7b 实测加；它第 18 次调用才写第一行代码，
+   之前已吃进 8 万字，其中约 1 万字是重复读同一批文件 —— 明细在 `pitfalls/local-env.md`）：
+   ① **`PLAN.md` 与 `CLAUDE.md` 都不许读** —— 本 prompt 已含它们的相关全文（`PLAN.md` 1000+ 行，
+   `CLAUDE.md` 它本来就已经收到一份，见规则 5）；
+   ② **同一个文件不许读第二次**，需要回看就用已经读到的内容或 `grep -n` 定位行区间；
+   ③ **凡是 prompt 里点到的文件，我必须同时给出它需要的那 20–40 行** —— 只给文件名它必然整读
+   （T7b 因此整读 `key_vault.py` + `models.py` 共 2 万字，真正用到约 1.5k）；
+   ④ **测试/依赖的约定由 prompt 直接给**（测试文件命名、`conftest.py` 里有哪些夹具、依赖已在 lock 里），
+   否则它会用 `grep "def test_"`、`cat pyproject.toml` 去摸，一次几千字。
+8. **TDD 只抄两句进 prompt，不挂那 320 行 skill**（2026-09-13 用户拍板，判据与理由在
+   `agent-rules.md` §六.5 / §十.5 / §八.3）。本项目侧只多两件事：
+   ① **前提是规则 4 那条快闸门已经存在** —— TDD 每条测试要跑两遍闸门，11 秒可以，15 分钟不行；
+   ② **收货侧的 mutation 按 `CLAUDE.md` §安全不变式逐条做**（不是按测试条数），改坏一处 →
+   跑快闸门 → 确认**只有该红的那几条红** → 改回来。T7b 实测 8 次，全部命中。
+   **闸门全绿 + mutation 全对仍然不等于没缺陷**：T7a（开了 TDD）与 T7b（全程没有 TDD 要求）
+   的测试都扛住了全部 mutation，**两个各漏一个真缺陷，两次都是我读代码抓到的** —— T7a 是跨线程
+   竞态（无法确定性断言），T7b 是 `params` 白名单**声明了却没有任何一处强制**（`llm_client`
+   已经把 `param_keys` 经 `/api/providers` 发布出去，而路由层从不校验它 → 凭据放进 `params`
+   会被存下、被 `GET /api/keys/{h}` 明文回显、且永不进脱敏集合）。**所以收货必须读代码。**
 
 ---
 
