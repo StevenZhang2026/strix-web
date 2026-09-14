@@ -1059,3 +1059,56 @@ converter = staticmethod(time.gmtime)                                           
 `date` 命令（`date -u` 才是 UTC）都是同一族。
 
 **实测**：2026-09-08（我复核 T2 交付时查出，T2 未发现）。
+
+---
+
+## 38. strix 1.6.2 新增的 `report/pricing.py` 把 Bedrock 名字解析成 litellm **不认**的前缀 —— 本地成本兜底静默变 `None`
+
+**现象**（2026-09-14 静态实测，无需凭据）：在 `strix-console/api-test:0.1.0`（strix 1.6.2 +
+litellm 1.100.0）里按 `report/usage.py:203-219` 的候选名循环复算 10k/1k tokens：
+
+| 模型名 | 1.5.3 的算法 | 1.6.2 的算法 |
+|---|---|---|
+| `bedrock/us.anthropic.claude-opus-5` | `0.0825` | **`None`** |
+| `bedrock/invoke/us.anthropic.claude-opus-5` | `0.0825` | **`None`** |
+| `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0` | `0.0495` | **`None`** |
+| `gemini/gemini-2.5-pro` | `0.0225` | `0.0225` |
+
+**根因**：1.6.2 在算钱前多插了一层"名字归一化"（`report/pricing.py:10` 的
+`resolve_litellm_model`）。它拿 `litellm.model_cost` 的**键**去匹配，而 Bedrock 的 Anthropic 模型
+在那张表里的键是 `us.anthropic.claude-opus-5`（裸名）和 `bedrock_converse/us.anthropic.claude-opus-5`；
+于是它返回 `bedrock_converse/…`，而 `litellm.completion_cost` **不接受这个前缀**，抛
+`BadRequestError: LLM Provider NOT provided`。两个候选名（全名、裸名）都走到同一个死胡同。
+1.5.3 没有这一层，直接把 `bedrock/…` 原名喂给 `completion_cost` —— 那个名字 litellm 认，所以能算出钱。
+**注意方向**：不是"litellm 不认识这个模型"（裸名照样算得出 `0.0825`），而是**上游新加的解析层把一个
+能用的名字改成了不能用的名字**。
+
+**为什么"静默"**：`report/usage.py` 的 `total_cost` 是 `observed if has_observed else estimated`
+（`usage.py:66-69`）。兜底断掉不报错，只是让 `estimated` 恒为 `None`→0。于是
+`core/hooks.py:55` 的 `cost >= max_budget_usd` 永远为假 —— **`--max-budget-usd` 不再拦截任何东西，
+而且不打任何一条日志**。这就是 `PLAN.md` §Strix 版本升级 阶段 4 第 ② 项存在的理由。
+
+**处置**：护栏现在完全靠 `observed`（litellm 自己回的 `response_cost`，`report/state.py:866-887`）。
+所以每次升级 strix **或** litellm 都必须真跑一次并断言 `run.json` 的 `llm_usage.cost > 0` ——
+已把它写成 `scripts/m0_probe_inner.sh` 的**断言 6**，且脚本现在支持 `M0_BUDGET=0.1` 拿一个必然撞上的
+小预算实测拦截行为。**不要**去 patch Strix：我们不改上游代码，检测线足够。
+
+**推广**：一个新增的"归一化 / 解析 / 兼容"层是**降低**可用性的常见方式 —— 它把原本直接可用的
+输入改写成下游不认的形状，而这类失败通常被 `except Exception: return None` 吞掉。
+升级 diff 里看到"新增一个 resolve_* / normalize_* 模块"，就要按"它改写了什么、下游认不认"重验一遍。
+
+**触发条件**：升级 `strix-agent` 或 `litellm`；换模型路由（`bedrock/` ↔ `bedrock/invoke/` ↔ `gemini/`）；
+任何依赖 `--max-budget-usd` 的验收。
+
+**真跑结果（同日，`bedrock/invoke/us.anthropic.claude-sonnet-4-6` + juice-shop，预算 $0.1）**：
+`llm_usage.cost=0.2024088`、`status=stopped`、strix.log 有 `Token budget of $0.10 exceeded (spent $0.2024)`
+—— **护栏还活着**，因为 `observed`（litellm 自己回的 response_cost）对 invoke 路由是回得来的。
+所以本条现在的状态是「**兜底已断，主路仍通**」：不是当下的故障，是一条**已经用掉了的冗余**。
+
+**同一族的第二个坑（同日实测）**：模型名**拼错但前缀仍合法**时，`completion_cost` 返回 **`0.0` 且不报错**
+（`bedrock/invoke/us.anthropic.claude-sonnet-4-6-20260219-v1:0` → `0.0`；正确名 `…-sonnet-4-6` → `0.0495`）。
+`observed` 走同一张价目表 ⇒ **cost 恒 0 ⇒ 预算护栏形同不存在**，此时唯一拦住花钱的是 `--max-turns`。
+**"能连上、能出结果、还便宜得可疑"就是这个坑的样子** —— 所以 `ScanLauncher` 应当在构造 argv 时
+就断言"这个模型名算得出非零成本"（已记进 `PLAN.md` §Strix 版本升级 §九，给 T9/T10）。
+
+**实测**：2026-09-14（静态查出 + 同日真跑复核）。

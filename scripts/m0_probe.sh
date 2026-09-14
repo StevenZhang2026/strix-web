@@ -4,6 +4,10 @@
 #
 #   ./scripts/m0_probe.sh
 #
+# 可选覆盖（都不是机密，走环境变量即可）：
+#   M0_BUDGET=0.1 ./scripts/m0_probe.sh   —— 小预算，用来实测 --max-budget-usd 真拦截
+#   M0_TURNS=6    ./scripts/m0_probe.sh   —— 轮次上限，是预算失效时唯一的兜底
+#
 # 本脚本是凭据唯一的入口，也是唯一需要人在场的一步。它做三件事：
 #   1. 用 `read -rs` 读凭据 —— 不回显、不进 shell 历史、不进 argv
 #   2. 把凭据从 **stdin** 灌进 api 容器里的 m0_probe_inner.sh
@@ -119,6 +123,28 @@ printf '  模型名（STRIX_LLM）：'
 read -r STRIX_LLM
 [ -n "${STRIX_LLM}" ] || die "模型名不能为空"
 
+# 模型名形状校验 —— **必须在问凭据之前**。2026-09-14 实测：输入 `us.anthropic.sonnet 4.6`
+# 这类裸名，Strix 会在起飞前 `sys.exit(1)`（interface/main.py:186，面板 UNKNOWN MODEL NAME，
+# 因为裸名默认路由到 OpenAI）。放到凭据后面才发现，等于白输一次凭据、白跑一轮。
+# 三种形状的要求都是已实测的事实，不是偏好：bearer 必须走 invoke 路由（条 22）。
+case "${AUTH}" in
+  bedrock-apikey)
+    case "${STRIX_LLM}" in
+      bedrock/invoke/*) ;;
+      *) die "bearer 形状的模型名必须是 bedrock/invoke/<model>（converse 路由不认 bearer，见 pitfalls 条 22）。收到：${STRIX_LLM}" ;;
+    esac ;;
+  bedrock)
+    case "${STRIX_LLM}" in
+      bedrock/*) ;;
+      *) die "SigV4 形状的模型名必须带 bedrock/ 前缀。收到：${STRIX_LLM}" ;;
+    esac ;;
+  *)
+    case "${STRIX_LLM}" in
+      */*) ;;
+      *) die "模型名必须是 <provider>/<model> 形状，裸名会被默认路由到 OpenAI。收到：${STRIX_LLM}" ;;
+    esac ;;
+esac
+
 printf '  目标 URL [回车用 %s]：' "${TARGET_DEFAULT}"
 read -r M0_TARGET
 M0_TARGET="${M0_TARGET:-${TARGET_DEFAULT}}"
@@ -129,8 +155,9 @@ cat <<'EOF'
 第 3 步／3　输入凭据。
   · 不回显、不进 shell 历史、不进命令行参数
   · 只经 stdin 送进 api 容器，用完随该进程一起消失
-  · 预算已在容器内硬编码为 --max-budget-usd 2，跑不飞
+  · 预算默认 --max-budget-usd 2 / --max-turns 20，跑不飞
 EOF
+printf '  本次预算 --max-budget-usd %s，轮次上限 %s\n\n' "${M0_BUDGET:-2}" "${M0_TURNS:-20}"
 
 if [ "${AUTH}" = "bedrock-apikey" ]; then
   printf '  Bedrock API key（形如 ABSK…，输入时看不见，粘贴后按回车）：'
@@ -165,6 +192,8 @@ printf '%s\n' "${CREDS}" | docker exec -i \
   -e "STRIX_LLM=${STRIX_LLM}" \
   -e "M0_TARGET=${M0_TARGET}" \
   -e "M0_AWS_REGION=${M0_AWS_REGION:-}" \
+  -e "M0_BUDGET=${M0_BUDGET:-2}" \
+  -e "M0_TURNS=${M0_TURNS:-20}" \
   "${API_CONTAINER}" sh "${INNER_REMOTE}"
 RC=$?
 set -e

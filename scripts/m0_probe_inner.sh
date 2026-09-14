@@ -110,6 +110,15 @@ esac
 STRIX_LLM="${STRIX_LLM:?必须由外层传入模型名}"
 export STRIX_LLM
 
+# --- 预算与轮次上限（都不是机密，可由外层覆盖）---------------------------------
+# 默认 2 美元 / 20 轮 = 一次完整的 quick 扫描。
+# 故意做成可覆盖，是为了 PLAN.md §Strix 版本升级 阶段 4 的第 ② 项「--max-budget-usd
+# 真拦截」：拿一个小到必然撞上的预算（例如 M0_BUDGET=0.1）跑一次，才能看见护栏真的
+# 掐住了扫描。轮次上限是这条实验的**兜底** —— 万一成本记账变成恒 0，护栏就永不触发，
+# 那时唯一拦住花钱的东西就是 --max-turns。
+BUDGET="${M0_BUDGET:-2}"
+TURNS="${M0_TURNS:-20}"
+
 # --- invoke 路由必须关掉 prompt cache ------------------------------------------
 # Strix 的 prompt caching 只在 Bedrock **converse** 路由上成立：它注入的
 # cache_control_injection_points 里有 {"location":"tool_config"}，而只有
@@ -222,7 +231,7 @@ WATCH_OUT="${WORK}/sandbox-watch.txt"
 WATCHER=$!
 
 # --- 跑扫描 ------------------------------------------------------------------
-say "[跑] strix -n -t ${M0_TARGET} -m quick --max-budget-usd 2 --max-turns 20"
+say "[跑] strix -n -t ${M0_TARGET} -m quick --max-budget-usd ${BUDGET} --max-turns ${TURNS}"
 say "     （退出码 2 = 发现漏洞 = 成功，见 CLAUDE.md §Strix 集成）"
 SCAN_LOG="${WORK}/strix-stdout.log"
 set +e
@@ -231,7 +240,7 @@ HOME="${HOME_DIR}" \
 TMPDIR="${WORK}/tmp" \
 STRIX_RUN_ID="${RUN_ID}" \
 strix -n -t "${M0_TARGET}" -m quick \
-      --max-budget-usd 2 --max-turns 20 \
+      --max-budget-usd "${BUDGET}" --max-turns "${TURNS}" \
       --config "${CFG}" > "${SCAN_LOG}" 2>&1
 SCAN_RC=$?
 set -e
@@ -297,6 +306,13 @@ elif grep -qE 'AuthenticationError|security token included in the request is inv
   EARLY="凭据无效（能连上端点，是鉴权被拒）"; CODE="invalid_api_key"
 elif grep -qE 'AccessDenied|not authorized to perform|ValidationException' "${SCAN_LOG}"; then
   EARLY="凭据有效但无权调用该模型（Bedrock 需在该区域申请模型访问权）"; CODE="model_access_denied"
+elif grep -qF 'UNKNOWN MODEL NAME' "${SCAN_LOG}"; then
+  # 2026-09-14 实测撞到的**新失败模式**：模型名里没有 `/`，Strix 在起飞前就
+  # `sys.exit(1)`（interface/main.py:186），run.json 都不会生成。
+  # 原来的分类器不认这条，于是断言 1/3/4 被记成「未通过」而不是「无从判定」——
+  # 正是本脚本注释里警告过的那种误导（人会去查挂载，真凶是模型名）。
+  EARLY="模型名不是 <provider>/<model> 形状（裸名默认路由到 OpenAI，Strix 起飞前直接退出）"
+  CODE="model_name_not_provider_qualified"
 elif grep -qE 'NotFound|model_not_found|MODEL NOT FOUND' "${SCAN_LOG}"; then
   EARLY="模型名不存在或该区域不提供"; CODE="model_not_found"
 elif grep -qF 'MISSING REQUIRED ENVIRONMENT VARIABLES' "${SCAN_LOG}"; then
@@ -477,6 +493,46 @@ else
   bad "5 残留 ${LEFT} 个 —— 这正是 Reaper 存在的理由，记下来给 T30"
   docker ps -a --filter "label=strix-run-id=${RUN_ID}" \
     --format '        {{.Names}} {{.Status}} {{.Image}}' | tee -a "${REPORT}"
+fi
+say ""
+
+# =============================================================================
+# 断言 6：成本记账不为 0 —— `--max-budget-usd` 能不能拦截，全压在这一个数上
+#
+# 为什么这条要每次升级都重跑（PLAN.md §Strix 版本升级 阶段 4 第 ② 项）：
+#   护栏的判据是 core/hooks.py:55 的 `cost >= max_budget_usd`。cost 由
+#   report/usage.py 的 total_cost 给出，而它是 `observed if has_observed else estimated`：
+#     · observed  = litellm 自己回的 response_cost（report/state.py:866-887）
+#     · estimated = 本地价目表兜底（report/usage.py:203-219）
+#   两条都算不出来时 cost 恒为 0，于是护栏**永不触发**，且**不报任何错**。
+#   1.6.2 新增的 report/pricing.py 已实测把 Bedrock 名字解析成 `bedrock_converse/…`，
+#   而 litellm 1.100.0 的 completion_cost 不认这个前缀（BadRequestError）——
+#   也就是说**兜底那条路对我们的模型已经是断的**，护栏现在完全依赖 observed。
+say "[断言 6] 成本记账非 0（预算护栏的唯一前提）"
+if [ -z "${_RJ}" ]; then
+  skip "6 无从判定：找不到 run.json"
+else
+  # 只读三个数字，不读别的 —— run.json 里没有凭据，但少读一样是少一个泄漏面。
+  set -- $(python3 -c 'import json,sys
+u = json.load(open(sys.argv[1])).get("llm_usage") or {}
+print(u.get("cost") or 0, u.get("total_tokens") or 0, u.get("requests") or 0)' "${_RJ}" 2>/dev/null)
+  _COST="${1:-0}"; _TOK="${2:-0}"; _REQ="${3:-0}"
+  say "      llm_usage: cost=${_COST} total_tokens=${_TOK} requests=${_REQ}  预算上限=${BUDGET}"
+  if [ "${_REQ}" = "0" ] || [ "${_TOK}" = "0" ]; then
+    skip "6 无从判定：一次 LLM 调用都没完成，谈不上记账"
+  elif python3 -c "import sys; sys.exit(0 if float('${_COST}') > 0 else 1)"; then
+    ok "6 cost=${_COST} > 0 —— observed 成本进得来，护栏的判据成立"
+  else
+    bad "6 cost 恒为 0 而 tokens=${_TOK} —— **预算护栏静默失效**，--max-budget-usd 永不触发"
+    say "        这正是 report/pricing.py 那条断掉的兜底暴露出来的后果，发布阻断。"
+  fi
+  # 拦截行为本身：只有拿一个小到必然撞上的预算跑才看得见（M0_BUDGET=0.1）。
+  case "${_ST:-}" in
+    stopped|budget_paused)
+      say "      i 本次 status=${_ST} 且 cost=${_COST} / 上限 ${BUDGET} → **护栏真的掐住了扫描**（阶段 4 ② 实测到）" ;;
+    completed)
+      say "      i 本次 status=completed，cost 未触及上限 —— 只证明了记账在跑，**没证明拦截**。" ;;
+  esac
 fi
 say ""
 

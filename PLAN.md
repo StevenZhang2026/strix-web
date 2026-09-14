@@ -7,14 +7,21 @@
 **代码状态**：**T0–T9 已完成并全部提交**（最后一次是 `1a04e8e`「T9：ScanLauncher + 6 个模板 +
 GET /api/scan-templates」）。T9 的落地内容、我自己做的 8 次 mutation 复验、以及那个"声明了却没有任何
 一处强制"的真缺陷，全部记在 **T9 行**，本节不复述。
-**本轮（2026-09-14 第三段会话）做完了 `strix-agent` 1.5.3 → 1.6.2 的升级，全部未提交**：用户推翻了我
-"先做 T10、pin 留到 T13 之前"的建议，拍板先升。四件待决全部裁决完，实录、逐条实测、两处 runbook 订正
-都在 **§Strix 版本升级 §七/§八**，本节不复述。**阶段 4（真跑复验）还没做，所以这次升级只能算"静态全绿"。**
-**升级必须是单独一个 commit，不许和 T10 或任何业务改动混**（回滚要能靠 `git revert`）。
+`strix-agent` 1.5.3 → 1.6.2 的升级**已提交**（`78de5c6`，单独一个 commit）。四件待决全部裁决完，实录与
+逐条实测在 **§Strix 版本升级 §七/§八**，本节不复述。
+**本轮（2026-09-14 第四段会话）做的是阶段 4 复验的可执行部分，全部记在 §Strix 版本升级 §九**：
+修好了"生产容器还跑着 1.5.3"这个会让阶段 4 空跑的前提（已重建镜像与容器）；离线查出 1.6.2 的
+**本地成本兜底对 Bedrock 名字已经断了**（`pitfalls` 条 38，发布阻断级的风险，但护栏还有 `observed` 一条路）；
+给 `scripts/m0_probe*.sh` 加了 `M0_BUDGET`/`M0_TURNS` 与**断言 6**（`llm_usage.cost>0`）。
+**用户已真跑，①②③ 全部实测通过**（`通过 10 / 失败 0 / 跳过 0`），④ `make verify-e2e` 仍待 T30b。
+真跑还带出四件事，都记在 §九：预算超支的量级是「一次调用的成本」而不是百分比（给 $0.1 花了 $0.2024，
+`overflowNote` 文案已改）、面板 `title=` 是个无效度量（8 个 Panel 同一个 title，归因要用正文首行）、
+`persist_current()` 回写的 env 块变宽了（209 字节 / 4 个键）、模型名拼错会让 `completion_cost` 返回 `0.0`
+从而让护栏形同不存在（建议 `ScanLauncher` 加断言，未实现）。
 **工作区**：未跟踪的 **`plan-t10.md`（T10 方案，待审）** 与未跟踪的 `pitfalls/local-env.md`（在 `.gitignore`
-里，别提交它）；已改未提交的是升级那一套 —— `backend/{pyproject.toml,Dockerfile,pins.txt,pins-dev.txt,
-requirements.lock,requirements-dev.lock}`、`scripts/check_lock.py`、`backend/app/{main.py,services/system_status.py,
-services/allowlist.py}` 的注释、`backend/tests/test_system_status.py` 两个假值、`CLAUDE.md` 两行、`PLAN.md`。
+里，别提交它）；已改未提交的是本轮这几个文件 —— `scripts/m0_probe.sh`、`scripts/m0_probe_inner.sh`、
+`pitfalls/history-pitfalls.md`（条 38）、`frontend/messages/zh-CN.json`（一句文案）、`CLAUDE.md` 一行、`PLAN.md`。
+靶场 `m0-juice-shop` **刻意没删**（`CLAUDE.md` 说它已就绪、重跑 M0 要用它）。
 **闸门（2026-09-14 升级后亲自跑过官方闸门）**：`make lint` 干净、`make test` **682 passed / 0 skipped /
 13.6 秒**（与升级前同数）。快闸门命令（`agent-rules.md` §九.4 要的秒级闸门，**已实测，别改**）：
 
@@ -123,12 +130,15 @@ stdout"，残余部分记成矩阵 #17 归 T12。**这三条目前只写在 `pla
 → 产出 **R4 那 9 个耦合点碎了哪几条**。**这一步是整个流程的价值所在**：把"升级"从"跑跑看"变成"改这 3 条"。
 **阶段 3 落地**（0.5–4 工时）profile 加/改条目 → 改 **3 处手写** pin 落点（`pyproject.toml`、
 `Dockerfile:113` 断言、`check_lock.py:26`）→ **`make lock` 和 `make lock-dev` 两个都跑**（前者不含 dev lock，
-漏了就是"装 1.5.3 却按 1.6.2 断言"，见 §八）→ 重建镜像（6–15 分钟）→ 改碎掉的代码 →
+漏了就是"装 1.5.3 却按 1.6.2 断言"，见 §八）→ **重建生产镜像和测试镜像两个**
+（`docker compose -p strix-console build api` + `up -d api` 重建容器；`make build-test`。
+只重建测试镜像 ⇒ 阶段 4 在旧版本容器里空跑，实测踩过，见 §九）→ 改碎掉的代码 →
 **官方闸门 `make lint` + `make test`（必须 0 skipped）** → 按变动面重采夹具（run 目录或 `agents.db` 变了则
 **T15a 压缩夹具要真跑一次扫描**，这是阶段 3 最贵的单项）。
 **阶段 4 真跑复验**（**半天墙钟，一项都不能跳** —— 这四类都是"变了不报错、只静默给错答案"，测试碰不到）：
-① `./scripts/m0_probe.sh` 断言日志出现**容器 IP** 而非 `127.0.0.1`（两个未文档化 env）；② **重验 `completion_cost`**
-（litellm 跟着升 ⇒ **预算护栏静默变 0**）；③ Key 卫生：镜像 env 扫 + 任务目录外全盘扫 `LLM_API_KEY`
+① `./scripts/m0_probe.sh` 断言日志出现**容器 IP** 而非 `127.0.0.1`（两个未文档化 env）；② **重验成本估算**
+（strix **或** litellm 升级都可能让**预算护栏静默变 0**，条 38 已实测发生过）：先离线跑一遍候选名 →
+`completion_cost`，再 `M0_BUDGET=0.1 ./scripts/m0_probe.sh` 看断言 6 与拦截；③ Key 卫生：镜像 env 扫 + 任务目录外全盘扫 `LLM_API_KEY`
 （`persist_current()` 写盘路径可能变）；④ `make verify-e2e` 28 条。
 **阶段 5 可回滚**：**升级必须是一个单独的 commit，不与任何业务改动混** —— 有 pin + hash lock，回滚 =
 `git revert` + 重建镜像；一混进业务改动，回滚就变成手术。（拟写进 `CLAUDE.md` §禁区，**待放行**。）
@@ -217,10 +227,78 @@ stdout"，残余部分记成矩阵 #17 归 T12。**这三条目前只写在 `pla
   降级为一次快速确认。**但 Strix 新增了 `report/pricing.py`**（它自己怎么算钱变了），所以 `--max-budget-usd`
   的**实际拦截行为**仍要在阶段 4 真跑时看一眼。
 
-**阶段 4 仍未做（「自」类，要真凭据 + 真扫描，结构上不可派发）**：① `./scripts/m0_probe.sh` 断言日志出现
-**容器 IP** 而非 `127.0.0.1`；② `--max-budget-usd` 真拦截（见上）；③ Key 卫生全盘扫 `LLM_API_KEY`；
-④ `make verify-e2e` 28 条 —— **它待 T30b，本次无法执行，如实记账为"跳过"，不是"通过"**。
-**在阶段 4 跑完之前，这次升级只能算"静态全绿"。**
+### 九、阶段 4 复验（2026-09-14 第四段会话；**准备工作已做完，真跑那一步待用户**）
+
+**先修了一个会让整个阶段 4 变成空跑的前提**：上一段会话只重建了 `api-test` 镜像，
+**生产镜像与 `strix-console-api-1` 容器里仍是 1.5.3**（容器 `Up 5 days`，起于 09-09）。
+在那个容器里跑 `m0_probe.sh` 测的是旧版本，结论会是假的。已 `docker compose -p strix-console build api`
+（全部层命中 15:31 那次构建的缓存，秒级）+ `up -d api` 重建容器 → 容器内实测 `strix-agent 1.6.2`、
+healthy、双网络 `strix-console_default` + `strix_sandbox`、`http://juice-shop:3000` 返回 200。
+**教训：阶段 3 的"重建镜像"必须包含生产镜像，只重建测试镜像会让阶段 4 沉默地测错版本**（已写进 §五 阶段 3）。
+
+**② 的一半可以不用凭据就查完，而且查出了真问题** —— 见 `pitfalls` **条 38**：1.6.2 新增的
+`report/pricing.py` 把 Bedrock 模型名解析成 `bedrock_converse/…`，而 litellm 1.100.0 的
+`completion_cost` 不认这个前缀 → **本地成本兜底对我们要用的每一个 Bedrock 名字都返回 `None`**
+（1.5.3 同样输入算得出 `$0.0825`；Gemini 名字不受影响）。后果：预算护栏现在**完全**依赖
+litellm 自己回的 `response_cost`（`report/state.py:866-887`）。它若也缺，`llm_usage.cost` 恒 0、
+`core/hooks.py:55` 永假、`--max-budget-usd` 不拦任何东西且**不打日志**。
+→ 真跑时唯一要看的数就是 **`run.json` 的 `llm_usage.cost > 0`**。
+
+**为此改了 `scripts/m0_probe*.sh`（两处，都是阶段 4 每次都要用的能力，不是顺手扩展）**：
+① 预算与轮次可由环境变量覆盖（`M0_BUDGET` 默认 2、`M0_TURNS` 默认 20）—— 不能覆盖就没法拿一个
+必然撞上的小预算去实测"真拦截"；② 新增**断言 6**：读 `run.json.llm_usage` 的 `cost/total_tokens/requests`，
+`cost>0` 记 PASS、`cost==0` 而 tokens>0 记 **FAIL（发布阻断）**、一次 LLM 调用都没完成记「无从判定」，
+并按 `status` 打印拦截判读。已用三份合成 `run.json` 覆盖三个分支、并在容器内 `sh -n` 过语法。
+
+**顺带核实**：`STRIX_IMAGE=ghcr.io/usestrix/strix-sandbox:1.3.0` 与 1.6.2 自己的默认值
+（`config/settings.py:109`）**一致** —— 沙箱镜像 tag 是 R4 那 8 个耦合点之外的一个耦合点，这次没碎。
+生产镜像 env 干净（只有已知假阳性 `GPG_KEY`，条 17b）、`import pytest` 仍然失败、api 容器 env 无凭据形状的键。
+
+**真跑结果（2026-09-14 08:40 UTC，用户执行 `M0_BUDGET=0.1 M0_TURNS=6 ./scripts/m0_probe.sh`，
+`bedrock-apikey` + `bedrock/invoke/us.anthropic.claude-sonnet-4-6` + juice-shop）：
+`通过 10 / 失败 0 / 跳过 0`，退出 0。①②③ 全部实测通过**：
+
+- **① Caido**（最高风险项）：`Caido host endpoint resolved: http://172.19.0.4:48080` —— 容器 IP，
+  两个未文档化 env 在 1.6.2 上仍然生效。沙箱 `networks=strix_sandbox(172.19.0.4)`、
+  `labels` 含 `strix-run-id=probe` + `strix-run-type=console`（`make reap` 的回收前提成立）、跑完无残留。
+- **② 预算护栏**：`llm_usage.cost=0.2024088`、`requests=1`、`status=stopped`，
+  strix.log 写下 `Token budget of $0.10 exceeded (spent $0.2024)` —— **护栏真的掐住了扫描**。
+  即：条 38 那条断掉的本地兜底**目前没有让护栏失效**，因为 litellm 的 `observed` response_cost
+  对 `bedrock/invoke/…` 是回得来的。**但它现在是唯一的一条路**，所以断言 6 要长期留着。
+  同一次实测把"软上限只超一点"推翻了 —— 见 §后端接口 的「预算的真实语义」（超 102%）。
+- **③ Key 卫生**：2a 数据目录全树 0 命中、2b `/root` 0 命中、2d 七个落盘面 0 命中、
+  3 沙箱 inspect `KEYSCAN=clean`。**2c 有一个 1.6.2 的新观察**：预置 `cli-config.json`
+  从 11 字节被写到 **209 字节**，内含 `STRIX_LLM STRIX_PROMPT_CACHE STRIX_IMAGE STRIX_TELEMETRY`
+  四个键 —— `persist_current()` 现在回写的 env 块比以前宽（§八 那条 `_read_env_block()` 的后果）。
+  本次凭据形状是 bearer，四个 `AWS_*` 都不在 alias 表里所以没落盘；**换成 `single` 形状，
+  `LLM_API_KEY` 就会明文进这个文件** —— tmpfs HOME + 显式 `--config` + `finally rmtree`
+  仍然是唯一防线（条 25），且这次是**看着它被写了**才确认防线有效，不再是推断。
+- **④ `make verify-e2e` 28 条**：待 T30b，**仍然记账为"跳过"，不是"通过"**。
+
+**第一次真跑失败了，那次失败本身查出两个缺陷（都已修）**：模型名输成了裸名 `us.anthropic.sonnet 4.6`
+→ Strix 在 `interface/main.py:186` 直接 `sys.exit(1)`（面板 `UNKNOWN MODEL NAME`，裸名默认路由到 OpenAI），
+`run.json` 都没生成。
+① **探测器的早期失败分类器不认这个面板**，于是断言 1/3/4 被记成「未通过」而不是「无从判定」——
+正是脚本注释里警告过的那种误导（人会去查挂载，真凶是模型名）。已加分支，机器码
+`model_name_not_provider_qualified`。
+② **形状校验缺在凭据之前**：已在 `m0_probe.sh` 里按三种鉴权形状校验模型名（bearer 必须
+`bedrock/invoke/*`），**在问凭据之前** die，不再白输一次凭据。
+
+**顺带纠正 §八 的一个无效检查**：那张表里"Rich 面板标题无差异"是**用错了度量** ——
+`interface/{main,cli}.py` 里 8 个 Panel 的 `title=` **全都是同一个字面量** `[bold white]STRIX`，
+所以那一项恒成立、什么都没测。真正有区分度的是**面板正文首行**，1.6.2 里共 5 个：
+`LLM CONNECTION FAILED`／`MODEL NOT AVAILABLE ON SUBSCRIPTION`／`MODEL QUALITY WARNING`／
+`SESSION ENDED`／`UNKNOWN MODEL NAME`。**T10 的 `_ATTRIBUTION_RULES` 兜底要匹配这 5 个正文首行，
+不要匹配 title**；T29 的契约测试同理。
+
+**还发现一个会让护栏静默失效的输入面（记在这里给 T9/T10，本轮不实现）**：
+模型名**拼错但仍能被 litellm 认成有效前缀**时，价目表查不到、`completion_cost` 返回 **`0.0` 而不报错**
+（实测 `bedrock/invoke/us.anthropic.claude-sonnet-4-6-20260219-v1:0` → `0.0`，
+而正确的 `bedrock/invoke/us.anthropic.claude-sonnet-4-6` → `0.0495`）。
+`observed` 也走同一张表 ⇒ **cost 恒 0 ⇒ 预算护栏形同不存在，只有 `--max-turns` 拦得住花钱**。
+→ 建议 `ScanLauncher` 在构造 argv 时就断言"这个模型名算得出非零成本"，否则拒绝启动。
+
+**结论：这次升级已从"静态全绿"升为"①②③ 实测通过、④ 待 T30b"。**
 
 ## T7b 留下的两个缺口（不阻塞，别丢）
 
@@ -880,6 +958,12 @@ M0 第 3 次运行：预算耗尽被掐死（`run.json.status = "stopped"`），
 **预算的真实语义（同次实测，UI 文案必须照这个写，不许自己编）**：
 `--max-budget-usd` 是**软上限** —— 给 `2` 实花 `$2.0572`（超 2.9%），因为
 `core/hooks.py:55` 的 `cost >= max_budget_usd` 是**每轮结束后**才判，必然超一轮的量。
+**⚠️ 2026-09-14（strix 1.6.2、sonnet 4.6）实测把"超一点"这个说法推翻了**：给 `0.1` 实花
+**`$0.2024`（102%）**，且 `llm_usage.requests = 1` —— **第一次调用就 60k input tokens**，
+一次就把上限顶穿一倍。所以超出量的量级是「**一次调用的成本**」，不是一个百分比：
+上限越小，超得越离谱。派生两条产品要求（**待做，不在任何已落地任务里**）：
+① 向导的预算**下限**必须显著高于一次调用的成本（给 `0.1` 等于只跑一轮，钱花了、结论没有）；
+② `zh-CN.json` 的 `budget.overflowNote` 原写"顶出上限**一点**"，已改成不承诺量级的说法。
 另有一道 **90% 子代理保留线**（`_SUBAGENT_BUDGET_RESERVE = 0.90`，`core/hooks.py:29`）：
 子代理花到 90% 就停，留给 root agent 收尾。所以是**子代理 90% 停 / root 100% 停 / 再超一轮**。
 UI **不许**承诺"绝不超过 $X"，只能说"达到 $X 后停止"。
