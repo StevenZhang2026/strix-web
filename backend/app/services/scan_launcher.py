@@ -308,6 +308,23 @@ def cleanup_workspace(settings: Settings, scan_id: str) -> None:
     shutil.rmtree(settings.console_ephemeral_home_root / f"scan-{scan_id}", ignore_errors=True)
 
 
+def cleanup_scan_tmpdir(settings: Settings, scan_id: str) -> None:
+    """删掉 `${DATA}/scans/<id>/tmp`（子进程的 `TMPDIR`）。
+
+    **只删 `tmp`，绝不碰同级的 `strix_runs/`** —— 产物要留给 T13 读、留给 T28 续跑。
+    放在本模块而不是 supervisor：这个目录布局是 `prepare_workspace` 造的，**谁造谁删**，
+    路径知识不外泄。
+
+    ⚠️ **重新评估条件**：v1 只有 URL 目标，所以现在删它是安全的。哪天支持 git 目标就要
+    重新评估 —— 克隆目录是 `tempfile.gettempdir()/strix_repos/<run_name>`
+    （`interface/utils.py:1561`），而 `gettempdir()` 读的正是这个 `TMPDIR`；`--resume`
+    会校验 `cloned_repo_path` 还在，缺了直接 `parser.error`（`interface/cli_args.py:422`）。
+    好消息：`--resume` 真正必需的 `run.json` 与 `.state/agents.json` 都在
+    `cwd/strix_runs/` 下，不在 `TMPDIR` 里。
+    """
+    shutil.rmtree(settings.scans_dir / scan_id / "tmp", ignore_errors=True)
+
+
 def build_launch_plan(
     settings: Settings,
     spec: LaunchSpec,

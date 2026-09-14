@@ -485,9 +485,12 @@ def test_broken_auth_file_raises_never_degrades_to_no_account(tmp_path: Path, co
         AuthRecord.load(path)
 
 
-def test_missing_auth_file_blocks_startup(tmp_path: Path, restore_logging: None) -> None:
-    """没有 `auth.json` 时 lifespan 直接失败 —— 不是"先跑起来再说"。"""
-    settings = Settings(console_data_dir=tmp_path)
+def test_missing_auth_file_blocks_startup(settings: Settings, restore_logging: None) -> None:
+    """没有 `auth.json` 时 lifespan 直接失败 —— 不是"先跑起来再说"。
+
+    用共享的 `settings` 夹具而不是自己构造：T10 起 lifespan 里多了一条
+    `assert_sandbox_env()`，自己构造就会撞在它上面，而这个测试要测的是 auth 那一条。
+    """
     with pytest.raises(AuthFileError), TestClient(create_app(settings)):
         pass  # pragma: no cover
 

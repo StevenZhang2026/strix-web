@@ -6,7 +6,9 @@
     2. assert_no_credential_env()      **在打出任何一行日志之前**确认环境干净
     2b. assert_single_worker()         判据在 `key_vault`（那条约束的理由就是 vault 是
                                        进程内 dict）；紧挨第 2 步调，理由同上
-    2c. KeyVault()                     **必须在第 3 步之前** —— Redactor 要在日志配好
+    2c. assert_sandbox_env()           两个沙箱变量缺一个，抓包代理就静默降级；纯配置
+                                       校验、不打日志，所以排在第 3 步之前
+    2d. KeyVault()                     **必须在第 3 步之前** —— Redactor 要在日志配好
                                        之前就拿到凭据来源。不用"先占位再 rebind"：那会
                                        造出一个"装上了但还是旧的"中间态，失败模式是
                                        日志照打、只是不脱敏（静默）
@@ -83,6 +85,7 @@ from app.services.allowlist import AllowlistStore
 from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
 from app.services.key_vault import KeyVault, assert_single_worker
+from app.services.scan_supervisor import ScanSupervisor, assert_sandbox_env
 from app.settings import Settings, assert_no_credential_env, load_settings
 
 logger = logging.getLogger(__name__)
@@ -287,6 +290,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 顺序见模块 docstring。
         assert_no_credential_env(os.environ)
         assert_single_worker(os.environ)
+        assert_sandbox_env(resolved)
 
         # KeyVault 必须**在 configure_logging 之前**构造：Redactor 要在日志配好之前
         # 拿到凭据来源。这一步可行是因为 `KeyVault.__init__` 的唯一依赖是 clock ——
@@ -372,6 +376,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # T7b。`POST /api/keys` 的验活器。与上面那个 resolver 同一条理由：单测必须能
         # 换掉它（真实验活会拿凭据往模型端点发一次请求）。
         app.state.llm_verifier = llm_client.verify
+        # T10。**必须在本轮就接进 lifespan**：否则 `shutdown()` 没有调用方，那就是一段
+        # 没人跑过的代码。路由是 T12 的事，这里只让它有主。
+        app.state.supervisor = ScanSupervisor(resolved, strix_version)
 
         # T7a。本项目的第一个后台任务。凭据的过期是懒判定（取用时判）为主，但没人再来
         # 取用的凭据不会被懒判定碰到，而"凭据在内存里待多久"就是 KeyVault 的安全属性
@@ -386,6 +393,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # "Task was destroyed but it is pending"，而那行字会出现在每一次正常停机的
             # 日志里，把真问题埋掉。`run_sweeper` 刻意不吞 CancelledError，所以这里
             # 必须接住它。
+            # 先让子进程退干净（它们的 tmpfs 清理挂在各自的监控任务上），再撤后台任务
+            # 与 DB 连接 —— 反过来的话，监控任务收尾时可能撞上一个已经关掉的库。
+            await app.state.supervisor.shutdown()
             sweeper.cancel()
             with suppress(asyncio.CancelledError):
                 await sweeper

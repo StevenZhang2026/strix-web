@@ -332,6 +332,13 @@ ALL_ERRORS: tuple[type[ConsoleError], ...] = (
 # 掐死的扫描同样退 0 并宣称"未发现漏洞"。一个渗透测试控制台在钱花光时报"目标干净"，
 # 比不报任何结论危险得多。
 #
+# 这一组码的语义是"**这次扫描为什么不是一次干净的完成**"，不全是故障：操作者自己点了
+# 停止、控制台重启把子进程带走，都不是任何东西坏了，但同样意味着"结论不完整"。
+#
+# 为什么不复用现成的码：`scan_incomplete` 的文案写死了"费用或轮次先用完了"，拿它解释
+# "你自己点了停止"是撒谎；而让 `error_code` 为 NULL 则意味着"没跑完但没人说得出为什么"，
+# 那就把"不许暗示目标干净"这条安全语义推给了展示层。
+#
 # 为什么是 frozenset 而不是 Enum：这些值来自对**外部程序输出**的模式匹配，取值域会
 # 随 Strix 版本变化（升级预警线是 test_strix_contract.py）。Enum 的收益是穷举性检查，
 # 而这里穷举性本来就靠不住 —— T3 的兜底分支必须存在。用 frozenset + 校验函数，把
@@ -346,6 +353,7 @@ SCAN_FAILURE_CODES: frozenset[str] = frozenset(
         "invalid_api_key",  # AuthenticationError / Incorrect API key
         "model_access_denied",  # AccessDenied / not authorized / ValidationException
         "model_not_found",  # NotFound / MODEL NOT FOUND
+        "model_name_not_provider_qualified",  # UNKNOWN MODEL NAME（裸名默认路由到 OpenAI）
         "missing_required_env",  # MISSING REQUIRED ENVIRONMENT VARIABLES
         "llm_connection_failed",  # 只剩面板标题时的兜底
         # ---- Docker 与准备阶段（面板标题即码）------------------------------
@@ -355,6 +363,10 @@ SCAN_FAILURE_CODES: frozenset[str] = frozenset(
         "scan_preparation_failed",
         # ---- 结论完整性（来自 run.json.status，不是 stdout）-----------------
         "scan_incomplete",
+        # ---- 没跑完但不是故障（来自"我们自己发过信号"这个事实，不是退出码）----
+        "stopped_by_operator",  # 操作者点了停止
+        "interrupted_by_restart",  # api 停机 / run.json.status == "interrupted"
+        "scan_failed_unknown",  # 失败退出，但输出里没有我们认识的特征
     }
 )
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Iterator
@@ -45,8 +46,17 @@ def settings(tmp_path: Path) -> Settings:
 
     显式传 `console_data_dir` 而不是改 `os.environ`：改环境变量会在测试之间泄漏，
     而且 `Settings` 是 frozen 的，注入构造参数是它设计好的入口。
+
+    两个沙箱变量必须非空：T10 的 `assert_sandbox_env()` 在 lifespan 里拒绝空值（缺了
+    抓包代理会静默降级），所以"一份能起得来的配置"就得带上它们 —— 生产里由
+    `docker-compose.yml` 写死。要测"没配置"的展示分支就自己构造 Settings
+    （`test_system_status.py` 就是那么做的），别指望这个夹具。
     """
-    return Settings(console_data_dir=tmp_path)
+    return Settings(
+        console_data_dir=tmp_path,
+        strix_image="strix-sandbox:test",
+        strix_docker_sandbox_network="strix_sandbox",
+    )
 
 
 @pytest.fixture
@@ -102,6 +112,25 @@ def make_entry(label: str = "预生产", **overrides: object) -> AllowlistEntry:
     }
     fields.update(overrides)
     return AllowlistEntry.model_validate(fields)
+
+
+def make_run_dir(
+    cwd: Path,
+    name: str = "strix-run-1",
+    status: str = "completed",
+    **extra: object,
+) -> Path:
+    """在 `cwd/strix_runs/<name>/` 下写一个 `run.json`，返回那个 run 目录。
+
+    **不放真实抓下来的 run 目录夹具**（那要连 `agents.db` 一起，是 T13 的事）：
+    T10 只读 `run.json` 的一个 `status` 字段，多余的内容只会让测试意图变模糊。
+    """
+    run_dir = cwd / "strix_runs" / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    record: dict[str, object] = {"status": status}
+    record.update(extra)
+    (run_dir / "run.json").write_text(json.dumps(record), encoding="utf-8")
+    return run_dir
 
 
 @pytest.fixture
