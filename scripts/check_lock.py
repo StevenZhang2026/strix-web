@@ -20,10 +20,12 @@ from __future__ import annotations
 import re
 import sys
 
-# 禁区：strix-agent 的 pin 不许升级或放宽（CLAUDE.md §Strix 集成）。
-# 放宽 pin 的后果不是"版本变了"，而是 sdist 的 hatch 钩子缺 Go 1.24 直接硬失败，
-# 且 PLAN.md 里那些 file:line 出处会集体失效。
-REQUIRED_PINS = {"strix-agent": "1.5.3"}
+# 禁区：strix-agent 的 pin 不许放宽成 >= / ~=（CLAUDE.md §Strix 集成）。
+# 放宽 pin 的后果不是"版本变了"，而是解析期为拿元数据去构建 sdist —— 1.6.x 只发 wheel，
+# 但未来某版可能又发 sdist，那时 hatch 钩子缺 Go 1.24 会直接硬失败。
+# 升级到新的精确版本是允许的（跟 minor、不追 patch），但要走 PLAN.md §Strix 版本升级
+# 的六阶段 runbook —— 换版本会让 PLAN.md 里那些 file:line 出处需要逐条重核。
+REQUIRED_PINS = {"strix-agent": "1.6.2"}
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 

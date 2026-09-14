@@ -59,7 +59,7 @@
 
 ## Strix 集成（不可协商；每条都已读源码核实，出处见 `PLAN.md`）
 
-- **`strix-agent==1.5.3` 精确 pin** + `--only-binary=:all:` + hash lock。**不许**升级或放宽（sdist 的 hatch 钩子缺 Go 1.24 会硬失败）；`test_strix_contract.py` 是升级预警线
+- **`strix-agent==1.6.2` 精确 pin** + `--only-binary=:all:` + hash lock（**不许放宽**成 `>=`／`~=`：解析期会为拿元数据去构建 sdist，hatch 钩子缺 Go 1.24 硬失败）。**升级是允许的：跟 minor、不追 patch**，走 `PLAN.md` §Strix 版本升级 六阶段 runbook、**单独一个 commit**；`test_strix_contract.py` 是预警线
 - **一进程一次扫描。** 模块级全局可变状态 + `configure_sdk_model_defaults` 改 `os.environ` → 同进程并发会**跨用户污染 API Key**。所以走 `subprocess` CLI，**不内嵌** `run_strix_scan()`
 - **模型只能经 `STRIX_LLM` env 注入**（CLI 无 `--model`）；产物固定写 `$CWD/strix_runs/<自动名>/`（无 `--output-dir`）→ 每任务独立 cwd
 - **退出码 `2` = 发现漏洞，必须当成功**；`0` 正常，`1` 失败。**但 `0` 不代表跑完了** —— **必须读 `run.json.status`**，`stopped` 一律「结论不完整」（`scan_incomplete`）；只凭退出码 0 报"未发现漏洞"是发布阻断项（条 24）。`1` 的归因**看 stdout 正文的异常类名，面板标题只兜底**（条 19）
@@ -114,7 +114,7 @@
 
 ## 禁区
 
-- **不许改** `PLAN.md` 里"已确认决策"表中的条目（用户拍过板，要改先问）；**不许**升级或放宽 `strix-agent` 的 pin；**不许**把 `data` 目录放进仓库（同路径挂载要求它是 `.env` 指定的绝对宿主路径）
+- **不许改** `PLAN.md` 里"已确认决策"表中的条目（用户拍过板，要改先问）；**不许**放宽 `strix-agent` 的 pin，也不许在**不走 runbook** 的情况下换它的版本（换版本要单独 commit，不与业务改动混）；**不许**把 `data` 目录放进仓库（同路径挂载要求它是 `.env` 指定的绝对宿主路径）
 - **不许**引入向 `app.strix.ai` 或任何第三方外发数据的代码路径（这是本项目存在的理由之一）；**不许**代理 Strix 自带 SPA（有邮箱门 + PostHog + 报告外发中继），专家 tab 自己渲染
 - **仓库是 public**：具名内网信息（解密设备归属、另一个 compose 项目名）与**用量/账单数字只许**留在未跟踪的 `pitfalls/local-env.md`，不许搬回被跟踪的文件；commit 身份是**仓库级** GitHub noreply 邮箱（刻意不用全局那个公司邮箱），别改回去
 - **本机有另一个在用的 Docker compose 项目（6 个容器 + 端口 3000/3080/8000/5432/6379；项目名见 `pitfalls/local-env.md`，未跟踪）。**

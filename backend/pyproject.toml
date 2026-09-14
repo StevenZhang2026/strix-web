@@ -7,7 +7,9 @@ dependencies = [
     # tui.backend.live_view / viewer.transcript / core.paths / run 目录布局 /
     # agents.db 结构 / Rich 面板标题 / 退出码 / 两个未文档化 env。
     # 升级预警线是 tests/test_strix_contract.py（T29）。
-    "strix-agent==1.5.3",
+    # 精确 pin 买的是可复现构建，不是"永不升级"：跟 minor、不追 patch，
+    # 升级走 PLAN.md §Strix 版本升级 的六阶段 runbook，且必须是单独一个 commit。
+    "strix-agent==1.6.2",
 
     # T2 新增。为什么是精确 pin 而不是 >=：与 strix-agent 同一个理由的弱化版 ——
     # lock 是 hash lock，任何版本浮动都要重跑 make lock，那就不如显式写死。

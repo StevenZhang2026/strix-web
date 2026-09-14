@@ -110,7 +110,7 @@ RUN pip install --require-hashes --only-binary=:all: -r requirements.lock
 # 构建期版本断言：把 R4 的"精确 pin"从约定变成不可绕过的构建门。
 # 用 importlib.metadata 而不是解析 `pip show` 文本输出（后者格式不受契约保护）。
 RUN python -c "import importlib.metadata as m; v=m.version('strix-agent'); \
-assert v == '1.5.3', f'strix-agent 必须精确为 1.5.3，实测 {v}'; print('strix-agent', v)"
+assert v == '1.6.2', f'strix-agent 必须精确为 1.6.2，实测 {v}'; print('strix-agent', v)"
 
 # -----------------------------------------------------------------------------
 # 刻意不做的三件事

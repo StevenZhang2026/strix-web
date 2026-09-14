@@ -498,7 +498,7 @@ def collect(settings: Settings, transport: FakeTransport) -> SystemStatusRespons
         probe=DockerProbe(transport=transport),
         self_container_ref=SELF_REF,
         app_version="0.1.0",
-        strix_version="1.5.3",
+        strix_version="1.6.2",
     )
 
 
@@ -522,7 +522,7 @@ def test_collect_all_good(tmp_path: Path) -> None:
     assert status.telemetry.strix_telemetry is False
     assert status.sandbox_image.present is True
     assert status.orphan_sandboxes.count == 0
-    assert status.versions.strix_version == "1.5.3"
+    assert status.versions.strix_version == "1.6.2"
 
 
 def test_collect_when_docker_is_down(tmp_path: Path) -> None:

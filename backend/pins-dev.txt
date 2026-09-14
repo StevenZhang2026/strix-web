@@ -130,7 +130,9 @@ litellm==1.100.0
     #   openai-agents
     #   strix-agent
 markdown-it-py==4.2.0
-    # via rich
+    # via
+    #   rich
+    #   strix-agent
 markupsafe==3.0.3
     # via jinja2
 mcp==1.30.0
@@ -238,7 +240,7 @@ starlette==1.6.0
     #   fastapi
     #   mcp
     #   sse-starlette
-strix-agent==1.5.3
+strix-agent==1.6.2
     # via strix-console-backend (pyproject.toml)
 tiktoken==0.14.0
     # via litellm

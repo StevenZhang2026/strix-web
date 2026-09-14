@@ -94,7 +94,7 @@ def _resolve_strix_version() -> str:
     """读已安装的 strix-agent 版本。
 
     拿不到就拒绝启动，而不是返回 "unknown"：整个项目建立在
-    `strix-agent==1.5.3` 的精确行为上（`agents.db` 结构、退出码语义、Rich 面板标题、
+    `strix-agent==1.6.2` 的精确行为上（`agents.db` 结构、退出码语义、Rich 面板标题、
     两个未文档化的 env）。一个装不出 strix 的镜像跑起来之后，会在第一次扫描时
     以一种完全无关的错误失败。Dockerfile 构建期已经断言过一次，这里是防"镜像被改动"。
     """

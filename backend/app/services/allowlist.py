@@ -60,9 +60,10 @@ from pathlib import Path
 #
 # 这**不是**新依赖 —— `pyyaml==6.0.3` 已经在 `requirements.lock:1506` 里带 hash pin
 # 住了。它也不是可有可无的传递依赖：`strix-agent` 对它的要求是 `pyyaml>=6.0`
-# （**非 extra、非可选**，已用 `importlib.metadata.requires` 实测）。而
-# `strix-agent==1.5.3` 这个 pin 我们不许升级也不许放宽（CLAUDE.md §Strix 集成 第 1 条），
-# 所以它不会从依赖树里消失。直接 import 它引入的额外风险被那条 pin 兜住了，为零。
+# （**非 extra、非可选**，已用 `importlib.metadata.requires` 实测；1.6.2 仍是这一条）。
+# `strix-agent` 的 pin 不许放宽，升级要走 runbook 而 runbook 的阶段 0 就会 diff
+# `requires_dist`（CLAUDE.md §Strix 集成 第 1 条），所以它不会在我们不知情的情况下
+# 从依赖树里消失。直接 import 它引入的额外风险被那条 pin 兜住了，为零。
 #
 # 为什么不用标准库：标准库里没有 YAML。而配置文件用 JSON 的代价是操作者要手写它 ——
 # JSON 不能写注释，而这个文件**必须**能写注释（`allow_reserved` 只能手改，界面上

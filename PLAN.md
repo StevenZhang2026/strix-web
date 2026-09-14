@@ -7,11 +7,16 @@
 **代码状态**：**T0–T9 已完成并全部提交**（最后一次是 `1a04e8e`「T9：ScanLauncher + 6 个模板 +
 GET /api/scan-templates」）。T9 的落地内容、我自己做的 8 次 mutation 复验、以及那个"声明了却没有任何
 一处强制"的真缺陷，全部记在 **T9 行**，本节不复述。
-**工作区**：只有一个未跟踪文件 **`plan-t10.md`（T10 方案，待审）** 与未跟踪的 `pitfalls/local-env.md`
-（在 `.gitignore` 里，别提交它）；`PLAN.md` 有本轮的两处纠正（见下）与 §Strix 版本升级 那一节未提交。
-**除此之外干净 —— 2026-09-14 第二段会话只做评估、零代码改动。**
-**闸门（2026-09-14 亲自跑过快闸门）**：**682 passed / 0 skipped / 13.8 秒**。命令（`agent-rules.md` §九.4
-要的秒级闸门，**已实测，别改**）：
+**本轮（2026-09-14 第三段会话）做完了 `strix-agent` 1.5.3 → 1.6.2 的升级，全部未提交**：用户推翻了我
+"先做 T10、pin 留到 T13 之前"的建议，拍板先升。四件待决全部裁决完，实录、逐条实测、两处 runbook 订正
+都在 **§Strix 版本升级 §七/§八**，本节不复述。**阶段 4（真跑复验）还没做，所以这次升级只能算"静态全绿"。**
+**升级必须是单独一个 commit，不许和 T10 或任何业务改动混**（回滚要能靠 `git revert`）。
+**工作区**：未跟踪的 **`plan-t10.md`（T10 方案，待审）** 与未跟踪的 `pitfalls/local-env.md`（在 `.gitignore`
+里，别提交它）；已改未提交的是升级那一套 —— `backend/{pyproject.toml,Dockerfile,pins.txt,pins-dev.txt,
+requirements.lock,requirements-dev.lock}`、`scripts/check_lock.py`、`backend/app/{main.py,services/system_status.py,
+services/allowlist.py}` 的注释、`backend/tests/test_system_status.py` 两个假值、`CLAUDE.md` 两行、`PLAN.md`。
+**闸门（2026-09-14 升级后亲自跑过官方闸门）**：`make lint` 干净、`make test` **682 passed / 0 skipped /
+13.6 秒**（与升级前同数）。快闸门命令（`agent-rules.md` §九.4 要的秒级闸门，**已实测，别改**）：
 
 ```
 docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/tests:ro" \
@@ -19,15 +24,22 @@ docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/te
   strix-console/api-test:0.1.0 pytest
 ```
 
-那个镜像里装的是**真的 `strix-agent==1.5.3`**，所以核 Strix 源码不用 clone：
+那个镜像里装的是**真的 `strix-agent==1.6.2`**（升级后已重建），所以核 Strix 源码不用 clone：
 `docker run --rm --entrypoint sh strix-console/api-test:0.1.0 -c 'python -c "import strix,pathlib;p=pathlib.Path(strix.__file__).parent;print((p/\"interface/cli.py\").read_text())"'`
 —— T10 方案里那四段源码就是这么读出来的，比 `/tmp/strix_src`（早没了）可靠。
 
-## 下一步：T10 方案待审（**代码侧唯一的待办**；另有 §Strix 版本升级 的 4 件待决）
+## 下一步：T10 方案待审（**代码侧唯一的待办**；§Strix 版本升级 的 4 件待决**已全部裁决**）
 
 方案在未跟踪的 **`plan-t10.md`**，照 `agent-rules.md` §四 模板 3 写的（主会话写方案、人审通过后
 **另起一个 agent 只做实现**）。方案第 8 节已写好派发预算（≤60 次调用、第 6 次前开始写代码、不拆），
 第 6 节 13 组测试每条都给了"能让它变红的生产代码改动"，第 9 节列了落地后要改 `PLAN.md` 的 6 处。
+
+**派发前必须先做两件事（升级带来的）**：
+① **把最小 `strix_profile.py` 并进方案**（裁决 #2/#3，范围见 §七 第 2 条）—— 方案现在是把那五项上游事实
+直接写成 `run_discovery.py`／`scan_supervisor.py` 的模块级常量，要改成"常量搬进 profile + 按版本键查找"。
+② **`plan-t10.md` 里那四段源码摘录与所有 `file:line` 要按 1.6.2 复核行号** —— **结论已经复核过、全部成立**
+（§八 那张表），但**行号漂移是实测事实**（`cli.py:133`→`139`）。实现 agent 没读过那些文件，给错行号
+它会去整读，直接撞 `agent-rules.md` §九.1。
 
 **等用户裁决 5 件事（D1–D5，方案 §5 有推荐与备选）**：
 D1 启动断言放 `main.py`（推荐，代价是 `system_status` 两个"未配置"分支在生产变得不可达）；
@@ -46,7 +58,7 @@ stdout"，残余部分记成矩阵 #17 归 T12。**这三条目前只写在 `pla
 
 ## Strix 版本升级（2026-09-14 第二段会话评估；**零代码改动，4 件待决**）
 
-**目标变更（用户口述，尚未落进 §已确认决策 —— 要改那张表得先放行）**：从「`1.5.3` 锁死、**不许**升级」
+**目标变更（2026-09-14 已放行，并已落进 §已确认决策 与 `CLAUDE.md`）**：从「`1.5.3` 锁死、**不许**升级」
 改成「**保持随时能升到最新**」。注意 pin 本身不变松：精确 pin + `--only-binary=:all:` + hash lock 全留
 （它们买的是可复现构建，不是"永不升级"），变的是这条 pin 从**冻结**变成**主动推进**。
 **明确不做多版本共存**（用户已否决）：N 版本 = N 套夹具 + N 次 M0 真跑 + N 份 Key 卫生复验，粗估 +15 工时
@@ -105,11 +117,13 @@ stdout"，残余部分记成矩阵 #17 归 T12。**这三条目前只写在 `pla
 
 **阶段 0 发现**（1 分钟）`make check-upstream`，每月一次或收到 CVE 通报时。
 **阶段 1 判定**（10 分钟，不动仓库）看阶段 0 四项 + 上游 release notes；**wheel 那项是硬否决**。
-**阶段 2 只读勘查**（10 分钟–1 工时，**不改 pin、不动 lock**）一次性容器装新版、对着它跑契约测试：
+**阶段 2 只读勘查**（10 分钟–1 工时，**不改 pin、不动 lock**）**T29 落地之前这一步只能用 wheel 源码 diff
+代替**（契约测试还不存在，做法与实测见 §八）。T29 之后：一次性容器装新版、对着它跑契约测试：
 `docker run --rm -v $PWD/backend:/src:ro python:3.12-slim sh -c 'pip install --only-binary=:all: strix-agent==<新版> pytest && pytest /src/tests/test_strix_contract.py'`
 → 产出 **R4 那 9 个耦合点碎了哪几条**。**这一步是整个流程的价值所在**：把"升级"从"跑跑看"变成"改这 3 条"。
-**阶段 3 落地**（0.5–4 工时）profile 加/改条目 → 改 7 处 pin 落点（`pyproject.toml`、`pins.txt`、`pins-dev.txt`、
-两个 `.lock`、`Dockerfile:113` 断言、`check_lock.py:26`）→ `make lock` → 重建镜像（6–15 分钟）→ 改碎掉的代码 →
+**阶段 3 落地**（0.5–4 工时）profile 加/改条目 → 改 **3 处手写** pin 落点（`pyproject.toml`、
+`Dockerfile:113` 断言、`check_lock.py:26`）→ **`make lock` 和 `make lock-dev` 两个都跑**（前者不含 dev lock，
+漏了就是"装 1.5.3 却按 1.6.2 断言"，见 §八）→ 重建镜像（6–15 分钟）→ 改碎掉的代码 →
 **官方闸门 `make lint` + `make test`（必须 0 skipped）** → 按变动面重采夹具（run 目录或 `agents.db` 变了则
 **T15a 压缩夹具要真跑一次扫描**，这是阶段 3 最贵的单项）。
 **阶段 4 真跑复验**（**半天墙钟，一项都不能跳** —— 这四类都是"变了不报错、只静默给错答案"，测试碰不到）：
@@ -130,13 +144,83 @@ stdout"，残余部分记成矩阵 #17 归 T12。**这三条目前只写在 `pla
 ≈ **25–35 工时/年**。**不跟版的替代方案不是"省下这些"，而是"某天因 CVE 被迫升级时一次付掉积压的全部差异"，
 而积压越久越贵**（1.5.3 → 今天已积两个版本）。
 
-### 七、待决 4 件（都要用户拍板，**agent 不许自己动**）
+### 七、四件待决已裁决（2026-09-14 用户拍板）
 
-1. **§已确认决策 表里那条「不许升级或放宽 pin」要不要改成「跟 minor」** —— 连带改 `CLAUDE.md` 第 62 行
-2. **第四节第 1 项 `strix_profile.py` 建不建** —— 建（5–5.5 工时，检测有清单）／不建（1 工时，只做 2–4，等真升级再说）
-3. **第 3 项要不要并进 T10 方案** —— 0 成本窗口**就在 T10 派发之前**
-4. **要不要先把 pin 推到 1.6.2 再继续 T10** —— 现在推最便宜（T13 未写），但 §Strix 集成面 那 100 行
-   `file:line` 全是对着 1.5.3 逐行读的，**换版本等于那份地图要重核一遍**（复核方式见本节开头那条 docker 命令）
+1. **跟 minor、不追 patch，但仍不许放宽成 `>=`／`~=`** —— 已改 `CLAUDE.md` 第 62 行与 §禁区 那条；
+   §已确认决策 表同步改（放行范围就是这次裁决）
+2. **`strix_profile.py` 建，但只建最小形态、并进 T10**，不立 5–5.5 工时的独立项（增量 0.3–0.5 工时）。
+   只收 T10 今天真要写的 5 项**上游事实**：`RUNS_DIR_NAME`、`RUN_RECORD_NAME`、`RUN_STATUSES`、
+   退出码 0/1/2 的语义、`_ATTRIBUTION_RULES`（stdout 异常类名→归因码，最脆的一项）+ 一个版本键。
+   **不预写** 18 个 env 名全表、CLI 参数白名单、`agents.db` 列名 —— 今天零调用点，等 T29（遍历断言）
+   与 T13（按 `scans.strix_version` 解析旧 run 目录）各自补，那才算第二、第三次使用。
+   **不进 profile** 的是我们自己的词汇：`SCAN_STATUSES`、`EXIT_MEANINGS`、`SCAN_FAILURE_CODES`、四个超时常量
+3. **第 3 项并进 T10**（同上）
+4. **先把 pin 推到 1.6.2 再做 T10** —— 用户推翻了我"先做 T10、pin 留到 T13 之前再推"的建议。**已执行，见 §八**
+
+### 八、1.5.3 → 1.6.2 升级实录（2026-09-14，按 §五 runbook 走）
+
+**阶段 0/1**：5 个 wheel，含 `manylinux_2_17_aarch64` + `manylinux_2_17_x86_64`（**硬否决项通过**），
+**无 sdist**，`requires_python>=3.12` 未变。`requires_dist` **零新增依赖**，现有 pin 全部落在新约束内
+（`cryptography 48.0.1<49`、`openai 2.54.0<3`、`openai-agents[litellm] 0.19.4<0.20`、`pydantic 2.13.5>=2.11.3`）。
+两个 extra（`bedrock`→boto3、`vertex`→google-auth）我们都不装，boto3 本来就经 litellm 进来。
+
+**⚠️ 阶段 2 现在不能照 runbook 字面执行**：那一步要跑 `test_strix_contract.py`，而它是 **T29、还没写**。
+本次改用 **wheel 源码 diff**，这也是 T29 落地之前唯一可行的做法（**比"跑跑看"更准**，把升级变成"改这几条"）：
+`docker run --rm -v /tmp/strixdiff:/out python:3.12-slim sh -c 'pip download --no-deps --only-binary=:all: -d /out strix-agent==1.6.2 && cd /out && python -m zipfile -e strix_agent-1.6.2-*.whl /out/new/'`
+解开后与 api-test 镜像里那份**真 1.5.3**（取法见 §交接 那条 docker 命令）逐文件比。
+**结论：R4 的 8 个耦合点碎 0 条。**
+
+| 耦合点 | 1.6.2 实测 |
+|---|---|
+| `viewer/transcript.py` | **字节完全相同** |
+| `core/paths.py`（run 目录布局） | **字节完全相同**，`strix_runs` 字面值未变 |
+| `tui/backend/live_view.py` + `projection.py` 游标 API | 函数体有改动，**公开签名零差异**（`grep -E "^\s*(class \|def \|    def )"` 逐条比） |
+| 退出码 0/1/2 | `interface/cli.py` 的退出码 diff **为空**；信号处理器仍是 `report_state.cleanup(status="interrupted")` + `sys.exit(1)`（位置 `cli.py:133`→`139`）→ `plan-t10.md` §2.1／§2.3 的结论**在 1.6.2 上仍然成立** |
+| `run.json.status` 取值域 | `core/agents.py` 的 `Status` 那 7 个字面量一字未动（新增一个 `TERMINAL_STATUSES` frozenset，**我们不 import**）；`report/state.py:640` 那个把 `stopped` 挡回 `interrupted` 的守卫还在 |
+| Rich 面板标题 | `cli.py`／`main.py` 的 `title=` 集合**无差异** |
+| 18 个 env 名 | **只增不改不删**。新增 4 个：`EXA_API_KEY`、`STRIX_WEB_SEARCH_PROVIDER`（默认 `auto`）、`STRIX_EXA_NUM_RESULTS`、`STRIX_EXA_SEARCH_TYPE`（`config/settings.py:135-144`）|
+| `agents.db` 结构 | `interface/tui/history.py` **字节相同**；全树无 `CREATE TABLE` —— 建表方是 `openai-agents` 的 `SQLiteSession`，而 1.6.2 的约束 `<0.20,>=0.19.0` 被现有 `0.19.4` 满足 → **这个风险面不随 strix 升级而动，它挂在 openai-agents 的 pin 上** |
+| CLI 长选项 | **只增不删**：`--mcp-config`／`--mcp-exclude`／`--mcp-server`／**`--workspace-file`** |
+| §禁区 外发红线 | 新增的 `interface/cloud/`（app.strix.ai 托管平台）只在 `interface/main.py:458` 的 `sys.argv[1] == "cloud"` 硬门后 import，我们的 argv 进不去；`STRIX_TELEMETRY` 仍是 `config/settings.py:120` 的 alias（默认 True，我们设 false）、`STRIX_NO_UPDATE_CHECK` 仍在 `update_check.py:49`。`start_import_warmup()`（`main.py:462`，新增）是 import 预热、无外发端点 |
+
+**两个副产品（不改本次升级的结论，但要落到 T9/T10）**：
+① **`--workspace-file` 在 1.6.2 里存在了** → T9 行 ③「spec 上传 v1 不做」的**理由**（"1.5.3 的 CLI 里没有"）作废；
+结论要不要跟着变是产品决策，**待你拍板**，别让实现 agent 自己决定。
+② `EXA_API_KEY` 是**新的可选凭据面**（web search provider）。不设即无行为变化，但按 `pitfalls` 条 20/25，
+加供应商要配凭据卫生断言；`STRIX_WEB_SEARCH_PROVIDER` 要不要进 T9 的 `_PINNED_ENV` 是 T10 派发前的小决定。
+
+**阶段 3 实测（两处 runbook 要改）**：
+① **7 处 pin 落点里只需手改 3 处**：`backend/pyproject.toml:10`、`scripts/check_lock.py:26` 的 `REQUIRED_PINS`、
+`backend/Dockerfile:113` 的构建期断言。其余 4 处（`pins.txt`／`pins-dev.txt`／两个 `.lock`）**由 lock 目标生成**，
+手改它们等于和生成器打架。
+② **`make lock` 不含 dev lock** —— 它是 `lock-resolve + lock-hash + lock-check`，只管 `requirements.lock`；
+`requirements-dev.lock` 要**另跑 `make lock-dev`**。漏了这一步的后果很隐蔽：测试镜像装的是 dev lock，
+于是 `make test` 会装着 1.5.3 却对着 1.6.2 的断言跑。实测结果：prod 86 包/2047 哈希、dev 90 包/2071 哈希，
+两次 `check_lock` 都通过，且 `lock-dev` 自带的交叉校验报「dev lock 未改动任何运行时 pin」。
+**pins 的真实改动只有两处**：`strix-agent` 那一行，加上 `markdown-it-py` 多了一行 `# via strix-agent`
+（1.6.2 把它写进了 `requires_dist`，版本号没动）。
+③ 顺手订正了三处**论证依赖"永不升级"**的注释（`app/main.py:97`、`services/system_status.py:43`、
+`services/allowlist.py:64`）：结论不变（1.6.2 的 `requires_dist` 实测仍含 `cryptography<49,>=48.0.1` 与
+`pyyaml>=6.0`），但理由改成"pin 不许放宽 + 升级走 runbook，阶段 0 就会 diff `requires_dist`"。
+`tests/test_system_status.py` 那两处 `1.5.3` 是**注入的假值**（测的是原样透出，不读真实版本），一并改成 1.6.2。
+④ 官方闸门：`make lint`（ruff + eslint + tsc）干净，`make test` **682 passed / 0 skipped / 13.6 秒**（与升级前同数）。
+
+**阶段 2 补扫（R4 那 8 个点之外，两个安全相关的改动文件）—— 这是我第一遍漏掉的，别照抄那份清单**：
+- `config/loader.py:26` 的 `_DEFAULT_PATH` **仍是 `Path.home()/".strix"/"cli-config.json"`**，`persist_current()`
+  仍在 `loader.py:63` → **tmpfs HOME + 显式 `--config` + `finally rmtree` 这条唯一防线继续有效**（`pitfalls` 条 25、
+  §Key 不落盘）。新增的 `_read_env_block()`／`_drop_stale_llm_connection()` 只改"怎么合并"，不改写盘位置。
+- `utils/secret_files.py` **变严了**：原来临时文件删不掉是 `contextlib.suppress(OSError)` 静默吞掉，现在改成
+  抛 `OSError("could not store the secret, and the temporary file <path> still holds it...")`。**这条消息含路径、
+  不含密钥**，无新泄漏面；但它是一个**新的失败模式**，归因兜底要接得住（T10 的 `_ATTRIBUTION_RULES`）。
+- **`litellm` 没有跟着升**（lock 里仍 `1.100.0`，因为 1.6.2 对它的约束是无上下界的 `litellm`）
+  → 阶段 4 的 ②「重验 `completion_cost`，litellm 跟着升 ⇒ 预算护栏静默变 0」**这一次因果机制不存在**，
+  降级为一次快速确认。**但 Strix 新增了 `report/pricing.py`**（它自己怎么算钱变了），所以 `--max-budget-usd`
+  的**实际拦截行为**仍要在阶段 4 真跑时看一眼。
+
+**阶段 4 仍未做（「自」类，要真凭据 + 真扫描，结构上不可派发）**：① `./scripts/m0_probe.sh` 断言日志出现
+**容器 IP** 而非 `127.0.0.1`；② `--max-budget-usd` 真拦截（见上）；③ Key 卫生全盘扫 `LLM_API_KEY`；
+④ `make verify-e2e` 28 条 —— **它待 T30b，本次无法执行，如实记账为"跳过"，不是"通过"**。
+**在阶段 4 跑完之前，这次升级只能算"静态全绿"。**
 
 ## T7b 留下的两个缺口（不阻塞，别丢）
 
@@ -187,6 +271,7 @@ Key **仅存活于内存与本次任务的子进程环境中，绝不落盘**。
 | **凭据形状** | **采纳 N1（2026-09-08 拍板）** —— `auth_shape` 是**独立于 provider 的一个维度**，不是它的属性；一个 handle 指向一**组**凭据（Bedrock SigV4 要 3 个值）。`POST /api/keys` 收 `auth_shape` + `secrets{env名→值}` + `params`；`/api/providers` 声明每家支持哪几种形状、每种要哪几个键；后端**只接受所选形状声明的键，多余的一律 `400 unexpected_secret_key`**。`auth_shape` 还决定模型名怎么拼（bearer 必须补 `invoke/`）。细则见 §N1 |
 | **企业 CA** | **采纳 N2（2026-09-08 拍板）** —— compose 上一对**可选**变量，运行期由操作者显式挂 CA bundle，默认关闭；**构建期烧进镜像永久禁止**。细则见 §N2 |
 | **登录** | **单账号登录，实现（2026-09-08 用户拍板，撤销原「延后」）** —— 一个用户名 + 口令；散列存 `${DATA}/auth.json`(0600)、**不进 SQLite**；会话是服务端不透明 id，存 api 进程内存、**不用 JWT**；cookie `HttpOnly; Secure; SameSite=Strict`。**不做**多用户、不做数据隔离（`scans`/`authorizations` 不加 owner 列）。细则见 §单账号登录 |
+| **Strix 版本策略** | **跟 minor、不追 patch（2026-09-14 拍板，撤销原「`1.5.3` 锁死、不许升级」）** —— 精确 pin + `--only-binary=:all:` + hash lock 全留（它们买的是**可复现构建**，不是"永不升级"），**不许放宽成 `>=`／`~=`**；新 minor 发布后等 7–10 天再升（除非 CVE），走 §Strix 版本升级 六阶段 runbook、**必须单独一个 commit**。当前 **`1.6.2`**（2026-09-14 从 1.5.3 升上来，实录见 §八）。停止跟版的四个硬条件见 §五 末段 |
 | API Key | 仅会话内不落盘：浏览器只存 opaque handle（sessionStorage），明文 Key 只在后端内存 + 子进程 env |
 | 技术栈 | FastAPI 后端 + Next.js/React 前端 + nginx 反代，WebSocket 推增量（SSE 兜底）|
 | 易用性 | 上述四项全要 |
@@ -198,8 +283,13 @@ Docker Desktop `29.7.2` / Compose `v5.4.0` ✅ ｜ 宿主 Python 仅 `3.9.6`，�
 
 ---
 
-## Strix 集成面（已逐行读源码核实；v1.5.3。**下面所有 `file:line` 的复核方式见 §交接** ——
-原来的 clone `/tmp/strix_src`（HEAD `0a6e8b01`）**已不存在**，改从测试镜像里读已安装的包）
+## Strix 集成面（已逐行读源码核实；**原文对着 v1.5.3 读，2026-09-14 已升到 v1.6.2**。
+**下面所有 `file:line` 的复核方式见 §交接** —— 原来的 clone `/tmp/strix_src`（HEAD `0a6e8b01`）
+**已不存在**，改从测试镜像里读已安装的包）
+
+> **⚠️ 这份地图的「结论」经 1.6.2 源码 diff 复核仍然成立（§八 那张表逐条列了），但「行号」会漂移**
+> —— 实测 `cli.py:133`→`139`。所以**引用某个 `file:line` 之前先用 §交接 那条命令核一次行号**，
+> 别把行号当契约；契约是那条结论。
 
 ### 硬约束，直接决定架构
 
@@ -286,7 +376,7 @@ Strix 自己的 viewer 也有这个问题，只是它 500ms 全量重渲染盖�
 | `build_bind_mounts` | `$TMPDIR/strix_repos/<run>/` | `-t https://github.com/...` |
 | `_metadata_mounts` | `<tree>/.git` 等（只读覆盖）| 带 git 的本地目标 |
 | `stage_api_specs` | `$TMPDIR/strix_api_specs/<run>` | `-t ./openapi.yaml`、`postman://` |
-| `build_extra_file_bind_mounts` | `<cwd>/strix_runs/<run>/.state/extra_files/<i>/` | ~~`--workspace-file`~~ **1.5.3 的 CLI 没有这个参数**（2026-09-14 `strix --help` 实测）—— 这一行只在内嵌 API 上可达，对我们等于不存在。API spec 要进沙箱只有一条路：`-t <spec 文件>`（`-t` 明写接受 OpenAPI/Swagger `.json/.yaml` 与 Postman 导出），走的是上一行的 `stage_api_specs` |
+| `build_extra_file_bind_mounts` | `<cwd>/strix_runs/<run>/.state/extra_files/<i>/` | `--workspace-file` **1.5.3 的 CLI 没有它，1.6.2 里有了**（2026-09-14 源码 diff 实测，见 §八）—— 这一行在 1.6.2 上**变成可达的**，但用不用是产品决策、**待拍板**；拍板之前 v1 仍不做。API spec 要进沙箱只有一条路：`-t <spec 文件>`（`-t` 明写接受 OpenAPI/Swagger `.json/.yaml` 与 Postman 导出），走的是上一行的 `stage_api_specs` |
 
 → 解法：**同路径挂载** `${STRIX_HOST_DATA_DIR}:${STRIX_HOST_DATA_DIR}`，且 `TMPDIR` 也指到该卷下。
 **不能用 named volume**（其宿主路径在 Docker Desktop VM 内，两侧不一致，会静默重现此 bug）。
@@ -533,7 +623,7 @@ CLI 从不填充（`interface/cli.py` 构造 `scan_config` 时没有 `skills` �
 | 全面体检（推荐）| `standard` | $25 / 200 | 先枚举功能与角色，再系统性走 OWASP Top 10 全入口；边走边记 coverage |
 | 深度审计 | `deep` | $80 / 500 | 按功能域派生子 agent；把发现串成完整攻击链而非孤立原语 |
 | 只测登录与权限 | `standard` | $15 / 120 | 登录/注册/找回/改邮箱/MFA/会话/JWT/水平与垂直越权；**不**花轮数在 XSS 与注入上；只用自建账号，绝不锁死真实账号（UI 收集测试账号并附到指令）|
-| API 接口测试 | `standard` | $25 / 200 | 枚举 spec 每个 operation；额外报告"spec 里有但不可达"与"未文档化但存在"的接口。**⚠️ 上传 spec 在 v1 不做**（2026-09-14 T9 方案审阅时定）：原写的 `--workspace-file` 在 1.5.3 的 CLI 里**不存在**（见 §DooD 路径别名 那张表），唯一的路是把 spec 当成第二个 `-t` 目标，而那要先让 `target_guard` 接受"文件路径"这一类目标（v1 只放 URL/域名/IP，§架构）。所以 v1 这个模板 = 指令正文 + 普通 URL 目标；开放它是 T18/T19 的事，不是 T9 的 |
+| API 接口测试 | `standard` | $25 / 200 | 枚举 spec 每个 operation；额外报告"spec 里有但不可达"与"未文档化但存在"的接口。**⚠️ 上传 spec 在 v1 不做**（2026-09-14 T9 方案审阅时定）：原写的 `--workspace-file` 在 1.5.3 的 CLI 里**不存在**（见 §DooD 路径别名 那张表）—— **注意：1.6.2 里它存在了，所以这条「不做」的理由已作废、结论待重新拍板，在那之前保持不做**。当时唯一的路是把 spec 当成第二个 `-t` 目标，而那要先让 `target_guard` 接受"文件路径"这一类目标（v1 只放 URL/域名/IP，§架构）。所以 v1 这个模板 = 指令正文 + 普通 URL 目标；开放它是 T18/T19 的事，不是 T9 的 |
 | 上线前复检 | `standard` | $12 / 100 | 针对改动说明做回归；已报问题要**实测**是否真修好（v2 加 `--scope-mode diff --diff-base`）|
 
 **预算强制**：Strix 的 `--max-budget-usd` 本是可选（默认无限）。我们**强制必填**，
