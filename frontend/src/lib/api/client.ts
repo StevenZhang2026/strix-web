@@ -235,9 +235,11 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 }
 
 // =============================================================================
-// 后端在 T5b 阶段**真实存在**的端点，就这四个（T5 时只包了两个，登录页要用另两个）。
-// `/api/scans`、`/api/keys`、`/ws/*` 全部是 404，要等 T6/T7/T9/T13。
-// 不给不存在的接口写包装函数 —— 那会让下游以为它们能用。
+// 只包**后端真实存在、且前端此刻真的在用**的端点。不给不存在的接口写包装函数 ——
+// 那会让下游以为它们能用；也不为已经存在但还没有调用点的接口先写一个占位包装。
+// 现在是五个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）。
+// `/api/keys`、`/api/targets`、`/api/allowlist` 后端已经有了，包装留给它们的第一个
+// 调用点（T18 的向导）；`/api/scans`、`/ws/*` 仍然是 404，要等 T9/T13。
 // =============================================================================
 
 /** `GET /api/health`。免鉴权（nginx 与 compose 的 healthcheck 要打它）。 */
@@ -296,4 +298,37 @@ export function login(username: string, password: string): Promise<SessionState>
  */
 export function logout(): Promise<{ readonly ok: boolean }> {
   return apiFetch<{ readonly ok: boolean }>("/api/auth/logout", { method: "POST" });
+}
+
+/**
+ * `GET /api/system/status`。**永远 200**（诊断结果在正文的 `blockers` 里）。
+ *
+ * 下面这个类型是后端 `SystemStatusResponse` 的**真子集** —— 那个模型有九节四十来个
+ * 字段（数据目录绝对路径、孤儿容器名、证书 SAN、探测耗时…），首页侧栏五行只用得上
+ * 这五个布尔。只声明用得到的字段是本文件第三节那条"不多解析一个字段"的直接后果：
+ * 多声明的字段会被下游当成契约，而 T26 的诊断页才是那些字段真正的消费者。
+ *
+ * `bool | None` 的 `None` 在这里是 `null`，含义是"**我没能确认**"，不是"通过" ——
+ * 后端 `services/system_status.py` 那三条总则的第一条。渲染成绿点就是编造。
+ *
+ * ⚠️ 它**在全局鉴权之后**（`routes/system.py` 第 1 条），所以未登录时会 401。
+ * 这是全站第一个需要身份的接口 —— 调用方必须先确认已登录，理由见
+ * `components/system/ReadyRows.tsx`。
+ */
+export interface SystemStatusSummary {
+  readonly docker: { readonly reachable: boolean };
+  readonly network: {
+    readonly present: boolean | null;
+    readonly api_attached: boolean | null;
+  };
+  readonly data_dir: { readonly identical_path_ok: boolean | null };
+  readonly sandbox_image: { readonly present: boolean | null };
+  readonly telemetry: { readonly strix_telemetry: boolean };
+}
+
+export function fetchSystemStatus(signal?: AbortSignal): Promise<SystemStatusSummary> {
+  return apiFetch<SystemStatusSummary>(
+    "/api/system/status",
+    signal === undefined ? {} : { signal },
+  );
 }

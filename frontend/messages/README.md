@@ -34,7 +34,7 @@
    （`resolved_ip` 那组「解析到 / 声明时解析到 / 现在解析到」是**边界情形**：值是
    一个 IP，标签读成关系词尚可，暂不动；再出第三例就该统一成名词。）
 
-## 为什么机器码分成三棵树
+## 为什么机器码分成四棵树
 
 镜像后端的分法，**刻意不合并**：
 
@@ -44,12 +44,16 @@
 - `targetGuard.*` ← `app/services/target_guard.py` 与 `dns_resolver.py` 的枚举。
   **目标预览的逐条结论**，出现在 `POST /api/targets/validate` 的 200 正文里，
   一个也不是 HTTP 错误。
+- `systemStatus.blockers.*` ← `app/services/system_status.py` 的 `ALL_BLOCKER_CODES`。
+  **本机就绪的阻断项**，出现在 `GET /api/system/status` 的 200 正文的 `blockers` 里
+  （那个接口永远 200）。同样一个也不是 HTTP 错误。
 
 合成一棵的后果很具体：前端某天会想给 `llm_tls_intercepted` 找一个 HTTP status，
 而没有任何接口会用它做响应码 —— 假字段最终一定会被人当真用。`targetGuard.*` 同理，
 `invalid_port` 若躺在 `errors.*` 里，就会有人拿它去 `raise`。
 
-`targetGuard.*` 的条目是**纯字符串**，不是 `{title, detail, action}` 三段 ——
+`targetGuard.*` 与 `systemStatus.blockers.*` 的条目是**纯字符串**，不是
+`{title, detail, action}` 三段 ——
 它们渲染在输入框下面的一行里（或一个类别徽章上），不是一张错误卡片。
 所以它不参与 `test_copy_entries_are_complete` 那组按 `tree` 参数化的测试，
 有自己一组形状断言。

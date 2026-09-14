@@ -1,7 +1,7 @@
+import { ReadyRows } from "@/components/system/ReadyRows";
 import { Button } from "@/components/ui/Button";
 import { type DocketField } from "@/components/ui/Field";
 import { Panel } from "@/components/ui/Panel";
-import { Rows, type StatusRow } from "@/components/ui/Rows";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { t } from "@/lib/messages";
 
@@ -28,8 +28,9 @@ import styles from "./page.module.css";
  * 为什么在 T5 就改而不是留给后面某个任务：`PLAN.md` 的派发清单里 `src/app/*` 只有
  * T5 一个 owner（`PLAN.md:873`）。后面碰前端的四个任务各有地盘 —— T17 是
  * `components/live/*`、T18/T19 是 `components/wizard/*`、T25 是 `app/audit/*`、
- * T26 是 `app/diagnostics/*`；T3 只会把侧栏那四行的值换成真值。**没有任何后续任务
- * 会来加这段介绍**，现在不改就一直是原样。
+ * T26 是 `app/diagnostics/*`；T3 只把侧栏那一栏的值换成真值（收尾时多了一行沙箱网络，
+ * 理由在 `ReadyRows.tsx` 的 `CHECKS` 上）。**没有任何后续任务会来加这段介绍**，
+ * 现在不改就一直是原样。
  *
  * `PLAN.md` 对首屏只有一条硬要求：`PLAN.md:1144`「合规声明（README 与 UI 首屏都要有）」。
  * 那三段条款原地保留，位置也没动 —— 它仍然紧挨在按钮上方，让人在按下去之前读到。
@@ -45,10 +46,10 @@ import styles from "./page.module.css";
  * 点下去 404 的按钮比没有按钮更糟：它把"这一步还没做"变成"这个工具坏了"。
  * （同一条判据也管着 `SessionExpiredMask` 为什么本轮没有按钮。）
  *
- * 「本机就绪状态」四行同理一律是**尚未检测**（空心点）。样张里写着
- * 「Docker 可达 / Desktop 29.7.2」那种具体值 —— 那要 T3/T26 的
- * `/api/system/status`。在没有探测的情况下把它们画成绿点是编造，
- * 而这种 UI 在真的不就绪时也照样说就绪。
+ * 「本机就绪状态」那一栏**已经接上真值**（T3 收尾，2026-09-13）：它现在是
+ * `components/system/ReadyRows.tsx` 那一片客户端叶子，打 `/api/system/status`。
+ * 三态判定（只有 `true` 才画实心点，`null` 一律「未知」）与"为什么先看会话"
+ * 都在那个文件的 docstring 里，这里不复述。两处按钮仍然是禁用的。
  */
 
 /**
@@ -69,28 +70,6 @@ const DOCKET_FIELDS: readonly DocketField[] = [
   { id: "operator", label: t("home.fieldOperator"), blank: t("home.fieldOperatorBlank") },
   { id: "template", label: t("home.fieldTemplate"), blank: t("home.fieldTemplateBlank") },
   { id: "budget", label: t("home.fieldBudget"), blank: t("home.fieldBudgetBlank") },
-];
-
-/**
- * 就绪状态四项。`tone` 全是 `idle`（空心 = 还不知道），值全是「尚未检测」。
- * T3/T26 接上 `/api/system/status` 之后，这个常量会变成一次 `useQuery` 的结果，
- * 行数、行高、点的位置都不变 —— 那时不会有布局跳动。
- */
-const READY_ROWS: readonly StatusRow[] = [
-  { id: "docker", label: t("home.readyDocker"), value: t("home.readyNotProbed"), tone: "idle" },
-  {
-    id: "sandboxImage",
-    label: t("home.readySandboxImage"),
-    value: t("home.readyNotProbed"),
-    tone: "idle",
-  },
-  { id: "samePath", label: t("home.readySamePath"), value: t("home.readyNotProbed"), tone: "idle" },
-  {
-    id: "telemetry",
-    label: t("home.readyTelemetryOff"),
-    value: t("home.readyNotProbed"),
-    tone: "idle",
-  },
 ];
 
 export default function HomePage() {
@@ -169,7 +148,9 @@ export default function HomePage() {
 
       <aside>
         <Panel title={t("home.readyTitle")}>
-          <Rows rows={READY_ROWS} />
+          {/* 面板与标题留在服务端组件里，只有那几行值是客户端的 ——
+              客户端边界压到最小的那一片叶子（`components/system/ReadyRows.tsx`）。 */}
+          <ReadyRows />
         </Panel>
 
         <Panel title={t("credentials.panelTitle")}>

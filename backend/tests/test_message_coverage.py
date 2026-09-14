@@ -48,6 +48,7 @@ import pytest
 
 from app.errors import ALL_ERRORS, SCAN_FAILURE_CODES, ConsoleError
 from app.services.dns_resolver import RESOLUTION_ERROR_CODES
+from app.services.system_status import ALL_BLOCKER_CODES
 from app.services.target_guard import (
     GuardRequirement,
     OperatorOptIn,
@@ -341,3 +342,55 @@ def test_budget_copy_says_it_stops(messages: dict[str, Any]) -> None:
     删掉。那样禁语确实不见了，但用户也不知道钱花到上限会发生什么。
     """
     assert "停止" in messages["budget"]["stopsAt"]
+
+
+# =============================================================================
+# 五、`systemStatus.blockers.*` —— 第四棵机器码树（T3）
+#
+# 码的权威源是 `services/system_status.py` 的 `ALL_BLOCKER_CODES`，**不是** `errors.py`：
+# 这些值出现在 `GET /api/system/status` 的 **200 正文**的 `blockers` 里，一个也不是 HTTP
+# 错误（那个接口永远 200，见 routes/system.py 第 3 条）。混进 `errors.*` 就会有人拿
+# `sandbox_network_missing` 去 `raise`，而没有任何接口会用它做响应码。
+#
+# 条目是**纯字符串**，与 `targetGuard.*` 同一形状（渲染在首页侧栏那一行的右侧，
+# 不是错误卡片），所以不参与按 `tree` 参数化的那组三段测试。
+# =============================================================================
+_STATUS_TREE = "systemStatus"
+
+
+def _blocker_copy(messages: dict[str, Any]) -> dict[str, Any]:
+    subtree = messages[_STATUS_TREE]["blockers"]
+    assert isinstance(subtree, dict), f"{_STATUS_TREE}.blockers 必须是对象"
+    return subtree
+
+
+def test_every_blocker_code_has_copy(messages: dict[str, Any]) -> None:
+    missing = set(ALL_BLOCKER_CODES) - set(_blocker_copy(messages).keys())
+    assert not missing, (
+        f"这些就绪阻断码没有中文文案，去 zh-CN.json 的 {_STATUS_TREE}.blockers 里加："
+        f"{sorted(missing)}"
+    )
+
+
+def test_no_orphan_blocker_copy(messages: dict[str, Any]) -> None:
+    orphans = set(_blocker_copy(messages).keys()) - set(ALL_BLOCKER_CODES)
+    assert not orphans, f"{_STATUS_TREE}.blockers 里这些码后端已经不存在了：{sorted(orphans)}"
+
+
+def test_blocker_copy_entries_are_plain_sentences(messages: dict[str, Any]) -> None:
+    """每条都是非空字符串，**不许是对象**。
+
+    它渲染在侧栏那一行的右侧（`ui/Rows` 的 `value`），只有一个字符串的位置。
+    套成 `{title, detail, action}` 的人是在把它当错误卡片用 —— 那种展开的修复指引
+    属于 T26 的诊断页，到时加一棵 `systemStatus.fixes.*` 兄弟子树，不要改这一棵的形状。
+    """
+    for code, value in _blocker_copy(messages).items():
+        assert isinstance(value, str) and value.strip(), (
+            f"{_STATUS_TREE}.blockers.{code} 缺失或为空"
+        )
+
+
+# "阻断码不许和 HTTP 错误码重名"**刻意不在这里测** ——
+# `test_system_status.py::test_blocker_codes_are_disjoint_from_http_error_codes` 已经测了，
+# 而上面那两条双向比对已经把"文案树 == ALL_BLOCKER_CODES"钉死，
+# 在这里再写一条就是同一条不变式的第三个副本（`agent-rules.md` §十.4）。

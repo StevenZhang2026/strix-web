@@ -68,6 +68,7 @@
     "readyTitle": "本机就绪状态",
     "readyDocker": "Docker 可达",
     "readySandboxImage": "沙箱镜像已就绪",
+    "readySandboxNetwork": "沙箱网络已就绪",
     "readySamePath": "数据目录路径一致",
     "readyTelemetryOff": "遥测已关闭",
     "readyTelemetryOffValue": "不外发任何数据",
@@ -381,6 +382,18 @@
     },
     "notes": {
       "loopback_rewrite": "沙箱会把这个地址改写成 host.docker.internal，也就是说测的是你这台电脑上的服务，不是沙箱容器内部的服务。"
+    }
+  },
+
+  "systemStatus": {
+    "ready": "已就绪",
+    "blockers": {
+      "docker_unreachable": "连不上 Docker",
+      "sandbox_network_missing": "沙箱网络不存在",
+      "api_not_on_sandbox_network": "后端未接入沙箱网络",
+      "same_path_mount_unverified": "同路径挂载未通过",
+      "sandbox_image_missing": "沙箱镜像不存在",
+      "telemetry_not_disabled": "遥测没有关闭"
     }
   },
 
