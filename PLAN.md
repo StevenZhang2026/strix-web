@@ -1,83 +1,163 @@
 # Strix Web 控制台 — 实施计划
 
-## 交接（2026-09-13）
+## 交接（2026-09-14）
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-**代码状态**：已完成 **T0–T10 中的 T0–T9**（T9 于 2026-09-14 落地并由主会话复验，落地内容与复验记录见 **T9 行**，本节不复述）。
-**工作区有未提交改动**：新增 `backend/app/services/{scan_launcher,scan_templates}.py`、`backend/app/routes/templates.py`、
-`backend/tests/test_scan_{launcher,templates}.py`；改 `backend/app/main.py`（一处 `include_router`）、`Makefile`（一处注释修错：
-原写"tests 在 /work"，实际是 `/app/tests`，害得 T9 方案里的快闸门挂错了挂载点）、`PLAN.md`（T9/T10 行、泄漏矩阵 #16、
-§向导→CLI 映射、§DooD 那张表、本节）。另有未跟踪的 `plan-t9.md`（T9 施工图，用途已尽、**可删**）与
-`pitfalls/local-env.md`（在 `.gitignore` 里，别提交它）。
-**闸门（2026-09-14，含 T9 与我修的那处 env 缺陷）**：`make test` **682 passed / 0 skipped**、`make lint-api` 干净。
-`make lint-web` 与 `npm run build` 本轮**没跑** —— 零前端改动，跑它换不到任何新信息。
-**push 前照 §禁区 扫一遍新增行**（`git grep -iE "bytedance|palo ?alto|ngfw"` 应为空；新增的美元数字必须是产品侧实测而非 API 账单）—— 仓库是 public。
-往后**每次 push 前照 §禁区 扫一遍新增行**（`git grep -iE "bytedance|palo ?alto|ngfw"` 应为空、
-新增的美元数字必须是产品侧实测而非 API 账单）—— 仓库是 public，这一步不是形式。
-闸门 2026-09-13（含 T3 收尾）：**644 passed / 0 skipped**（641 + 新增 3 条 `systemStatus`
-文案守卫）、`ruff check` + `ruff format --check` 干净、`make lint-web` 干净、
-`npm run build` 干净且 `/` 仍是静态预渲染。**跑的是快闸门**（同一个
-`strix-console/api-test:0.1.0` 镜像 + `:ro` 挂载），没跑 `make test` —— 本轮后端改动只有
-一个测试文件，重建镜像换不到任何新信息。
+**代码状态**：**T0–T9 已完成并全部提交**（最后一次是 `1a04e8e`「T9：ScanLauncher + 6 个模板 +
+GET /api/scan-templates」）。T9 的落地内容、我自己做的 8 次 mutation 复验、以及那个"声明了却没有任何
+一处强制"的真缺陷，全部记在 **T9 行**，本节不复述。
+**工作区**：只有一个未跟踪文件 **`plan-t10.md`（T10 方案，待审）** 与未跟踪的 `pitfalls/local-env.md`
+（在 `.gitignore` 里，别提交它）；`PLAN.md` 有本轮的两处纠正（见下）与 §Strix 版本升级 那一节未提交。
+**除此之外干净 —— 2026-09-14 第二段会话只做评估、零代码改动。**
+**闸门（2026-09-14 亲自跑过快闸门）**：**682 passed / 0 skipped / 13.8 秒**。命令（`agent-rules.md` §九.4
+要的秒级闸门，**已实测，别改**）：
 
-**规则变更（2026-09-13 用户拍板，已落地，下一份派发 prompt 起生效）**：**要 TDD 的内核，不要那
-320 行 skill。** `superpowers/test-driven-development` 一律不整包挂，只把两句抄进 prompt
-（先看着它红一次 + 说得出一个能让它变红的改动）；收货侧按 `CLAUDE.md` §安全不变式逐条 mutation。
-条文与理由见 `agent-rules.md` §六.5 / §八.3 / §十.5 与本文件 §派发清单 规则 7 —— **本节不复述。**
+```
+docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/tests:ro" \
+  -v "$PWD/frontend/messages:/messages:ro" -e CONSOLE_MESSAGES_JSON=/messages/zh-CN.json \
+  strix-console/api-test:0.1.0 pytest
+```
 
-**常驻文件的上限改成同时卡字数（2026-09-13，两份都已落地）**：`agent-rules.md` **130 行**（现 130，§一.4）、
-`CLAUDE.md` **123 行且 10,100 字**（现 123 行 / 10,028 字，第 8 行）—— 起因是实测子 agent 首轮就收到这两份
-全文（`CLAUDE.md` 11,314 字是最大的可控项，而 150 行的旧上限被 77 字/行的长行绕开了）。这一轮 `CLAUDE.md`
-从 147 行 / 11,315 字压到 123 / 10,028，**没有删掉任何一条硬规则或判据**：合行、删掉已有权威副本的论证、
-把 `make reap` 为什么必须要 `strix-run-id` 那一半的归因下沉到未跟踪的 `pitfalls/local-env.md`（禁区规则原文一条没动）。
-**待决已清空。** 最后那条"要不要拆 `agent-rules.md`、让子 agent 只收 §十"**2026-09-14 算完账定为不拆**，
-**别再提**：拟摘掉的 §二/§四/§七/§九.1–.7 占该文件 52% ≈ 2,930 字，对着子 agent 实测的 97.9k 平均上下文
-是 **3.0%**（中文按最坏的 1.5 token/字算也只有 4.5%），子 agent 又只占总账单三分之一 → **总账单 1%～1.5%**，
-与 §九 自己判定"是信号不是账单"的 auto-compact（3.6%）同级，而被实测证明有效的两条改动一次降了 43%。
-成本侧则是实的：机制上只有"`CLAUDE.md` 不再 `@import agent-rules.md`"这一条路，代价是 §九（派发纪律）
-与 §八.3（收货要逐条 mutation）从"每次调用都在场"退化成"主会话得记得去读" —— 而这两节正是
-**违反了不会立刻报错**的那类规则。拿 1% 换一次可能静默跳过 mutation 复验的机会是亏的。
+那个镜像里装的是**真的 `strix-agent==1.5.3`**，所以核 Strix 源码不用 clone：
+`docker run --rm --entrypoint sh strix-console/api-test:0.1.0 -c 'python -c "import strix,pathlib;p=pathlib.Path(strix.__file__).parent;print((p/\"interface/cli.py\").read_text())"'`
+—— T10 方案里那四段源码就是这么读出来的，比 `/tmp/strix_src`（早没了）可靠。
 
-**待办（按优先级）**：
-1. ~~提交本轮改动~~ **2026-09-14 已提交**（T9 全套 + `Makefile` 注释修错 + 本文件）。
-   `plan-t9.md` 删不删由用户定 —— 它已随 a7458fa 被跟踪，删掉 git 历史里也还在。
-2. **T10**（`ScanSupervisor` + `RunDiscovery`）：方案还没写。**T9 交回的四件事已写进 T10 行**
-   （启动断言 `STRIX_IMAGE`／`STRIX_DOCKER_SANDBOX_NETWORK` 非空、`${DATA}/scans/<id>/tmp` 的清理归属、
-   `--resume` 收的是 run name、指令正文一旦回显就是测试账号口令明文），本节不复述。
-   照 §四 模板 3：**方案由主会话写、人审完再另起一个 agent 只做实现**。
-3. **T9 派发实测到的两条教训，下次照做**：① 出处摘录必须把"会用到的符号字面值"也抄进去 ——
-   这次少了 4 个（`SHAPE_*` 的字面值、`TestCredential` 仓库里没有、`settings.scans_dir` 这个 property 名、
-   `BudgetExceedsCeilingError` 无调用先例），害它多跑 3 次 `grep`，首次写代码从第 6 次调用推到第 8 次；
-   ② **快闸门命令派发前自己实测一次** —— 方案里那条挂载点是错的（`/work/tests`，实际 `/app/tests`），
-   我实测后在 prompt 里覆盖掉了，否则子 agent 会拿一条跑不起来的闸门去做 TDD。
+## 下一步：T10 方案待审（**代码侧唯一的待办**；另有 §Strix 版本升级 的 4 件待决）
 
-**T7b 留下的两个缺口（不阻塞，别丢）**：
-   ① **`secrets` 的值没有长度下限**，`verify=false` 时空串会被存下来（`verify=true` 走不到，真实
-   请求会失败）。没修是因为 `logging_setup.MIN_SECRET_LENGTH=8` 本来就不脱敏短值，两处判据要一起定。
-   ② **`providers.*` 文案树没有任何测试守着** —— `test_message_coverage.py` 只覆盖 `errors`/
-   `scanFailures`/`targetGuard` 三棵。bearer 的成本警告（要求给出 4～6 倍的量级对比、
-   不许只说"可能更贵"）目前**靠人看**。T18 做前端时补。
-   （原先列在这里的第三个缺口"`strix_llm` 存的是用户原样填的名字、拼前缀在 `model_for()`"
-   **已由 T9 消化**：`build_env` 调它，并按解析后的模型名含 `invoke/` 决定 `STRIX_PROMPT_CACHE`，
-   bearer 与"用户手打 invoke 前缀的 SigV4"两半都有测试。）
+方案在未跟踪的 **`plan-t10.md`**，照 `agent-rules.md` §四 模板 3 写的（主会话写方案、人审通过后
+**另起一个 agent 只做实现**）。方案第 8 节已写好派发预算（≤60 次调用、第 6 次前开始写代码、不拆），
+第 6 节 13 组测试每条都给了"能让它变红的生产代码改动"，第 9 节列了落地后要改 `PLAN.md` 的 6 处。
 
-**2026-09-12 已拍板（别再当待办）**：T8 交回的第 ③ 件 —— `TargetRejected` 在 HTTP 层的表达。
-`/api/targets/validate` 恒 200（已落地），`POST /api/scans` 服务端重校验 → **422 `invalid_request`
-+ `params{field,index,reason}` + fail-fast**，不新增 `target_rejected` 码。完整判据表在 **T12 行**，
-T12 派发时整段抄进 prompt。
+**等用户裁决 5 件事（D1–D5，方案 §5 有推荐与备选）**：
+D1 启动断言放 `main.py`（推荐，代价是 `system_status` 两个"未配置"分支在生产变得不可达）；
+D2 矩阵 #16 只做「正文永不回显」、口令喂 Redactor 推给 T12（推荐，因为 `LaunchPlan` 刻意不带凭据）；
+D3 加 3 个归因码 `stopped_by_operator`/`interrupted_by_restart`/`scan_failed_unknown` 换来不变量
+「`status != completed` ⟺ `error_code` 非空」（推荐；`scan_incomplete` 的文案写死了"费用或轮次先用完了"，
+拿它解释"你点了停止"是撒谎）；D4 `${DATA}/scans/<id>/tmp` 归 T10 删、T11 与 T28 都不许碰（推荐）；
+D5 顺手改 `scan.stopHint` 那句被源码证伪的「agent 会先把手里的发现写完再退出」（推荐）。
 
-**2026-09-12 文档瘦身（已完成，别重做）**：`CLAUDE.md` 173→147 行、本文件 1190→1143 行
-（§派发清单 -21%、§M0 两条需求 -24%、T2/T4 的复核记录搬进 §里程碑）。新增层三第一份
-`frontend/CLAUDE.md`（§TypeScript 细则 + T5 那三条构建禁令）。同时定死两条规则，都已写进 `CLAUDE.md` 开头：
-**① `CLAUDE.md` 硬上限 150 行；② 本文件禁止整读**（先 `grep -n "^## "` 再按行区间 `Read`）。
-**用户已明确不做的**：§编码哲学 前三条与 §安全不变式 论证句的裁剪 —— 提过，用户选择只做纯冗余，**别再自动提**。
-另修掉一处早就烂了的引用：不引 Tailwind 的理由不在 `PLAN.md:220`，在 §仓库结构 的 `globals.css` 注释。
+**已落进 `PLAN.md` §后端接口 的两处纠正**（读 1.5.3 源码得出，与 D1–D5 无关，属纯事实纠错）：
+① 「`-15`/`-9`→已手动停止」是错的 —— Strix 自己装了信号处理器，收到 TERM 后**退出码是 1**；
+② `run.json.status` 取值域多一个 **`interrupted`**（信号停止的终值），`stopped` 才是预算耗尽。
+**方案里还发现一个原矩阵没有的泄漏面**（`error_message` 若是 stdout 摘录，操作者的测试账号口令会进 DB
+——agent 拿它登录过，而它不在 KeyVault 里所以不在脱敏集合里）。解法是"`error_message` 一个字节都不来自
+stdout"，残余部分记成矩阵 #17 归 T12。**这三条目前只写在 `plan-t10.md` 里，别把那个文件弄丢。**
 
-**2026-09-12 的成本核算结论**（数字在未跟踪的 `pitfalls/local-env.md`，一个都不许搬进被跟踪的文件）：
-`agent-rules.md` §九 原先写的「auto-compact 是最贵的单项」**实测是错的**（只占 4%），已重写。
-真正的大头是 `调用次数 × 平均上下文`，以及 **prompt cache 5 分钟过期后整个上下文按 12.5 倍单价重写**
-—— 所以**长停顿前先更新本节再 `/clear`**，这一节就是那条纪律的落点。
+## Strix 版本升级（2026-09-14 第二段会话评估；**零代码改动，4 件待决**）
+
+**目标变更（用户口述，尚未落进 §已确认决策 —— 要改那张表得先放行）**：从「`1.5.3` 锁死、**不许**升级」
+改成「**保持随时能升到最新**」。注意 pin 本身不变松：精确 pin + `--only-binary=:all:` + hash lock 全留
+（它们买的是可复现构建，不是"永不升级"），变的是这条 pin 从**冻结**变成**主动推进**。
+**明确不做多版本共存**（用户已否决）：N 版本 = N 套夹具 + N 次 M0 真跑 + N 份 Key 卫生复验，粗估 +15 工时
+且每次发版重付，还破坏「一个镜像一个 pin」这个让整件事可验证的前提。
+
+### 一、PyPI 实测事实（2026-09-14 直连 `pypi.org/pypi/strix-agent/json` 查得）
+
+- **`1.5.3` 落后两个版本。最新是 `1.6.2`（2026-09-05 发布）**，中间有 `1.6.1`（09-02）；`1.6.0` 不存在（应是被 yank）
+- **`1.6.1`/`1.6.2` 没有发 sdist**，只有 5 个 wheel，含 `manylinux_2_17_aarch64` + `manylinux_2_17_x86_64`
+  → `CLAUDE.md` 第 62 行「不许升级（sdist 的 hatch 钩子缺 Go 1.24 会硬失败）」这条理由**对 1.6.x 不成立**
+  （`--only-binary=:all:` 仍要留，它防的是未来某版又发 sdist）
+- **依赖差异只有一条**：`1.6.2` 多了 `markdown-it-py>=3.0.0`，而它**已经在我们 lock 里**（`pins.txt:130`
+  `markdown-it-py==4.2.0`，经 `rich` 带进来）。`cryptography<49,>=48.0.1` 这条约束没变
+  → 升 1.6.2 的入场费里最贵的"依赖冲突"这一项**几乎为零**
+- **`requires_python` 仍是 `>=3.12`**，`python:3.12-slim` 不用换
+- **T0 提交是 2026-09-08，比 1.6.2 发布晚 3 天** —— 锁 1.5.3 时 1.6.x 已在。仓库里（决策表 / `pitfalls` /
+  commit message）**没有任何一处记录"为什么选 1.5.3 而不是 1.6.x"**。最可能是 `PLAN.md` 写作期定的、之后没重查
+
+### 二、发布节奏 → 建议的跟版策略
+
+实测 8 个版本 / 45 天（1.3.1 `07-22` → 1.4.0 `07-27` → 1.4.1 同日 → 1.5.1 `08-07` → 1.5.2 `08-09` →
+1.5.3 `08-10` → 1.6.1 `09-02` → 1.6.2 `09-05`）：**平均 5.6 天一个**，minor 约 2–3 周一个，
+且 **`x.y.1` 经常不稳**（1.5.1 三天内被 1.5.2/1.5.3 追打；1.6.1 三天后即 1.6.2）。
+
+> **「始终能升」≠「始终跑在最新」。** 字面执行后者就是每周升一次，而每次有**半天不可压缩的墙钟**。
+> 建议：**跟 minor、不追 patch；新 minor 发布后等 7–10 天再升，除非有 CVE。** 落地约每月一次。
+
+### 三、评估结论：**架构不用改**，缺的是检测层
+
+已有决策**已经**买到版本容错，别去动它们：① 走 `subprocess` CLI 而非内嵌 → argv/env/退出码是公开接口，
+比 Python 内部 API 稳一个量级；② `strix_bridge/` 是唯一 import 点且 import-linter 强制 → 爆炸半径已围起来；
+③ tmpfs HOME + 显式 `--config` + `finally rmtree` 是**正向防线**不是补丁 → `persist_current()` 怎么变都不用改；
+④ `fixtures/run_dirs/` 已是一等公民。**实测佐证**：Strix 的 env 名字面量全仓库只 **18 处 / 6 个文件**
+（`scan_launcher.py` 10、`settings.py` 3、`llm_client.py` 2、`system_status`/`docker_probe`/`models` 各 1），
+其中 10 处**已经是 `scan_launcher.py:48/60` 顶部那两张表**；**生产逻辑里没有任何版本号字面量**（只在注释）。
+
+**已评估并否决的更激进方案**：把 Strix 隔到独立 `strix-runner` 镜像、让 `api` 不装 strix-agent。
+不成立 —— 实时流（T13/T14，产品核心）必须 import `live_view` 的游标 API 与 `transcript`；不 import 就只能
+自己解析 `agents.db`，那是**比 Python API 更不稳定的面**（还带 `clear_session()` 重插 + id 重排语义）。
+**围墙已经在正确的位置，再往外挪反而更耦合。**
+
+### 四、四个"现在做才便宜"的追加项（合计 **5–5.5 工时**）
+
+窗口就在 **T10 派发之前 / T13 动工之前** —— 这两块写完再回来改就是返工 + 重采夹具（唯一要真跑扫描的成本）。
+
+| # | 项 | 工时 | 为什么现在 |
+|---|---|---|---|
+| 1 | **`strix_profile.py`**：按版本键的 dataclass，收 18 个 env 名 + 退出码语义 + run 目录布局 + `agents.db` 关键列名 + CLI 参数白名单。今天只有一个条目 | **1.5–2** | ⚠️ 这踩 §编码哲学 第 3 条「不要过早抽象」。**正当理由不是"以后可能有第二版"，而是"契约测试需要一个可枚举的断言清单"**（T29 行那句"不许自己发明断言"的实现手段）。只认后者就该砍掉本项，只做 2–4（合计 1 工时） |
+| 2 | **T29 契约测试改成遍历 profile 断言，且必须能对着任意版本跑**（被测版本从 env 读、profile 按被测版本选，**不能硬绑镜像内版本**） | **+0.5** | 否则下面阶段 2 的只读勘查根本不成立 |
+| 3 | **T10 的退出码映射天生按 profile 写** | **0** | 还没写。写完再改 = 1 工时返工 + 一次 mutation 复验 |
+| 4 | **T13 `RunProjector` 按 `scans.strix_version` 选 profile 解析旧 run 目录** + 夹具按版本分层 `fixtures/run_dirs/1.5.3/` | **+0.5** | `scans` 表**已有 `strix_version` / `sandbox_image` 两列**，溯源不缺，但**没有一处说明升级后怎么用它** —— projector 硬用"当前 profile" ⇒ 升级当天**所有历史扫描详情页解析失败**，用户视角是"升级弄坏了我以前的报告" |
+| 附 | 迁移里 `UPDATE scans SET resume_available=0` | **0** | `--resume` 收 run name、要读旧格式 `.state/`，跨版本几乎不可能兼容 |
+| 附 | **`make check-upstream`**（~40 行 Python，手动目标、**不进 CI 不进应用**，依赖出网） | **0.5** | 现在**没有任何机制**会告诉你上游发版了（`STRIX_NO_UPDATE_CHECK=1` 必须保留，它防外发）。指望人记得就是本轮这个结果。做四件事：①比对 `check_lock.py:26` 的 `REQUIRED_PINS`；②查 manylinux aarch64+x86_64 两个 wheel 是否齐（**缺则硬否决**）；③查有没有发 sdist；④diff 新版 `requires_dist` 与 `pins.txt` |
+
+### 五、升级 runbook（六阶段，任一阶段失败就停在那里）
+
+**阶段 0 发现**（1 分钟）`make check-upstream`，每月一次或收到 CVE 通报时。
+**阶段 1 判定**（10 分钟，不动仓库）看阶段 0 四项 + 上游 release notes；**wheel 那项是硬否决**。
+**阶段 2 只读勘查**（10 分钟–1 工时，**不改 pin、不动 lock**）一次性容器装新版、对着它跑契约测试：
+`docker run --rm -v $PWD/backend:/src:ro python:3.12-slim sh -c 'pip install --only-binary=:all: strix-agent==<新版> pytest && pytest /src/tests/test_strix_contract.py'`
+→ 产出 **R4 那 9 个耦合点碎了哪几条**。**这一步是整个流程的价值所在**：把"升级"从"跑跑看"变成"改这 3 条"。
+**阶段 3 落地**（0.5–4 工时）profile 加/改条目 → 改 7 处 pin 落点（`pyproject.toml`、`pins.txt`、`pins-dev.txt`、
+两个 `.lock`、`Dockerfile:113` 断言、`check_lock.py:26`）→ `make lock` → 重建镜像（6–15 分钟）→ 改碎掉的代码 →
+**官方闸门 `make lint` + `make test`（必须 0 skipped）** → 按变动面重采夹具（run 目录或 `agents.db` 变了则
+**T15a 压缩夹具要真跑一次扫描**，这是阶段 3 最贵的单项）。
+**阶段 4 真跑复验**（**半天墙钟，一项都不能跳** —— 这四类都是"变了不报错、只静默给错答案"，测试碰不到）：
+① `./scripts/m0_probe.sh` 断言日志出现**容器 IP** 而非 `127.0.0.1`（两个未文档化 env）；② **重验 `completion_cost`**
+（litellm 跟着升 ⇒ **预算护栏静默变 0**）；③ Key 卫生：镜像 env 扫 + 任务目录外全盘扫 `LLM_API_KEY`
+（`persist_current()` 写盘路径可能变）；④ `make verify-e2e` 28 条。
+**阶段 5 可回滚**：**升级必须是一个单独的 commit，不与任何业务改动混** —— 有 pin + hash lock，回滚 =
+`git revert` + 重建镜像；一混进业务改动，回滚就变成手术。（拟写进 `CLAUDE.md` §禁区，**待放行**。）
+
+**停止跟版的条件**（写进流程，免得每次重新讨论）：新版无 manylinux aarch64+x86_64 wheel → 不升（硬否决）；
+上游删掉 `live_view` 游标 API 或 `transcript` → 不升，先评估重写 T13 的代价；`requires_python` 超出 3.12 →
+先换基础镜像，独立任务；**上游加了向第三方外发数据的默认行为且无 env 可关 → 永久不升**（违反 §禁区第一条）。
+
+### 六、稳态账单
+
+一次性 **5–5.5 工时**；每次 minor 升级期望 **2–3 工时 + 半天墙钟**（乐观只动 argv/env 是 1–2；悲观
+`agents.db` 或 `live_view` 游标 API 变了是 4–8，因为要重跑 T15a + 重验 T13 重同步）。按每月一个 minor
+≈ **25–35 工时/年**。**不跟版的替代方案不是"省下这些"，而是"某天因 CVE 被迫升级时一次付掉积压的全部差异"，
+而积压越久越贵**（1.5.3 → 今天已积两个版本）。
+
+### 七、待决 4 件（都要用户拍板，**agent 不许自己动**）
+
+1. **§已确认决策 表里那条「不许升级或放宽 pin」要不要改成「跟 minor」** —— 连带改 `CLAUDE.md` 第 62 行
+2. **第四节第 1 项 `strix_profile.py` 建不建** —— 建（5–5.5 工时，检测有清单）／不建（1 工时，只做 2–4，等真升级再说）
+3. **第 3 项要不要并进 T10 方案** —— 0 成本窗口**就在 T10 派发之前**
+4. **要不要先把 pin 推到 1.6.2 再继续 T10** —— 现在推最便宜（T13 未写），但 §Strix 集成面 那 100 行
+   `file:line` 全是对着 1.5.3 逐行读的，**换版本等于那份地图要重核一遍**（复核方式见本节开头那条 docker 命令）
+
+## T7b 留下的两个缺口（不阻塞，别丢）
+
+① **`secrets` 的值没有长度下限**，`verify=false` 时空串会被存下来（`verify=true` 走不到，真实请求会失败）。
+没修是因为 `logging_setup.MIN_SECRET_LENGTH=8` 本来就不脱敏短值，两处判据要一起定。
+② **`providers.*` 文案树没有任何测试守着** —— `test_message_coverage.py` 只覆盖 `errors`/`scanFailures`/
+`targetGuard` 三棵。bearer 的成本警告（要求给出 4～6 倍的量级对比、不许只说"可能更贵"）目前**靠人看**。T18 做前端时补。
+
+## 别再提的事
+
+- **`agent-rules.md` 不拆**（2026-09-14 算完账定的）：拟摘掉的部分只占子agent上下文 3%、总账单 1%～1.5%，
+  而代价是 §九（派发纪律）与 §八.3（收货要逐条 mutation）从"每次调用都在场"退化成"主会话得记得去读"。
+- **§编码哲学 前三条与 §安全不变式 论证句的裁剪**：提过，用户选择只做纯冗余。
+- **`plan-t9.md` 删不删由用户定**（已随 `a7458fa` 被跟踪，删掉 git 历史里也还在）。
+
+## 每次 push 前
+
+照 §禁区 扫一遍新增行：`git grep -iE "bytedance|palo ?alto|ngfw"` 应为空、新增的美元数字必须是产品侧实测
+而非 API 账单 —— **仓库是 public**，这一步不是形式。commit 身份是仓库级 GitHub noreply 邮箱，别改回全局那个。
+
+---
 
 ## Context
 
@@ -118,7 +198,8 @@ Docker Desktop `29.7.2` / Compose `v5.4.0` ✅ ｜ 宿主 Python 仅 `3.9.6`，�
 
 ---
 
-## Strix 集成面（已逐行读源码核实；clone 在 `/tmp/strix_src`，HEAD `0a6e8b01`, v1.5.3）
+## Strix 集成面（已逐行读源码核实；v1.5.3。**下面所有 `file:line` 的复核方式见 §交接** ——
+原来的 clone `/tmp/strix_src`（HEAD `0a6e8b01`）**已不存在**，改从测试镜像里读已安装的包）
 
 ### 硬约束，直接决定架构
 
@@ -649,8 +730,15 @@ Starlette 默认的 404 是 `{"detail": "Not Found"}` —— 没有 `code`，而
 405 的 `Allow`。已实测经真链路：`404 {"code":"not_found",…}` / `405 allow: GET` +
 `{"code":"method_not_allowed",…}`，且 `trace_id` 与 `X-Trace-Id` 一致。
 
-**退出码映射**（`ScanSupervisor`）：`0`→已完成（未发现漏洞）；`2`→已完成（发现漏洞）；
-`1`→失败；`-15`/`-9`→已手动停止。
+**退出码映射**（`ScanSupervisor`）：`0`→已完成（未发现漏洞）；`2`→已完成（发现漏洞）；`1`→失败。
+⚠️ **原写的「`-15`/`-9`→已手动停止」是错的，2026-09-14 读 1.5.3 源码证伪**：`interface/cli.py:124-135`
+给 SIGTERM／SIGINT／SIGHUP **都装了处理器**，里面 `report_state.cleanup(status="interrupted")` 之后
+`sys.exit(1)` —— 进程是**正常退出**的，`returncode` 是 **`1`**，不是 `-15`。所以"是不是被人停的"
+**唯一可靠判据是「我们自己发过信号」这个事实**（`ScanSupervisor` 自己记的 `stopped_by`），
+按退出码判会把"用户点了停止"报成"扫描失败"、还会去 stdout 里瞎归因。只有 SIGKILL 才给 `-9`。
+同一条源码还说明**没有"更优雅的信号"可选**（两个信号同一个处理器），优雅停止只能是
+「发 TERM → 等宽限 → SIGKILL」，且 `interface/cli.py:201-205` 那个 async 的
+`session_manager.cleanup` 跑不完 → **强杀一定泄漏沙箱容器，只能靠 T11 按 label 回收**。
 
 `1` 的归因**不能只看 Rich 面板标题** —— M0 实测：TLS 被中间设备解密、凭据无效、
 凭据形状与模型路由不匹配、**以及路由不接受 Strix 注入的某个参数**，这**四**种毫不相干的
@@ -688,8 +776,15 @@ M0 第 3 次运行：预算耗尽被掐死（`run.json.status = "stopped"`），
 | 找到漏洞（无论是否跑完） | `2` | `completed` / `stopped` |
 
 → **只凭退出码 0 展示"未发现漏洞"是发布阻断项。** 必须读 `run.json.status`
-（取值域 `core/agents.py:25`：`running/waiting/completed/stopped/crashed/failed/budget_paused`），
+（取值域 `core/agents.py:25`：`running/waiting/completed/stopped/crashed/failed/budget_paused`，
+**外加一个 `interrupted`** —— 2026-09-14 读源码补：`report/state.py:399` 的 `cleanup()` 被信号处理器
+以 `status="interrupted"` 调用，而 `save_run_data`（`382-394`）里 `status == "stopped"` 遇到当前值是
+`failed`/`interrupted` 时**保留旧值**，所以信号停止的 run 最终留在盘上的是 `interrupted`。
+白名单少了它，最常见的操作者停止路径会被判成"未知状态"），
 `stopped` 时中文结论固定为**「扫描因预算耗尽提前结束，结论不完整」**，机器码 `scan_incomplete`。
+**`stopped`（预算/轮次耗尽）与 `interrupted`（收到信号）因此是可区分的**，别把两者合并。
+同一段源码还给出"冲突时以 run 记录为准"的精确落点：`completed` 一旦写下就**再也不会被覆盖**
+（`save_run_data` 的 `elif` 守卫），所以「操作者在进程即将正常退出那一瞬点了停止」应判 `completed`。
 一个渗透测试控制台在钱花光时报"目标干净"，比不报任何结论危险得多。
 
 **预算的真实语义（同次实测，UI 文案必须照这个写，不许自己编）**：
