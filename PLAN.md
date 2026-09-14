@@ -28,9 +28,12 @@
 **唯一待决**：要不要拆 `agent-rules.md`、让子 agent 只收 §十（§二/§四/§七/§九.1–.7 约 60 行对它们是死重）。
 
 **待办（按优先级）**：
-1. **T9 是主线下一步**（模板 3，前置 T7／T8 都已完成，且它是清单里唯一前置全满足的任务 ——
-   T10/T11、T12/T18、T13 以下五个全堵在它后面，**没有可并行的第二条线**）：按 §派发清单 规则 6，
-   **由主会话写方案 → 人审 → 另起一个 agent 只做实现**。T9 必须顺手处理下面 ③。
+1. **T9 的方案 2026-09-14 已审阅通过，卡在"派发实现 agent"这一步**（用户当时说"方案审完先暂停"）。
+   施工图在**未提交的 `plan-t9.md`**（派发完可删），四条审阅决策与边界在 **T9 行**，本节不复述。
+   **接着干的动作只有一个**：照 `plan-t9.md` §派发形态 写 prompt，派一个 agent 只做实现。
+   T9 仍必须顺手处理下面 ③。
+   工作区里另有本轮改动**未提交**：`PLAN.md`（§向导→CLI 映射 的模板存法与 API 模板行、
+   §DooD 那张表的 `--workspace-file` 行、T9 行、本节）+ 新增 `plan-t9.md`。
 2. T7a／T7b 的复验记录、实测账单、我读代码抓出的那个 `params` 缺陷都在 **T7 行**，本节不复述。
 
 **T9 开工前必须知道（T7b 留下的三个缺口，都不阻塞）**：
@@ -214,7 +217,7 @@ Strix 自己的 viewer 也有这个问题，只是它 500ms 全量重渲染盖�
 | `build_bind_mounts` | `$TMPDIR/strix_repos/<run>/` | `-t https://github.com/...` |
 | `_metadata_mounts` | `<tree>/.git` 等（只读覆盖）| 带 git 的本地目标 |
 | `stage_api_specs` | `$TMPDIR/strix_api_specs/<run>` | `-t ./openapi.yaml`、`postman://` |
-| `build_extra_file_bind_mounts` | `<cwd>/strix_runs/<run>/.state/extra_files/<i>/` | `--workspace-file` |
+| `build_extra_file_bind_mounts` | `<cwd>/strix_runs/<run>/.state/extra_files/<i>/` | ~~`--workspace-file`~~ **1.5.3 的 CLI 没有这个参数**（2026-09-14 `strix --help` 实测）—— 这一行只在内嵌 API 上可达，对我们等于不存在。API spec 要进沙箱只有一条路：`-t <spec 文件>`（`-t` 明写接受 OpenAPI/Swagger `.json/.yaml` 与 Postman 导出），走的是上一行的 `stage_api_specs` |
 
 → 解法：**同路径挂载** `${STRIX_HOST_DATA_DIR}:${STRIX_HOST_DATA_DIR}`，且 `TMPDIR` 也指到该卷下。
 **不能用 named volume**（其宿主路径在 Docker Desktop VM 内，两侧不一致，会静默重现此 bug）。
@@ -441,7 +444,10 @@ events.snapshot|vuln.add|summary|log|report|report.progress|compaction_notice|er
 ## 向导 → CLI 映射
 
 UI 与帮助全中文；`--instruction` 正文用**英文**（Strix 的 system prompt 与 ~90 个 skill 都是英文）。
-模板存 `config/templates/*.yaml`，改模板不用改代码。因为 `scan_config["skills"]` 虽被引擎读取但
+模板存**进程内 Python 常量** `services/scan_templates.TEMPLATES`（2026-09-14 用户拍板，**推翻原先写的
+`config/templates/*.yaml`**）：仓库里已有一个反向先例 —— `llm_client.CATALOG` 是常量、`routes/providers.py`
+只做投影，而"改模板不用改代码"这个原始理由**站不住**，YAML 改完照样要重建镜像。YAML 换来的只是
+加载器 + Pydantic 校验模型 + 打包路径三层，还把打字错误从 import 期推到运行期。因为 `scan_config["skills"]` 虽被引擎读取但
 CLI 从不填充（`interface/cli.py` 构造 `scan_config` 时没有 `skills` 键），改为在指令里点名 skill，
 由 agent 自己的 `load_skill` 工具加载。
 
@@ -456,7 +462,7 @@ CLI 从不填充（`interface/cli.py` 构造 `scan_config` 时没有 `skills` �
 | 全面体检（推荐）| `standard` | $25 / 200 | 先枚举功能与角色，再系统性走 OWASP Top 10 全入口；边走边记 coverage |
 | 深度审计 | `deep` | $80 / 500 | 按功能域派生子 agent；把发现串成完整攻击链而非孤立原语 |
 | 只测登录与权限 | `standard` | $15 / 120 | 登录/注册/找回/改邮箱/MFA/会话/JWT/水平与垂直越权；**不**花轮数在 XSS 与注入上；只用自建账号，绝不锁死真实账号（UI 收集测试账号并附到指令）|
-| API 接口测试 | `standard` | $25 / 200 | 上传 OpenAPI/Swagger/Postman → `--workspace-file <staged>:specs/<name>`（只读）；枚举 spec 每个 operation；额外报告"spec 里有但不可达"与"未文档化但存在"的接口 |
+| API 接口测试 | `standard` | $25 / 200 | 枚举 spec 每个 operation；额外报告"spec 里有但不可达"与"未文档化但存在"的接口。**⚠️ 上传 spec 在 v1 不做**（2026-09-14 T9 方案审阅时定）：原写的 `--workspace-file` 在 1.5.3 的 CLI 里**不存在**（见 §DooD 路径别名 那张表），唯一的路是把 spec 当成第二个 `-t` 目标，而那要先让 `target_guard` 接受"文件路径"这一类目标（v1 只放 URL/域名/IP，§架构）。所以 v1 这个模板 = 指令正文 + 普通 URL 目标；开放它是 T18/T19 的事，不是 T9 的 |
 | 上线前复检 | `standard` | $12 / 100 | 针对改动说明做回归；已报问题要**实测**是否真修好（v2 加 `--scope-mode diff --diff-base`）|
 
 **预算强制**：Strix 的 `--max-budget-usd` 本是可选（默认无限）。我们**强制必填**，
@@ -934,7 +940,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T6 | `target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 ✅ 2026-09-11，**181 个用例**（原估 ~80）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；**`requirement`／`overridable` 与 `allowed` 正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 |
 | T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3** —— `auth_shape` + `secrets` + `params` 的契约被 **T9／T18／T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据，改错一处要动三处。<br>**⚠️ 已按"派发前必须拆"执行（2026-09-12 用户放行）**：本行涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测 + `main.py` 五处接线（**2026-09-12 已落地并复验，闸门全绿**；实测代价：方案 24 次调用 + 实现 45 次工具调用 / 54 分钟，0 次压缩 —— 拆分有效）、**T7b**=`routes/{keys,providers}.py` + `services/llm_client.py` 真实验活 + `zh-CN.json` + 路由层测试（**2026-09-13 已落地并复验**：`llm_client.py`(332) + `keys.py`(272) + `providers.py`(72) + `test_keys.py`(33 条) + `main.py` 3 处接线 + `zh-CN.json` 的 `providers.*`；闸门 **641 passed / 0 skipped**、ruff 干净）。<br>**T7b 是"方案由主会话写 + 快闸门"的第一次执行，账单降 43%**（44 次调用、0 压缩、平均上下文 97.9k 与 T7a 持平，但 `cache_read==0` 从 5 次降到 1 次 —— 数字在 `pitfalls/local-env.md`）。**这两条改动就此从"推测"变成"实测有效"，以后照做。**<br>**复验查出一个它没报的真缺陷，已修**：`params` 的键**完全没校验**，而 `params` 刻意不进 `KeyVault.secret_values()`（永不脱敏）又被 `GET /api/keys/{h}` 原样回显 —— 把凭据填进 `params` 就同时得到"存下来 + 明文回显 + 日志不脱敏"。`ShapeSpec.param_keys` 声明了白名单并经 `/api/providers` 发布，却没有任何代码强制它（pitfalls 条 23 的形状）。现补 `llm_client.check_param_keys()`：多余键与缺键都 **422 `invalid_request` + `params{field:"params",key_name}`**，码不用 `unexpected_secret_key`（收到的按定义不是 secret，用那个码会让前端说"你凭据填错了"）。顺带把 `_completion_kwargs` 的 `params.get("AWS_REGION_NAME","")` 改成直接下标，并把它挪到 `try` 之外 —— 否则 KeyError 会被那个宽口径 `except` 吞成"验活未通过"，让 bug 长期伪装成用户凭据不对。<br>**T7a 交给 T7b 的东西**：`auth_shape` 声明哪几个键的校验（`400 unexpected_secret_key`）、供应商目录、真实验活**都不在 T7a 里** —— vault 只按传进来的数据存取，不判断形状合不合法 |
 | T8 | 授权清单（加载／校验／热重载）+ `/api/targets/validate` | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 ✅ 2026-09-12，**130 个新用例**。四个测试文件各造一份的 `app`／`anonymous`／`client` 夹具与 `make_entry` 收进了 `conftest.py`（需要替身的文件**覆写 `anonymous`**，替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表 T2 就建好了但没有写入方）—— 只有一个 `record()`，DB + ndjson 双写共用同一时刻，**T12／T25 在它上面加事件，不要造第二个写入方**。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览。<br>**T6 交回的三件事**：① `zh-CN.json` 的 `targetGuard` 子树（8 个 `RejectionReason` 的中文 + `notes.loopback_rewrite`；**不进 `errors.py`**，它们是输入框下方的行内提示，请求本身没失败）—— 已做；② ~~`registrable_domain`~~ **已定不做**（2026-09-11 用户拍板）：正确实现要 Public Suffix List，而近似实现（取末两段）在 `example.co.uk` 上算出 `co.uk`，这个值要进逐字确认串 —— **一个错的注册域名比没有更糟**，会让用户确认一个不是他想授权的范围。**别再加回来**，要加就先把 PSL 那笔维护账付掉；③ ~~⏳ `TargetRejected` 在 HTTP 层怎么表达~~ **2026-09-12 定完，判据表搬到 T12 行** |
-| T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/scan_launcher.py` `tests/test_scan_launcher.py` `routes/templates.py` | **3** |
+| T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/{scan_launcher,scan_templates}.py` `routes/templates.py` `tests/test_scan_{launcher,templates}.py` | **3** —— **方案 2026-09-14 已审阅通过、尚未派发实现**，原文在**未提交的 `plan-t9.md`**（含派发 prompt 要抄的出处摘录；派发完可删）。<br>**审阅时定的四条**（都已落进本文件对应位置，此处不复述理由）：① 模板存 Python 常量不存 YAML（§向导→CLI 映射）；② `--resume` 不进 T9（`strix_run_name` 要等 T10 抢到才存得下）；③ spec 上传 v1 不做（`--workspace-file` 在 1.5.3 的 CLI 里不存在，见 §向导 那张表与 §DooD 路径别名 那张表）；④ **`zh-CN.json` 不在 T9 范围内** —— `/api/scan-templates` 只回机器码，模板中文名归 T19（不跨文案，所以这一行不用再拆）。<br>**边界**：T9 只构造 argv/env/cwd + 建 tmpfs 上那两个文件，**不起进程**（起进程与退出码归因是 T10；并发闸／DNS 重解析／逐字确认／写 `scans` 行／审计是 T12）。<br>**实测得到的三个 env 名**（`strix.config.settings.LlmSettings`，2026-09-14）：`api_base` 的落点是 **`LLM_API_BASE`**（不注入就静默丢失）；`STRIX_REASONING_EFFORT` 是**枚举** `none\|minimal\|low\|medium\|high\|xhigh\|max`（默认 `high`，非法值会让子进程死在 pydantic 启动校验上、被归因成"扫描失败"，所以要在构造阶段 422）；`STRIX_PROMPT_CACHE` 的判据是 `"invoke/" in model_for(...)`，**不是** `auth_shape == bearer`。`--resume` 收的是 **run name**（`strix_runs/` 下的目录名）不是 `scan_id` —— `scans.strix_run_name` 那一列就是为它准备的 |
 | T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
 | T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（判据见上方「两条容易搞反的」）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** —— M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 实测），只按前者会删掉它；加上后者永不误伤真沙箱（`docker_client.py:113` 早退）。直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR`／`ORPHAN_REQUIRED_LABEL`，别再抄字面串 |
 | T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected`／`dns_changed` 两个审计事件**加在 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`／`dns_timeout`／`dns_failed`）**目前没有测试**，真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`／`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤**。<br>**服务端重校验的拒绝出口（2026-09-12 拍板，T8 交回 ③ 的答案；两条出处已在代码里：`routes/targets.py:5-8` 与 `target_guard.py:122-124`）**：按"性质"分两类，**不新增 `target_rejected` 码** —— 8 个 `RejectionReason` 各编一个 HTTP 码会得到 8 个永不当响应码用的"错误"（`errors.py` 模块 docstring），合成 1 个新码又与 `invalid_request` 语义重叠。<br>· 规范化失败（`RejectionReason`）→ **422 `invalid_request`**，`params = {field:"targets", index:<下标>, reason:<RejectionReason>}`，**遇到第一个就拒（fail-fast）**：`ParamValue` 只许 JSON 标量（`errors.py:38-40` 刻意不许 dict／list，防止有人往里塞整个请求体进而塞进凭据），逐条列全就得先破那条约束或给错误响应加第四个字段，而这条路径本该被向导第 1 步的 `validate` 拦住，不值得为它付这笔账。**`raw` 绝不进 `params`** —— `user:pass@host` 的原文回显只许存在于 `validate` 的 200 正文那一处（T30a 已如实记录那一条残余风险，别扩大它）<br>· 缺勾选（`required_opt_in` 非空）→ 同样 **422**，`params = {field:"overrides", index:<下标>, missing_opt_in:<OptInFlag>}`<br>· 护栏策略拒绝 → 保持 `GuardVerdict.error_code`：`blocked_metadata` **403**（不可覆盖），`not_in_allowlist`／`split_horizon`／`dns_changed` **409**（可以改状态再来）<br>· 前端（T18）：`params.reason` 在时去 `targetGuard.reasons.*` 取那句人话并高亮第 `index` 行，不在时退回 `errors.invalid_request` 的通用文案。落地要顺手补 `zh-CN.json` 的 `errors.invalid_request.params` 与 `paramLabels` 三个新键（`index`／`reason`／`missing_opt_in`）|
