@@ -77,6 +77,7 @@ from app.routes import keys as keys_routes
 from app.routes import providers as providers_routes
 from app.routes import system as system_routes
 from app.routes import targets as targets_routes
+from app.routes import templates as templates_routes
 from app.services import dns_resolver, llm_client
 from app.services.allowlist import AllowlistStore
 from app.services.auth import AuthService
@@ -427,6 +428,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 之后：一个未鉴权的 `/api/keys` 等于让任意网页替用户登记（并验活）凭据。
     app.include_router(providers_routes.router)
     app.include_router(keys_routes.router)
+    # T9。`/api/scan-templates` 是纯目录（进程内常量、无凭据、无 IO），但同样在全局鉴权
+    # 之后：内容全是机器码不等于可以对外裸露 —— 它连带告诉未鉴权的人"这里是 Strix 控制台"。
+    app.include_router(templates_routes.router)
 
     return app
 

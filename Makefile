@@ -124,9 +124,11 @@ build-test:
 # 镜像里没有它。不挂的话那 13 个测试全 skip，而 skip 会让 `make test` 照样退 0 ——
 # 一个"看起来在跑、其实没在跑"的守卫（这正是它被加进来要防的那类事）。
 #
-# 用环境变量指路，不靠测试自己从 `__file__` 往上找仓库根：镜像里 app 在 /app、
-# tests 在 /work，路径推导的结论取决于 rootdir 落在哪一个 —— 一个会在下次改
-# Dockerfile 时静默失效的假设。挂到一个固定的中立路径再显式告诉它，没有可推导的余地。
+# 用环境变量指路，不靠测试自己从 `__file__` 往上找仓库根：镜像里 `WORKDIR=/app`、
+# app 在 /app/app、tests 在 /app/tests，`__file__` 往上找几层的结论取决于这个布局 ——
+# 一个会在下次改 Dockerfile 时静默失效的假设。挂到一个固定的中立路径再显式告诉它，
+# 没有可推导的余地。（2026-09-14 修：这里原写「tests 在 /work」，与 Dockerfile 的
+# `WORKDIR /app` + `COPY tests ./tests` 不符，害得 T9 方案里的快闸门挂错了挂载点。）
 # （路径不是机密，走 -e 没问题；凭据绝不这样传。）
 test: build-test
 	docker run --rm \

@@ -4,9 +4,15 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-**代码状态**：已完成 T0–T8，T3 的前端收尾也做完了（2026-09-13，见 T3 行）。
-**2026-09-14：T3 收尾已提交，并把攒下的 14 个提交 push 到 `origin/main`（首次 push，`887cd80..5ddede6`）。
-工作区干净**，只剩未跟踪的 `pitfalls/local-env.md`（在 `.gitignore` 里，别提交它）。
+**代码状态**：已完成 **T0–T10 中的 T0–T9**（T9 于 2026-09-14 落地并由主会话复验，落地内容与复验记录见 **T9 行**，本节不复述）。
+**工作区有未提交改动**：新增 `backend/app/services/{scan_launcher,scan_templates}.py`、`backend/app/routes/templates.py`、
+`backend/tests/test_scan_{launcher,templates}.py`；改 `backend/app/main.py`（一处 `include_router`）、`Makefile`（一处注释修错：
+原写"tests 在 /work"，实际是 `/app/tests`，害得 T9 方案里的快闸门挂错了挂载点）、`PLAN.md`（T9/T10 行、泄漏矩阵 #16、
+§向导→CLI 映射、§DooD 那张表、本节）。另有未跟踪的 `plan-t9.md`（T9 施工图，用途已尽、**可删**）与
+`pitfalls/local-env.md`（在 `.gitignore` 里，别提交它）。
+**闸门（2026-09-14，含 T9 与我修的那处 env 缺陷）**：`make test` **682 passed / 0 skipped**、`make lint-api` 干净。
+`make lint-web` 与 `npm run build` 本轮**没跑** —— 零前端改动，跑它换不到任何新信息。
+**push 前照 §禁区 扫一遍新增行**（`git grep -iE "bytedance|palo ?alto|ngfw"` 应为空；新增的美元数字必须是产品侧实测而非 API 账单）—— 仓库是 public。
 往后**每次 push 前照 §禁区 扫一遍新增行**（`git grep -iE "bytedance|palo ?alto|ngfw"` 应为空、
 新增的美元数字必须是产品侧实测而非 API 账单）—— 仓库是 public，这一步不是形式。
 闸门 2026-09-13（含 T3 收尾）：**644 passed / 0 skipped**（641 + 新增 3 条 `systemStatus`
@@ -25,54 +31,36 @@
 全文（`CLAUDE.md` 11,314 字是最大的可控项，而 150 行的旧上限被 77 字/行的长行绕开了）。这一轮 `CLAUDE.md`
 从 147 行 / 11,315 字压到 123 / 10,028，**没有删掉任何一条硬规则或判据**：合行、删掉已有权威副本的论证、
 把 `make reap` 为什么必须要 `strix-run-id` 那一半的归因下沉到未跟踪的 `pitfalls/local-env.md`（禁区规则原文一条没动）。
-**唯一待决**：要不要拆 `agent-rules.md`、让子 agent 只收 §十（§二/§四/§七/§九.1–.7 约 60 行对它们是死重）。
+**待决已清空。** 最后那条"要不要拆 `agent-rules.md`、让子 agent 只收 §十"**2026-09-14 算完账定为不拆**，
+**别再提**：拟摘掉的 §二/§四/§七/§九.1–.7 占该文件 52% ≈ 2,930 字，对着子 agent 实测的 97.9k 平均上下文
+是 **3.0%**（中文按最坏的 1.5 token/字算也只有 4.5%），子 agent 又只占总账单三分之一 → **总账单 1%～1.5%**，
+与 §九 自己判定"是信号不是账单"的 auto-compact（3.6%）同级，而被实测证明有效的两条改动一次降了 43%。
+成本侧则是实的：机制上只有"`CLAUDE.md` 不再 `@import agent-rules.md`"这一条路，代价是 §九（派发纪律）
+与 §八.3（收货要逐条 mutation）从"每次调用都在场"退化成"主会话得记得去读" —— 而这两节正是
+**违反了不会立刻报错**的那类规则。拿 1% 换一次可能静默跳过 mutation 复验的机会是亏的。
 
 **待办（按优先级）**：
-1. **T9 的方案 2026-09-14 已审阅通过，卡在"派发实现 agent"这一步**（用户当时说"方案审完先暂停"）。
-   施工图在**未提交的 `plan-t9.md`**（派发完可删），四条审阅决策与边界在 **T9 行**，本节不复述。
-   **接着干的动作只有一个**：照 `plan-t9.md` §派发形态 写 prompt，派一个 agent 只做实现。
-   T9 仍必须顺手处理下面 ③。
-   工作区里另有本轮改动**未提交**：`PLAN.md`（§向导→CLI 映射 的模板存法与 API 模板行、
-   §DooD 那张表的 `--workspace-file` 行、T9 行、本节）+ 新增 `plan-t9.md`。
-2. T7a／T7b 的复验记录、实测账单、我读代码抓出的那个 `params` 缺陷都在 **T7 行**，本节不复述。
+1. ~~提交本轮改动~~ **2026-09-14 已提交**（T9 全套 + `Makefile` 注释修错 + 本文件）。
+   `plan-t9.md` 删不删由用户定 —— 它已随 a7458fa 被跟踪，删掉 git 历史里也还在。
+2. **T10**（`ScanSupervisor` + `RunDiscovery`）：方案还没写。**T9 交回的四件事已写进 T10 行**
+   （启动断言 `STRIX_IMAGE`／`STRIX_DOCKER_SANDBOX_NETWORK` 非空、`${DATA}/scans/<id>/tmp` 的清理归属、
+   `--resume` 收的是 run name、指令正文一旦回显就是测试账号口令明文），本节不复述。
+   照 §四 模板 3：**方案由主会话写、人审完再另起一个 agent 只做实现**。
+3. **T9 派发实测到的两条教训，下次照做**：① 出处摘录必须把"会用到的符号字面值"也抄进去 ——
+   这次少了 4 个（`SHAPE_*` 的字面值、`TestCredential` 仓库里没有、`settings.scans_dir` 这个 property 名、
+   `BudgetExceedsCeilingError` 无调用先例），害它多跑 3 次 `grep`，首次写代码从第 6 次调用推到第 8 次；
+   ② **快闸门命令派发前自己实测一次** —— 方案里那条挂载点是错的（`/work/tests`，实际 `/app/tests`），
+   我实测后在 prompt 里覆盖掉了，否则子 agent 会拿一条跑不起来的闸门去做 TDD。
 
-**T9 开工前必须知道（T7b 留下的三个缺口，都不阻塞）**：
+**T7b 留下的两个缺口（不阻塞，别丢）**：
    ① **`secrets` 的值没有长度下限**，`verify=false` 时空串会被存下来（`verify=true` 走不到，真实
    请求会失败）。没修是因为 `logging_setup.MIN_SECRET_LENGTH=8` 本来就不脱敏短值，两处判据要一起定。
    ② **`providers.*` 文案树没有任何测试守着** —— `test_message_coverage.py` 只覆盖 `errors`/
-   `scanFailures`/`targetGuard` 三棵。bearer 的成本警告（`PLAN.md:346` 要求给出 4～6 倍的量级对比、
+   `scanFailures`/`targetGuard` 三棵。bearer 的成本警告（要求给出 4～6 倍的量级对比、
    不许只说"可能更贵"）目前**靠人看**。T18 做前端时补。
-   ③ **`strix_llm` 在 vault 里存的是用户原样填的名字**，拼前缀的责任在 `llm_client.model_for()`。
-   T9 必须调它，并按**模型名含 `invoke/`** 决定是否注入 `STRIX_PROMPT_CACHE=false`
-   （判据是**路由**不是 auth_shape，`PLAN.md:333`）。
-   方案里**由主会话决定、与旧 `PLAN.md` 文本不一致的五处**（用户已批，别当成 agent 的越界）：
-   ① **取消 `POST /api/keys/{h}/touch`**（原 §后端接口 列了它）—— `KeyVault.get()` 本身刷新 idle，
-   `GET /api/keys/{h}` 已经是 touch，再加一个 POST 只是同一动作的第二个名字；
-   ② **不做集合版 `GET /api/keys`** —— 前端只握自己那一个 handle，列举全部 handle 没有使用者，
-   而 handle 就是"谁能用这组凭据"的凭证，能列举就多一个面；
-   ③ **缺键不新增 `missing_secret_key` 码**，走 422 `invalid_request` + `params{field,key_name}`
-   ——"多填"是安全防线（防 litellm 静默忽略一套 Bedrock 凭据）所以值一个专码，"少填"只是请求体不合法；
-   ④ **`POST`/`DELETE` 写审计**（`key.registered`/`key.dropped`，只记 provider/auth_shape/labels），
-   复用 T8 的 `services/audit.py`，不造第二个写入方；
-   ⑤ **模型名不做白名单** —— 目录里的 `models` 只是建议列表，真正的校验是验活那一次请求；
-   硬编码清单会过期，而过期的清单会拒掉一个真实可用的模型。
-   **派发前已查证、不要重查**：litellm 1.100.0 **没有** `aws_bearer_token_bedrock` kwarg，
-   `llms/bedrock/base_aws_llm.py:1455-1459` 与 `:1554-1557` 是 `if api_key is not None: aws_bearer_token = api_key`
-   → bearer token 作为 **`api_key`** 传入即可，`os.environ` 一个字都不用动。
-   **T7b 的边界**：`auth_shape` 声明哪几个键的校验（`400 unexpected_secret_key`）、供应商目录、
-   真实验活都**不在** T7a 里 —— vault 只按传进来的数据存取，不判断形状合不合法。
-   **T7a 落地了什么**：`services/key_vault.py`(322) + `tests/test_key_vault.py`(23 条) + `main.py` 五处接线。
-   四条契约判定（idle 挂起 / hard 照删 / `drop` 不看 `ref_count` / 一次性不可变绑定 Redactor）与
-   `assert_single_worker` 拦的到底是哪条路径，**都已写进代码 docstring**，本节不再重复：
-   生命周期判定表见 `key_vault.py` 模块 docstring，启动顺序见 `main.py:3-26`（2b/2c/8 是 T7a 新增的三步）。
-   **复验是我自己跑的，没采信子 agent 的报告**：闸门全绿（见上）；另独立做 4 次 mutation
-   （idle 忽略 `ref_count`／hard 给 `ref_count` 开豁免／`drop` 看 `ref_count`／`store` 不拷贝映射），
-   每次**只红该红的那条** → 子 agent 自陈的偏差"TDD 的 RED 只是整文件红、不是每条各自红"**判定为够**。
-   **复验查出一个它没发现的缺陷，已修**：`secret_values()` 会在 `asyncio.to_thread` 的工作线程里被
-   Formatter 调用（`logging_setup.py:143`；例如 `allowlist.current()` 的 warning 经 `routes/targets.py:352`），
-   而 sweeper 在事件循环线程 `del self._entries[...]` → `RuntimeError: dictionary changed size
-   during iteration`，被 `Handler.handleError` 吞掉，后果是**那一行日志整条消失**。改成先 `tuple()` 取快照。
-   **刻意没配测试**：竞态没法确定性断言，判据只写在那个方法的 docstring 里。
+   （原先列在这里的第三个缺口"`strix_llm` 存的是用户原样填的名字、拼前缀在 `model_for()`"
+   **已由 T9 消化**：`build_env` 调它，并按解析后的模型名含 `invoke/` 决定 `STRIX_PROMPT_CACHE`，
+   bearer 与"用户手打 invoke 前缀的 SigV4"两半都有测试。）
 
 **2026-09-12 已拍板（别再当待办）**：T8 交回的第 ③ 件 —— `TargetRejected` 在 HTTP 层的表达。
 `/api/targets/validate` 恒 200（已落地），`POST /api/scans` 服务端重校验 → **422 `invalid_request`
@@ -343,6 +331,8 @@ Strix/
 | 13 | 网络传输 | 浏览器 → nginx **全程 TLS**（自签证书，SAN+EKU）；Key 只在 JSON POST body，绝不进 query/path。反代**不经 Next.js** → Node 进程不再持有 Key。**已知且接受的残余风险**：`nginx → api` 走 Docker 桥网**明文**，有 `docker.sock` 权限者（本机管理员）可被动抓包拿到 Key。判断依据：仅本机使用、其他本地账号非对抗性。**必须写进 `docs/SECURITY-zh.md`**，不得让人误以为"上了 HTTPS 所以 Key 全程加密" |
 | 14 | **TLS 私钥本身**（2026-09-08 T4 落地时发现，原矩阵漏项）| `${DATA}/tls/key.pem` 是 `0600`、以 `:ro` 挂进 nginx。**但残余风险不在 nginx 一侧**：`${DATA}` 整个目录以**读写**方式挂进以 `user: "0:0"` 运行的 `api` 容器 —— **`api` 被拿下即等于私钥泄漏**，而 `api` 恰恰是攻击面最大的那个容器（它跑 LLM 驱动的子进程）。不修的理由：能拿到 `api` 内 root 的人本来就已经能读 `docker.sock`（≈ 宿主 root），私钥不是那时最值钱的东西 —— 这是**风险不升级**，不是"私钥安全"。补偿：证书只签 `localhost`/`127.0.0.1`（SAN 里没有别的名字，偷去了也冒充不了任何真实域名）、`CA:FALSE`（不能拿它给别的域名签证书）。**写进 `docs/SECURITY-zh.md`；将来若把 `${DATA}` 收成只读或换非 root 用户，重新评估这一行** |
 | 15 | **nginx 的 error log**（同上，T4 实测）| `access_log` 用 `$uri` 只管住访问日志；**error log 会打完整 `$request` 与上游 URL（含 query），且格式不可配置**（`pitfalls` 条 30）。所以"敏感值不进日志"在这一层**没有**结构性保证，靠的是后端侧"Key 只经 JSON POST body、绝不进 query/path"这条约束。**验收 #11 扫日志必须把 `nginx` 的 stderr 一起扫**，只扫 `api` 是漏的 |
+
+| 16 | **测试账号口令不在脱敏集合里**（2026-09-14 T9 落地时发现，原矩阵漏项）| 第 3 行的精确子串脱敏取的是 **KeyVault 里活跃凭据的值**，而操作者填的测试账号口令**从不进 KeyVault** —— 它只在 tmpfs 的 `instruction.txt` 里（`compose_instruction` 写成 `role=… username=… password=…` 一行）。目前不泄漏，因为**没有任何代码读那个文件**；但**T10 一旦把指令正文回显进日志或前端，就是明文**。对策二选一、由 T10 定：要么正文永不回显（只回显 `instruction_sha256`），要么把 `spec.test_credentials` 的值也喂给 Redactor。**不许"先回显再说"** |
 
 **KeyVault 生命周期**：`IDLE_TTL=8h` / `HARD_TTL=24h` / 60s sweeper；`ref_count` 跟踪活跃扫描与报告任务；
 `DELETE /api/keys/{h}` 立即清除。`api` **必须 `--workers 1`**（vault 是进程内 dict，多 worker 会随机 404）——
@@ -940,8 +930,8 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T6 | `target_guard.py` 纯函数全分类（punycode、split-horizon、`user:pass@`、元数据地址、IPv6）| T2 | `services/target_guard.py` `tests/test_target_guard.py` | 2 ✅ 2026-09-11，**181 个用例**（原估 ~80）。判定核心是 `_policy_for()` 一个函数 = §护栏 那六行的可执行版；**`requirement`／`overridable` 与 `allowed` 正交**，所以勾上之后放行入口不会从界面上消失。三件交回的事见 T8 行 |
 | T7 | `key_vault.py`（TTL sweeper、`ref_count`、`--workers 1` 启动校验）+ `POST /api/keys` 真实验活 | T2 | `services/{key_vault,llm_client}.py` `routes/{keys,providers}.py` | **3** —— `auth_shape` + `secrets` + `params` 的契约被 **T9／T18／T19 三个任务继承**，`/api/providers` 声明的"每种形状要哪几个键"是前端渲染 1／2／3 个输入框的唯一依据，改错一处要动三处。<br>**⚠️ 已按"派发前必须拆"执行（2026-09-12 用户放行）**：本行涉及文件跨「服务＋路由＋文案＋测试」，正是 T8 超支的结构原因（`agent-rules.md` §九.5）。拆成 **T7a**=`services/key_vault.py` 内存实现 + 单测 + `main.py` 五处接线（**2026-09-12 已落地并复验，闸门全绿**；实测代价：方案 24 次调用 + 实现 45 次工具调用 / 54 分钟，0 次压缩 —— 拆分有效）、**T7b**=`routes/{keys,providers}.py` + `services/llm_client.py` 真实验活 + `zh-CN.json` + 路由层测试（**2026-09-13 已落地并复验**：`llm_client.py`(332) + `keys.py`(272) + `providers.py`(72) + `test_keys.py`(33 条) + `main.py` 3 处接线 + `zh-CN.json` 的 `providers.*`；闸门 **641 passed / 0 skipped**、ruff 干净）。<br>**T7b 是"方案由主会话写 + 快闸门"的第一次执行，账单降 43%**（44 次调用、0 压缩、平均上下文 97.9k 与 T7a 持平，但 `cache_read==0` 从 5 次降到 1 次 —— 数字在 `pitfalls/local-env.md`）。**这两条改动就此从"推测"变成"实测有效"，以后照做。**<br>**复验查出一个它没报的真缺陷，已修**：`params` 的键**完全没校验**，而 `params` 刻意不进 `KeyVault.secret_values()`（永不脱敏）又被 `GET /api/keys/{h}` 原样回显 —— 把凭据填进 `params` 就同时得到"存下来 + 明文回显 + 日志不脱敏"。`ShapeSpec.param_keys` 声明了白名单并经 `/api/providers` 发布，却没有任何代码强制它（pitfalls 条 23 的形状）。现补 `llm_client.check_param_keys()`：多余键与缺键都 **422 `invalid_request` + `params{field:"params",key_name}`**，码不用 `unexpected_secret_key`（收到的按定义不是 secret，用那个码会让前端说"你凭据填错了"）。顺带把 `_completion_kwargs` 的 `params.get("AWS_REGION_NAME","")` 改成直接下标，并把它挪到 `try` 之外 —— 否则 KeyError 会被那个宽口径 `except` 吞成"验活未通过"，让 bug 长期伪装成用户凭据不对。<br>**T7a 交给 T7b 的东西**：`auth_shape` 声明哪几个键的校验（`400 unexpected_secret_key`）、供应商目录、真实验活**都不在 T7a 里** —— vault 只按传进来的数据存取，不判断形状合不合法 |
 | T8 | 授权清单（加载／校验／热重载）+ `/api/targets/validate` | T6 | `services/allowlist.py` `routes/{allowlist,targets}.py` | 2 ✅ 2026-09-12，**130 个新用例**。四个测试文件各造一份的 `app`／`anonymous`／`client` 夹具与 `make_entry` 收进了 `conftest.py`（需要替身的文件**覆写 `anonymous`**，替身必须在 lifespan 跑完之后才装得住）。**另新建 `services/audit.py`**（`audit_log` 表 T2 就建好了但没有写入方）—— 只有一个 `record()`，DB + ndjson 双写共用同一时刻，**T12／T25 在它上面加事件，不要造第二个写入方**。`/api/targets/validate` **刻意不写审计**：它是会被反复调用的只读预览。<br>**T6 交回的三件事**：① `zh-CN.json` 的 `targetGuard` 子树（8 个 `RejectionReason` 的中文 + `notes.loopback_rewrite`；**不进 `errors.py`**，它们是输入框下方的行内提示，请求本身没失败）—— 已做；② ~~`registrable_domain`~~ **已定不做**（2026-09-11 用户拍板）：正确实现要 Public Suffix List，而近似实现（取末两段）在 `example.co.uk` 上算出 `co.uk`，这个值要进逐字确认串 —— **一个错的注册域名比没有更糟**，会让用户确认一个不是他想授权的范围。**别再加回来**，要加就先把 PSL 那笔维护账付掉；③ ~~⏳ `TargetRejected` 在 HTTP 层怎么表达~~ **2026-09-12 定完，判据表搬到 T12 行** |
-| T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/{scan_launcher,scan_templates}.py` `routes/templates.py` `tests/test_scan_{launcher,templates}.py` | **3** —— **方案 2026-09-14 已审阅通过、尚未派发实现**，原文在**未提交的 `plan-t9.md`**（含派发 prompt 要抄的出处摘录；派发完可删）。<br>**审阅时定的四条**（都已落进本文件对应位置，此处不复述理由）：① 模板存 Python 常量不存 YAML（§向导→CLI 映射）；② `--resume` 不进 T9（`strix_run_name` 要等 T10 抢到才存得下）；③ spec 上传 v1 不做（`--workspace-file` 在 1.5.3 的 CLI 里不存在，见 §向导 那张表与 §DooD 路径别名 那张表）；④ **`zh-CN.json` 不在 T9 范围内** —— `/api/scan-templates` 只回机器码，模板中文名归 T19（不跨文案，所以这一行不用再拆）。<br>**边界**：T9 只构造 argv/env/cwd + 建 tmpfs 上那两个文件，**不起进程**（起进程与退出码归因是 T10；并发闸／DNS 重解析／逐字确认／写 `scans` 行／审计是 T12）。<br>**实测得到的三个 env 名**（`strix.config.settings.LlmSettings`，2026-09-14）：`api_base` 的落点是 **`LLM_API_BASE`**（不注入就静默丢失）；`STRIX_REASONING_EFFORT` 是**枚举** `none\|minimal\|low\|medium\|high\|xhigh\|max`（默认 `high`，非法值会让子进程死在 pydantic 启动校验上、被归因成"扫描失败"，所以要在构造阶段 422）；`STRIX_PROMPT_CACHE` 的判据是 `"invoke/" in model_for(...)`，**不是** `auth_shape == bearer`。`--resume` 收的是 **run name**（`strix_runs/` 下的目录名）不是 `scan_id` —— `scans.strix_run_name` 那一列就是为它准备的 |
-| T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 |
+| T9 | `ScanLauncher`：argv + env + tmpfs HOME + 预置 `--config` + cwd/TMPDIR + `RUN_ID`；6 个模板的黄金 argv 测试 | T7 T8 | `services/{scan_launcher,scan_templates}.py` `routes/templates.py` `tests/test_scan_{launcher,templates}.py` | **3** —— **2026-09-14 已落地并复验**：`services/scan_templates.py`(194) + `services/scan_launcher.py`(350) + `routes/templates.py`(56) + `tests/test_scan_launcher.py`(405，23 条) + `tests/test_scan_templates.py`(62，5 条) + `main.py` 一处接线；官方闸门 **682 passed / 0 skipped**、ruff 干净。施工图 `plan-t9.md`（已随 a7458fa 提交，被跟踪）的用途已尽，可删（删了 git 历史里还在）。<br>**复验（主会话自己做，没采信子 agent 的报告）**：8 次 mutation（argv 塞 `api_base`／改用 `--instruction`／env 变成 copy／不设 `STRIX_RUN_ID`／`STRIX_PROMPT_CACHE` 恒 true／指令文件 0644／`cleanup_workspace` 变 no-op／去掉预算必填），**每次只红该红的那几条**。<br>**两条"负对照"没红 = 一个真缺陷，已修**：env 原先把 `STRIX_TELEMETRY`／`STRIX_NO_UPDATE_CHECK`／`LITELLM_LOG`／`STRIX_RUN_TYPE` 当"容器级透传，缺就跳过"（这是方案里写的），而这四个**缺失时都不报错**：缺 telemetry 就是 PostHog + Scarf 外发（§禁区第一条），缺 `STRIX_RUN_TYPE` 就是沙箱容器没 label、`make reap` 回收不到 —— 从白名单删掉任何一个，**没有一条测试变红**。又是 T7b 那个 `params` 缺陷的形状（声明了却没有任何一处强制）。现改成 `_PINNED_ENV` 写死在代码里、**放在透传之后**（本进程环境写了相反值也不生效），加一条测试。`STRIX_IMAGE` 与 `STRIX_DOCKER_SANDBOX_NETWORK` 刻意仍走透传（**没有安全的默认值**，猜错网络名比报错难查），强制点交给 T10 的启动断言。<br>**子 agent 相对方案的 4 处偏离，全部判定接受**：① 加 `build_launch_plan()` 组合器（方案定义了 `LaunchPlan` 却没有函数产出它，不加它 `argv_preview == argv` 就没有可断言的落点）；② `build_argv` 多一个必填 `budget_ceiling_usd`（把预算上限校验挂在 argv 的唯一入口上，而不是"请调用前先校验"）；③ `prepare_workspace -> Workspace`（方案未定返回类型）；④ 多校验 `scan_mode ∈ {quick,standard,deep}`（与已列的 `reasoning_effort` 同类：非法值会让子进程死在 argparse 上、被归因成"扫描失败"，复用同一个已有码、零新增代码）。<br>**实测代价**：32 次工具调用（预算 ≤55）、0 次压缩、第 8 次调用开始写代码（预算是第 6 次）—— 晚的那 3 次是 `grep` 去查方案摘录没给的四个符号（`SHAPE_*` 的字面值、`TestCredential` 仓库里不存在、`settings.scans_dir` 这个 property 名、`BudgetExceedsCeilingError` 没有调用先例所以 params 键名要自定）。**下次派发把"要用到的符号字面值"也抄进摘录**。<br>**审阅时定的四条**（都已落进本文件对应位置，此处不复述理由）：① 模板存 Python 常量不存 YAML（§向导→CLI 映射）；② `--resume` 不进 T9（`strix_run_name` 要等 T10 抢到才存得下）；③ spec 上传 v1 不做（`--workspace-file` 在 1.5.3 的 CLI 里不存在，见 §向导 那张表与 §DooD 路径别名 那张表）；④ **`zh-CN.json` 不在 T9 范围内** —— `/api/scan-templates` 只回机器码，模板中文名归 T19（不跨文案，所以这一行不用再拆）。<br>**边界**：T9 只构造 argv/env/cwd + 建 tmpfs 上那两个文件，**不起进程**（起进程与退出码归因是 T10；并发闸／DNS 重解析／逐字确认／写 `scans` 行／审计是 T12）。<br>**实测得到的三个 env 名**（`strix.config.settings.LlmSettings`，2026-09-14）：`api_base` 的落点是 **`LLM_API_BASE`**（不注入就静默丢失）；`STRIX_REASONING_EFFORT` 是**枚举** `none\|minimal\|low\|medium\|high\|xhigh\|max`（默认 `high`，非法值会让子进程死在 pydantic 启动校验上、被归因成"扫描失败"，所以要在构造阶段 422）；`STRIX_PROMPT_CACHE` 的判据是 `"invoke/" in model_for(...)`，**不是** `auth_shape == bearer`。`--resume` 收的是 **run name**（`strix_runs/` 下的目录名）不是 `scan_id` —— `scans.strix_run_name` 那一列就是为它准备的 |
+| T10 | `ScanSupervisor`（退出码→中文、优雅停止、`finally` 清 tmpfs）+ `RunDiscovery` | T9 | `services/{scan_supervisor,run_discovery}.py` | 2 —— **T9 交回四件事**：① **启动断言 `STRIX_IMAGE` 与 `STRIX_DOCKER_SANDBOX_NETWORK` 非空**（两者仍走 env 透传、缺了静默降级：沙箱网络缺失 → Caido 端口解析成 `127.0.0.1`。`settings.py` 已有这两个字段且默认 `""`，断言挂在 `main.py` 的启动序列上，和 `assert_single_worker` 同一处）；② `cleanup_workspace()` **只删 tmpfs**，`${DATA}/scans/<id>/tmp` 的清理没有归属（T10 或 `make reap` 挑一个，别两边都做）；③ `--resume` 收的是 run name，`RunDiscovery` 抢到之后才写得进 `scans.strix_run_name`；④ 指令正文里测试账号是 `role=… username=… password=…` 一行，**那个口令不在 KeyVault 里因此不在脱敏集合里** —— T10 若把指令正文回显进日志/前端就是明文泄漏（泄漏矩阵新增一行，见 §Key 不落盘）|
 | T11 | `Reaper`（启动/定时/每次停止后按 label 清扫）+ 镜像预拉取带 WS 进度 | T10 | `services/reaper.py` | **2 —— ⚠️ 破坏性操作**（判据见上方「两条容易搞反的」）。prompt 必须写死：**`label=strix-run-type=console` 且 `strix-run-id` 非空**的双条件过滤、先 `--dry-run` 打印、禁止按"名字像"或"时间早"删。⚠️ **run-id 那一半不是可选的** —— M0 靶场被手打了同一个 `strix-run-type=console`（2026-09-11 实测），只按前者会删掉它；加上后者永不误伤真沙箱（`docker_client.py:113` 早退）。直接复用 `docker_probe.ORPHAN_LABEL_SELECTOR`／`ORPHAN_REQUIRED_LABEL`，别再抄字面串 |
 | T12 | `POST /api/scans` 全套授权不变式（`authorization_id NOT NULL`、DNS 重解析比对、逐字确认）| T9 | `routes/scans.py` `services/audit.py` | **3** —— **T8 交回三件事**：① `target.rejected`／`dns_changed` 两个审计事件**加在 `services/audit.py` 上**，不要造第二个写入方；② `services/dns_resolver.py` 的 `resolve_sync` errno→码映射（`dns_not_found`／`dns_timeout`／`dns_failed`）**目前没有测试**，真要依赖它就在这里补一个 monkeypatch 用例；③ `GET /api/allowlist` 现在把 `owner`／`authorization_ref` 原样返回 —— 今天没问题（只有一个账号），但**一旦出现只读操作员角色就必须做字段过滤**。<br>**服务端重校验的拒绝出口（2026-09-12 拍板，T8 交回 ③ 的答案；两条出处已在代码里：`routes/targets.py:5-8` 与 `target_guard.py:122-124`）**：按"性质"分两类，**不新增 `target_rejected` 码** —— 8 个 `RejectionReason` 各编一个 HTTP 码会得到 8 个永不当响应码用的"错误"（`errors.py` 模块 docstring），合成 1 个新码又与 `invalid_request` 语义重叠。<br>· 规范化失败（`RejectionReason`）→ **422 `invalid_request`**，`params = {field:"targets", index:<下标>, reason:<RejectionReason>}`，**遇到第一个就拒（fail-fast）**：`ParamValue` 只许 JSON 标量（`errors.py:38-40` 刻意不许 dict／list，防止有人往里塞整个请求体进而塞进凭据），逐条列全就得先破那条约束或给错误响应加第四个字段，而这条路径本该被向导第 1 步的 `validate` 拦住，不值得为它付这笔账。**`raw` 绝不进 `params`** —— `user:pass@host` 的原文回显只许存在于 `validate` 的 200 正文那一处（T30a 已如实记录那一条残余风险，别扩大它）<br>· 缺勾选（`required_opt_in` 非空）→ 同样 **422**，`params = {field:"overrides", index:<下标>, missing_opt_in:<OptInFlag>}`<br>· 护栏策略拒绝 → 保持 `GuardVerdict.error_code`：`blocked_metadata` **403**（不可覆盖），`not_in_allowlist`／`split_horizon`／`dns_changed` **409**（可以改状态再来）<br>· 前端（T18）：`params.reason` 在时去 `targetGuard.reasons.*` 取那句人话并高亮第 `index` 行，不在时退回 `errors.invalid_request` 的通用文案。落地要顺手补 `zh-CN.json` 的 `errors.invalid_request.params` 与 `paramLabels` 三个新键（`index`／`reason`／`missing_opt_in`）|
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3** —— **T14／T15／T16／T21／T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界 |
