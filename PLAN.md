@@ -4,13 +4,16 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-**代码状态**：T7a + T7b 已复验并**已于 2026-09-13 提交**（代码一个提交、文档一个提交）。
-**工作区干净**，只剩未跟踪的 `pitfalls/local-env.md`（在 `.gitignore` 里，别提交它）。
-`main` 比 `origin/main`（`887cd80`）**领先 13 个提交，从未 push**
-（数字用 `git rev-list --count origin/main..HEAD` 复核；这里刻意不写当前提交的 SHA ——
-写了就会被下一次 amend 打脸，`git log -1` 一秒就能看）。**push 与否用户还没表态，别自己推。**
-闸门 2026-09-13 在含 T7a+T7b 的工作区上全绿：`make test` **641 passed / 0 skipped**、
-`ruff check` + `ruff format --check` 干净。已完成 T0–T8（T7a、T7b 均已复验）。
+**代码状态**：已完成 T0–T8，T3 的前端收尾也做完了（2026-09-13，见 T3 行）。
+**2026-09-14：T3 收尾已提交，并把攒下的 14 个提交 push 到 `origin/main`（首次 push，`887cd80..5ddede6`）。
+工作区干净**，只剩未跟踪的 `pitfalls/local-env.md`（在 `.gitignore` 里，别提交它）。
+往后**每次 push 前照 §禁区 扫一遍新增行**（`git grep -iE "bytedance|palo ?alto|ngfw"` 应为空、
+新增的美元数字必须是产品侧实测而非 API 账单）—— 仓库是 public，这一步不是形式。
+闸门 2026-09-13（含 T3 收尾）：**644 passed / 0 skipped**（641 + 新增 3 条 `systemStatus`
+文案守卫）、`ruff check` + `ruff format --check` 干净、`make lint-web` 干净、
+`npm run build` 干净且 `/` 仍是静态预渲染。**跑的是快闸门**（同一个
+`strix-console/api-test:0.1.0` 镜像 + `:ro` 挂载），没跑 `make test` —— 本轮后端改动只有
+一个测试文件，重建镜像换不到任何新信息。
 
 **规则变更（2026-09-13 用户拍板，已落地，下一份派发 prompt 起生效）**：**要 TDD 的内核，不要那
 320 行 skill。** `superpowers/test-driven-development` 一律不整包挂，只把两句抄进 prompt
@@ -22,15 +25,15 @@
 全文（`CLAUDE.md` 11,314 字是最大的可控项，而 150 行的旧上限被 77 字/行的长行绕开了）。这一轮 `CLAUDE.md`
 从 147 行 / 11,315 字压到 123 / 10,028，**没有删掉任何一条硬规则或判据**：合行、删掉已有权威副本的论证、
 把 `make reap` 为什么必须要 `strix-run-id` 那一半的归因下沉到未跟踪的 `pitfalls/local-env.md`（禁区规则原文一条没动）。
-**两个待决**：① 要不要拆 `agent-rules.md`、让子 agent 只收 §十（§二/§四/§七/§九.1–.7 约 60 行对它们是死重）；
-② 那 11 个提交要不要 push。
+**唯一待决**：要不要拆 `agent-rules.md`、让子 agent 只收 §十（§二/§四/§七/§九.1–.7 约 60 行对它们是死重）。
 
 **待办（按优先级）**：
-1. **T7b 已于 2026-09-13 落地并复验完**（详情、实测账单、我查出的那个 `params` 缺陷都在 T7 行）。
-   复验做法：闸门自证 641 passed + ruff 干净，另做 **8 次 mutation**（验活失败照样存 vault／多余
-   secret 键放行／缺 secret 键放行／响应回明文／bearer 用错路由／DELETE 不真删／params 多余键放行／
-   params 缺键放行），每次**只红该红的那条**。
-   **T7b 还剩三个已知缺口（不阻塞，但 T9 起必须知道）**：
+1. **T9 是主线下一步**（模板 3，前置 T7／T8 都已完成，且它是清单里唯一前置全满足的任务 ——
+   T10/T11、T12/T18、T13 以下五个全堵在它后面，**没有可并行的第二条线**）：按 §派发清单 规则 6，
+   **由主会话写方案 → 人审 → 另起一个 agent 只做实现**。T9 必须顺手处理下面 ③。
+2. T7a／T7b 的复验记录、实测账单、我读代码抓出的那个 `params` 缺陷都在 **T7 行**，本节不复述。
+
+**T9 开工前必须知道（T7b 留下的三个缺口，都不阻塞）**：
    ① **`secrets` 的值没有长度下限**，`verify=false` 时空串会被存下来（`verify=true` 走不到，真实
    请求会失败）。没修是因为 `logging_setup.MIN_SECRET_LENGTH=8` 本来就不脱敏短值，两处判据要一起定。
    ② **`providers.*` 文案树没有任何测试守着** —— `test_message_coverage.py` 只覆盖 `errors`/
@@ -67,8 +70,6 @@
    而 sweeper 在事件循环线程 `del self._entries[...]` → `RuntimeError: dictionary changed size
    during iteration`，被 `Handler.handleError` 吞掉，后果是**那一行日志整条消失**。改成先 `tuple()` 取快照。
    **刻意没配测试**：竞态没法确定性断言，判据只写在那个方法的 docstring 里。
-2. 本地 11 个提交要不要 push 到 `origin/main`（仓库是 public，push 前自己再扫一遍具名内网信息）。
-3. **T3 的前端一小步**（`systemStatus` 文案 + 首页侧栏四行接真值，`null` 必须画「未知」）还挂着，见 T3 行。
 
 **2026-09-12 已拍板（别再当待办）**：T8 交回的第 ③ 件 —— `TargetRejected` 在 HTTP 层的表达。
 `/api/targets/validate` 恒 200（已落地），`POST /api/scans` 服务端重校验 → **422 `invalid_request`
@@ -924,7 +925,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T0 | 最小 `api` 镜像 + compose 骨架（`strix-agent==1.5.3` 精确 pin + `--only-binary=:all:` + hash lock + 同路径挂载 + `strix_sandbox` 网络）| — | `backend/Dockerfile` `backend/pyproject.toml` `docker-compose.yml` `.env.example` `setup.sh` | **3** ✅ |
 | T1 | **M0 契约实测** | T0 | 无（只跑命令）| **自** ✅ 2026-09-08 六条断言全过（记录在 §里程碑 M0）。**断言 2 只覆盖 `bedrock-apikey` 形状，`single` 形状要在 T7 复跑一遍** |
 | T2 | FastAPI 骨架 + `assert_no_secret_columns()` + `RedactionFilter` + 建表迁移 | T1 | `app/{main,settings,db,models,logging_setup}.py` `migrations/001_init.sql` | **3** ✅ 2026-09-08（复核记录见 §里程碑「已完成任务的复核记录」；**404/405 的响应形状**见下方独立一段）|
-| T3 | `/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检 | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 ✅ 2026-09-11。**接口刻意不带缓存**（缓存会在用户刚修好之后继续说没修好）；启动期一次都不探（探不到 docker 就起不来 = 没有界面能告诉用户是 docker 的问题）。<br>**⏳ 剩下的前端一小步**（不是新任务，接上就行）：① `zh-CN.json` 新建 `systemStatus` 段装六个阻断码的中文 —— `docker_unreachable` / `sandbox_network_missing` / `api_not_on_sandbox_network` / `same_path_mount_unverified` / `sandbox_image_missing` / `telemetry_not_disabled`（**刻意不进 `errors.py`**：那是 HTTP 错误码树，混在一起前端就不知道去哪棵取词，`test_two_code_trees_stay_disjoint` 是这条的机械版）；② 首页侧栏「本机就绪状态」四行接真值，**三态**：`true` 绿 / `false` 红 / **`null` 必须画成"未知"，绝不画绿** |
+| T3 | `/api/system/status`：同路径主动探测（哨兵文件 + `docker run -v <p>:<p>`）、网络挂载自检 | T2 | `services/docker_probe.py` `routes/{health,system}.py` | 2 ✅ 2026-09-11。**接口刻意不带缓存**（缓存会在用户刚修好之后继续说没修好）；启动期一次都不探（探不到 docker 就起不来 = 没有界面能告诉用户是 docker 的问题）。<br>**前端收尾 ✅ 2026-09-13（主会话自己做，没派 agent）**：`zh-CN.json` 新增第四棵码树 `systemStatus.blockers.*`（六个阻断码，纯字符串；**刻意不进 `errors.py`**，理由与 `targetGuard` 同）+ 新建 `components/system/ReadyRows.tsx`（客户端叶子，`Panel` 与标题仍在服务端页面上）。三态判定落成一条：**只有 `true` 才画实心点**，`false` 用 `warn`（方块 = 需要你处理，`StatusDot` 已有这一档，不新加红色 token），`null` 与"还没请求"一律 `idle` —— 值那一列分「尚未检测」（还没请求）／「未知」（试过了没答案）两句话。<br>**两处刻意偏离原计划，都已在代码里写清理由**：① **四行变五行**，新增「沙箱网络已就绪」—— `sandbox_network_missing` 与 `api_not_on_sandbox_network` 在首页原先没有任何位置，于是沙箱网络坏掉时那个面板会四行全绿而扫描根本发不起来（`ready_for_scan:false`），一个说"就绪"却不能扫的面板正是这块 UI 要防的东西；② 那次请求**挂在 `["session"]` 查询的 `enabled` 上** —— `/api/system/status` 是全站第一个需要身份的接口，未登录直接打它会 401 → 弹会话失效遮罩，而 `RequireSession` 见到 `expired` 就刻意不再跳转，结果"没登录进首页"会从"静默跳登录页"退化成"停在首页看遮罩"。<br>**新增 3 条测试**（`test_message_coverage.py` 第五节，双向比对 `ALL_BLOCKER_CODES` + 纯字符串形状），**2 次 mutation 验证过它们能变红**（改名一个阻断码 → 只有那两条双向比对红；把它改成 `internal_error` → 再多两条红，其中一条是 `test_system_status.py` 里**早就存在**的同义断言，于是我把自己那条重复的 disjoint 测试删了，§十.4）。<br>**唯一没验的一环，如实记账**：`true`/`false`/`null` 三态在**真浏览器里**长什么样没看过 —— 那要登录（面板在鉴权之后），而口令只有用户有。类型检查 + 生产构建 + 读代码都过了，真机确认留给用户或 `make verify-e2e`（T30b） |
 | T4 | TLS 全套：证书生成（SAN+EKU）、`nginx.conf` 四条必须指令、compose 加 `nginx` | T0 | `setup.sh` `nginx/nginx.conf` `docker-compose.yml` `env.example` | 2 ✅ 2026-09-08（复核记录见 §里程碑「已完成任务的复核记录」；带出 `pitfalls` 条 26–31 与泄漏矩阵 #14／#15）|
 | T4b | **单账号登录 —— 后端**：`auth.py`（scrypt + 随机 salt + `hmac.compare_digest`）、`${DATA}/auth.json`(0600) 读写、会话 = 进程内存不透明 id、`POST /api/auth/{login,logout}` + `GET /api/auth/me`、**全局路由依赖**（唯一豁免 `/api/health` 与三个 auth 路由本身）、失败限流、`setup.sh` 建初始账号（口令经 `read -rs`）、`audit_log.actor` 落真实用户名 | T2 T4 | `app/services/auth.py` `app/routes/auth.py` `app/main.py` `setup.sh` `tests/test_auth.py` | **3** ✅ 2026-09-08。当时写死的四条硬约束（散列绝不进 SQLite、不引 `argon2-cffi`／`passlib`／`python-jose`／`pyjwt`、不装 `CORSMiddleware`、会话不签名不自包含）已收进 `CLAUDE.md` §安全不变式 与本文 §单账号登录 |
 | T5 | **前端视觉方向**（定一次，产出项目设计约定）+ Next.js 外壳 + 全中文文案表 | T2 | `frontend/messages/zh-CN.json` `frontend/src/app/*` `frontend/Dockerfile` `docker-compose.yml`(只加 `web`) | **3 + frontend-design** ✅ 2026-09-09。三条**仍然生效**的禁令（不引 Vite／Rollup／esbuild 作独立构建层、不 `next export`、`web` 只 `expose` 不 `ports`）已搬进 `frontend/CLAUDE.md` |
