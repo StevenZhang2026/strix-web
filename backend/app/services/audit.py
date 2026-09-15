@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 EVENT_ALLOWLIST_CHANGED = "allowlist.changed"
 EVENT_KEY_REGISTERED = "key.registered"
 EVENT_KEY_DROPPED = "key.dropped"
+EVENT_TARGET_REJECTED = "target.rejected"
+EVENT_TARGET_DNS_CHANGED = "target.dns_changed"
 """事件名。**字面串只出现在这里**，路由层 import 它们。
 
 集中在本模块而不是各自写在抛出方的路由里：这份名单就是"审计里会出现哪些事件"的全部

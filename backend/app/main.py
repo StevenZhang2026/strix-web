@@ -9,9 +9,11 @@
     2c. assert_sandbox_env()           两个沙箱变量缺一个，抓包代理就静默降级；纯配置
                                        校验、不打日志，所以排在第 3 步之前
     2d. KeyVault()                     **必须在第 3 步之前** —— Redactor 要在日志配好
-                                       之前就拿到凭据来源。不用"先占位再 rebind"：那会
-                                       造出一个"装上了但还是旧的"中间态，失败模式是
-                                       日志照打、只是不脱敏（静默）
+      + ScanSecretRegistry()           之前就拿到**全部**凭据来源。不用"先占位再
+                                       rebind"：那会造出一个"装上了但还是旧的"中间态，
+                                       失败模式是日志照打、只是不脱敏（静默）。注册表
+                                       把 vault 那个来源**包住**，所以对外仍然只有一个
+                                       provider 交给唯一的 Redactor（T12b）
     3. configure_logging()             从这里起日志才带脱敏
     4. 数据目录可写 + 建子目录         下面每一步都要写这个目录
     5. db.connect() / migrate()        建表
@@ -86,6 +88,7 @@ from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
 from app.services.key_vault import KeyVault, assert_single_worker
 from app.services.reaper import Reaper
+from app.services.scan_secrets import ScanSecretRegistry
 from app.services.scan_supervisor import ScanSupervisor, assert_sandbox_env
 from app.settings import Settings, assert_no_credential_env, load_settings
 
@@ -301,8 +304,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # "provider 装上了但还是旧的"的中间态，而它的失败模式是**静默**的
         # （日志照打、只是不脱敏）—— 与 logging_setup docstring 里那个已实测的坑同型。
         # 一次性、不可变的绑定没有那个窗口。
+        #
+        # 测试账号口令不在 vault 里（它不是 LLM 凭据），所以 `ScanSecretRegistry` 把
+        # vault 那个来源**包住**，对外仍然只有一个 provider 交给唯一的 Redactor。
+        # 刻意不在这里写 `lambda: key_vault.secret_values() | scan_secrets.values()`：
+        # 组合逻辑（快照、并集）要有一个可单测的落点，而 main.py 里的 lambda 测不到。
+        # 它必须与 Redactor **同时**构造，理由同上：Redactor 要在日志配好之前拿到
+        # **全部**凭据来源，事后再补一个来源就又造出了那个静默的中间态。
         key_vault = KeyVault()
-        redactor = Redactor(secret_provider=key_vault.secret_values)
+        scan_secrets = ScanSecretRegistry(key_vault.secret_values)
+        redactor = Redactor(secret_provider=scan_secrets.secret_values)
         configure_logging(resolved.console_log_level, redactor)
 
         strix_version = _resolve_strix_version()
@@ -341,6 +352,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = resolved
         app.state.redactor = redactor
         app.state.key_vault = key_vault
+        app.state.scan_secrets = scan_secrets
         app.state.db = db
         app.state.strix_version = strix_version
         app.state.auth = auth_service

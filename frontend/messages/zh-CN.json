@@ -164,7 +164,7 @@
       "title": "请求内容不合法",
       "detail": "后端没能解析这次提交的内容，通常是有必填项没填，或者格式不对。",
       "action": "回到上一步检查标记出来的字段，改好后重新提交。",
-      "params": ["field", "key_name"]
+      "params": ["field", "index", "reason", "missing_opt_in", "key_name"]
     },
     "not_found": {
       "title": "找不到这个地址",
@@ -187,25 +187,25 @@
       "title": "目标不在授权清单里",
       "detail": "当前是强制模式，只有列进授权清单的目标才允许扫描。",
       "action": "确认你对这个目标确实有授权，然后把它加入清单。加入这一步会写进审计记录。",
-      "params": ["target"]
+      "params": ["field", "index", "target"]
     },
     "blocked_metadata": {
       "title": "这个地址永久禁止扫描",
       "detail": "它是云服务商的元数据地址，扫描它等于替攻击者去取云凭据。这条限制不能解除，也没有「确认后继续」。",
       "action": "换一个目标。要测云上主机，请填它对外的域名或公网 IP。",
-      "params": ["target", "resolved_ip"]
+      "params": ["field", "index", "target", "resolved_ip"]
     },
     "dns_changed": {
       "title": "目标解析结果变了",
-      "detail": "你声明授权时这个域名解析到的地址，和现在解析到的不是同一批。这正是 DNS 重绑定的形状，所以扫描不会启动。",
+      "detail": "你声明授权时这个域名解析到的地址，和现在解析到的不是同一批。这正是 DNS 重绑定的形状，所以扫描不会启动。下面写了「解析失败原因」时是另一种情形：这次根本没解析出地址，同样算与声明不一致。",
       "action": "重新走一遍授权确认，核对新的解析结果。确定只测某台固定主机，就直接填它的 IP。",
-      "params": ["target", "declared_ips", "resolved_ips"]
+      "params": ["field", "index", "resolution_error", "target", "declared_ips", "resolved_ips"]
     },
     "split_horizon": {
       "title": "同一个域名指向内外两处",
       "detail": "这个域名同时解析到公网地址和内网地址，无法判断你授权的是哪一个。",
       "action": "直接填写你要测的那个 IP，不要用域名。",
-      "params": ["target", "public_ips", "private_ips"]
+      "params": ["field", "index", "target", "public_ips", "private_ips"]
     },
     "missing_typed_confirmation": {
       "title": "确认串不一致",
@@ -458,6 +458,10 @@
 
   "paramLabels": {
     "field": "字段",
+    "index": "目标序号（0 是第一个）",
+    "reason": "这一行的问题",
+    "missing_opt_in": "还差的确认项",
+    "resolution_error": "解析失败原因",
     "path": "地址",
     "allow": "支持的请求方式",
     "target": "目标",
