@@ -434,12 +434,20 @@ class ScanProcess:
 class ScanSupervisor:
     """在册扫描的注册表。`api` 是 `--workers 1`，所以这个 dict 就是全局真相。"""
 
-    def __init__(self, settings: Settings, strix_version: str) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        strix_version: str,
+        on_scan_finished: Callable[[], None] | None = None,
+    ) -> None:
         self._settings = settings
         # 版本只在这里解析一次，规则也只编译一次 —— 别处不重新读版本。
         self._profile = profile_for(strix_version)
         self._rules = compile_rules(self._profile)
         self._processes: dict[str, ScanProcess] = {}
+        # T11a：扫描一结束就通知 `Reaper` 清一次（强杀路径必定泄漏沙箱）。它在事件循环
+        # 里被**同步**调用，所以实现方只许 set 一个 Event，不许阻塞。
+        self._on_scan_finished = on_scan_finished
 
     async def start(self, scan_id: str, plan: LaunchPlan) -> ScanProcess:
         """起子进程。**`env=plan.env` 是整份替换**，绝不 `os.environ | plan.env` ——
@@ -495,3 +503,7 @@ class ScanSupervisor:
 
     def _forget(self, scan_id: str) -> None:
         self._processes.pop(scan_id, None)
+        if self._on_scan_finished is not None:
+            # **pop 之后**才通知：清扫要按"已经不在册"的那份名单算，否则刚结束的这次
+            # 扫描的沙箱会被自己 spare 掉一轮。
+            self._on_scan_finished()

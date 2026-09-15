@@ -316,6 +316,19 @@ class SamePathOutcome:
     duration_ms: int | None
 
 
+@dataclass(frozen=True)
+class OrphanSandbox:
+    """一个通过两级 label 判据认出来的沙箱残骸。
+
+    `container_id` 是**删除时用的地址**（`reaper.py`）；`run_id` 就是 `scan_id`
+    （Strix 的 `STRIX_RUN_ID` 由我们设成 scan_id），Reaper 靠它避开在跑的扫描。
+    """
+
+    container_id: str
+    name: str
+    run_id: str
+
+
 # =============================================================================
 # 探测器
 # =============================================================================
@@ -389,15 +402,15 @@ class DockerProbe:
         size = reply.as_object().get("Size")
         return ImageFacts(present=True, size_bytes=size if isinstance(size, int) else None)
 
-    def orphan_sandbox_names(self) -> tuple[str, ...]:
-        """按 label 数孤儿沙箱。**只数，不删**（删是 T11 `Reaper`）。
+    def orphan_sandboxes(self) -> tuple[OrphanSandbox, ...]:
+        """按 label 列孤儿沙箱。**只列，不删**（删是 `reaper.py`）。
 
         `all=1`：已退出的沙箱同样占着磁盘和 IP，它们正是 R8 那个 SIGTERM 泄漏留下的
         残骸。只数运行中的会让"泄漏"看起来不存在。
 
         两级判据（见 `ORPHAN_REQUIRED_LABEL` 的注释）：daemon 侧按
         `strix-run-type=console` 过滤，客户端侧再要求 `strix-run-id` 非空。
-        少了第二级，M0 靶场会被数成孤儿。
+        少了第二级，M0 靶场会被数成孤儿（并被 `Reaper` 删掉）。
         """
         query = urlencode({"all": "1", "filters": json.dumps({"label": [ORPHAN_LABEL_SELECTOR]})})
         reply = self.transport.request(
@@ -405,18 +418,34 @@ class DockerProbe:
         )
         if reply.status != 200:
             raise DockerApiError("bad_status", f"列容器返回 {reply.status}")
-        names: list[str] = []
+        found: list[OrphanSandbox] = []
         for item in reply.as_array():
             labels = item.get("Labels")
-            if not isinstance(labels, dict) or not labels.get(ORPHAN_REQUIRED_LABEL):
+            if not isinstance(labels, dict):
+                continue
+            run_id = labels.get(ORPHAN_REQUIRED_LABEL)
+            if not isinstance(run_id, str) or not run_id:
                 # 没有 run-id 的不是沙箱残骸。**刻意不把它算进去也不记日志** ——
                 # 靶场是长期运行的正常容器，每次自检都 warn 一行只会训练人忽略日志。
                 continue
             raw = item.get("Names")
-            if isinstance(raw, list) and raw and isinstance(raw[0], str):
-                # docker 回的名字带前导 `/`，去掉它才是 `docker ps` 里看到的那个。
-                names.append(raw[0].lstrip("/"))
-        return tuple(names)
+            if not (isinstance(raw, list) and raw and isinstance(raw[0], str)):
+                continue
+            # docker 回的名字带前导 `/`，去掉它才是 `docker ps` 里看到的那个。
+            name = raw[0].lstrip("/")
+            container_id = item.get("Id")
+            # `Id` 缺失（或不是字符串）时退回用名字：`/containers/{id}` 这个端点
+            # **同样接受名字**，所以退回之后它照样删得掉，没有任何东西被降级 ——
+            # 丢弃它才是错的（它两个 label 都在，是真残骸），报错更错（一条畸形元素
+            # 会让整个 /api/system/status 的孤儿计数变成 unknown）。
+            if not isinstance(container_id, str) or not container_id:
+                container_id = name
+            found.append(OrphanSandbox(container_id=container_id, name=name, run_id=run_id))
+        return tuple(found)
+
+    def orphan_sandbox_names(self) -> tuple[str, ...]:
+        """孤儿沙箱的名字视图（`/api/system/status` 只要名字）。过滤逻辑只有一处。"""
+        return tuple(sandbox.name for sandbox in self.orphan_sandboxes())
 
     # ---- 同路径主动探测 -----------------------------------------------------
     def same_path_probe(self, data_dir: Path, probe_image: str) -> SamePathOutcome:

@@ -85,6 +85,7 @@ from app.services.allowlist import AllowlistStore
 from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
 from app.services.key_vault import KeyVault, assert_single_worker
+from app.services.reaper import Reaper
 from app.services.scan_supervisor import ScanSupervisor, assert_sandbox_env
 from app.settings import Settings, assert_no_credential_env, load_settings
 
@@ -378,12 +379,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.llm_verifier = llm_client.verify
         # T10。**必须在本轮就接进 lifespan**：否则 `shutdown()` 没有调用方，那就是一段
         # 没人跑过的代码。路由是 T12 的事，这里只让它有主。
-        app.state.supervisor = ScanSupervisor(resolved, strix_version)
+        # T11a。两者互相要一个东西，所以 reaper 先建：它拿的是"到时候去问在册 id"的
+        # 闭包（`supervisor` 在下一行就绑好，而第一次调用发生在 `run_forever` 里）。
+        reaper = Reaper(app.state.docker_transport, lambda: supervisor.active_scan_ids())
+        supervisor = ScanSupervisor(resolved, strix_version, on_scan_finished=reaper.request_sweep)
+        app.state.reaper = reaper
+        app.state.supervisor = supervisor
 
         # T7a。本项目的第一个后台任务。凭据的过期是懒判定（取用时判）为主，但没人再来
         # 取用的凭据不会被懒判定碰到，而"凭据在内存里待多久"就是 KeyVault 的安全属性
         # 本身 —— 所以必须有人主动去清。见 key_vault 模块 docstring。
         sweeper = asyncio.create_task(key_vault.run_sweeper())
+        # T11a。启动的第一轮清扫就在这个任务里 —— 刻意**不在 yield 之前 await 一次**：
+        # docker 挂着的时候那次 await 会把"api 起不来"和"docker 有问题"混成一件事。
+        reaper_task = asyncio.create_task(reaper.run_forever())
 
         logger.info("启动完成")
         try:
@@ -399,6 +408,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sweeper.cancel()
             with suppress(asyncio.CancelledError):
                 await sweeper
+            # 清扫任务同理（`run_forever` 也不吞 CancelledError）。**刻意不在这里补一次
+            # 清扫**：上面 shutdown() 强杀留下的泄漏由下次启动的第一轮兜住，为停机路径
+            # 再加一次带超时的 docker 往返不值得（见 reaper 模块 docstring）。
+            reaper_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await reaper_task
             db.close()
             logger.info("已停止")
 

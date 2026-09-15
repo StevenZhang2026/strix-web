@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from app.main import create_app
 from app.routes.auth import SESSION_COOKIE_NAME
 from app.services.allowlist import AllowlistEntry
 from app.services.auth import AuthRecord, write_auth_file
+from app.services.docker_probe import DockerReply
 from app.settings import Settings
 
 # ---- 单账号登录的测试凭据 ----------------------------------------------------
@@ -201,6 +203,54 @@ def insert_scan(
             "anthropic/claude-sonnet-4-5",
         ),
     )
+
+
+# =============================================================================
+# docker 替身（`test_docker_probe.py` 与 `test_reaper.py` 共用）
+# =============================================================================
+@dataclass(frozen=True)
+class RecordedCall:
+    method: str
+    path: str
+    payload: object
+    timeout_s: float
+
+
+Handler = Callable[[RecordedCall], DockerReply]
+
+
+@dataclass
+class FakeTransport:
+    """按 (method, path 子串) 路由到处理器。第一个匹配的生效。
+
+    **没有匹配就 `AssertionError`**，不是静默返回 404：一次意料之外的 docker 往返
+    （比如有人加了 `POST /images/create`，那是拉镜像；或者清扫多发了一个 DELETE）
+    必须让测试炸掉，而不是被当成"那个东西不存在"。
+    """
+
+    routes: list[tuple[str, str, Handler]]
+    calls: list[RecordedCall] = field(default_factory=list)
+
+    def request(
+        self, method: str, path: str, *, payload: object = None, timeout_s: float
+    ) -> DockerReply:
+        call = RecordedCall(method=method, path=path, payload=payload, timeout_s=timeout_s)
+        self.calls.append(call)
+        for want_method, needle, handler in self.routes:
+            if method == want_method and needle in path:
+                return handler(call)
+        raise AssertionError(f"替身没有为 {method} {path} 准备应答 —— 发了一个意料之外的请求")
+
+    def paths(self) -> list[str]:
+        return [call.path for call in self.calls]
+
+
+def reply(status: int, body: object) -> DockerReply:
+    return DockerReply(status=status, body=json.dumps(body).encode("utf-8"))
+
+
+def const(status: int, body: object) -> Handler:
+    return lambda _call: reply(status, body)
 
 
 @pytest.fixture

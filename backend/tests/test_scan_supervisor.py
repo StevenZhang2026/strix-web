@@ -318,6 +318,32 @@ def test_clean_exit_cleans_tmpfs_and_tmpdir_but_keeps_products(
     assert (plan.cwd / "strix_runs" / "strix-run-1" / "run.json").is_file()
 
 
+def test_finished_scan_notifies_the_reaper_after_leaving_the_registry(
+    sandbox_settings: Settings,
+) -> None:
+    """T11a 的接线缝：扫描结束必须**通知一次** —— 强杀路径必定泄漏沙箱。
+
+    断言里带上"那一刻已经不在册"：清扫要按新名单算，否则刚结束的那次扫描会把自己的
+    沙箱 spare 掉一整轮（5 分钟）。
+    """
+    seen: list[tuple[str, ...]] = []
+    supervisor = ScanSupervisor(
+        sandbox_settings,
+        "1.6.2",
+        on_scan_finished=lambda: seen.append(supervisor.active_scan_ids()),
+    )
+    plan = make_plan(sandbox_settings, "notify", "exit 0")
+    make_run_dir(plan.cwd, status="completed")
+
+    async def scenario() -> None:
+        process = await supervisor.start("notify", plan)
+        await asyncio.wait_for(process.wait(), timeout=60)
+
+    asyncio.run(scenario())
+
+    assert seen == [()]
+
+
 def test_exit_code_2_is_success_with_findings(sandbox_settings: Settings) -> None:
     plan = make_plan(sandbox_settings, "found", "exit 2")
     make_run_dir(plan.cwd, status="completed")

@@ -20,12 +20,10 @@ URL 拼装、状态码判定、JSON 解码、探测容器的 create payload、�
 
 from __future__ import annotations
 
-import json
 import socket
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -41,6 +39,7 @@ from app.services.docker_probe import (
     parse_self_container_id,
     read_self_container_ref,
 )
+from tests.conftest import FakeTransport, Handler, RecordedCall, const, reply
 
 SELF_REF = "648249032d81f0aa11bb22cc33dd44ee55ff6677889900aabbccddeeff001122"
 SELF_IMAGE = "sha256:04a3e2ffb413000000000000000000000000000000000000000000000000beef"
@@ -51,51 +50,8 @@ NETWORK = "strix_sandbox"
 # =============================================================================
 # 替身
 # =============================================================================
-@dataclass(frozen=True)
-class RecordedCall:
-    method: str
-    path: str
-    payload: object
-    timeout_s: float
-
-
-Handler = Callable[[RecordedCall], DockerReply]
-
-
-@dataclass
-class FakeTransport:
-    """按 (method, path 子串) 路由到处理器。第一个匹配的生效。
-
-    **没有匹配就 `AssertionError`**，不是静默返回 404：一次意料之外的 docker 调用
-    （比如有人在探测里加了 `POST /images/create`，那是拉镜像）必须让测试炸掉，
-    而不是被当成"那个东西不存在"。这是本文件对"只读探测"这条约束的机械保证。
-    """
-
-    routes: list[tuple[str, str, Handler]]
-    calls: list[RecordedCall] = field(default_factory=list)
-
-    def request(
-        self, method: str, path: str, *, payload: object = None, timeout_s: float
-    ) -> DockerReply:
-        call = RecordedCall(method=method, path=path, payload=payload, timeout_s=timeout_s)
-        self.calls.append(call)
-        for want_method, needle, handler in self.routes:
-            if method == want_method and needle in path:
-                return handler(call)
-        raise AssertionError(f"替身没有为 {method} {path} 准备应答 —— 探测发了一个意料之外的请求")
-
-    def paths(self) -> list[str]:
-        return [call.path for call in self.calls]
-
-
-def reply(status: int, body: object) -> DockerReply:
-    return DockerReply(status=status, body=json.dumps(body).encode("utf-8"))
-
-
-def const(status: int, body: object) -> Handler:
-    return lambda _call: reply(status, body)
-
-
+# `FakeTransport` / `RecordedCall` / `Handler` / `reply` / `const` 都在
+# `tests/conftest.py` —— T11a 的 `test_reaper.py` 也要用同一套（同一个东西不许有两份）。
 def boom(reason: str) -> Handler:
     def handler(_call: RecordedCall) -> DockerReply:
         raise DockerApiError(reason, "替身刻意失败")
