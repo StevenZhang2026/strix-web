@@ -10,6 +10,7 @@
 #
 # 可用环境变量覆盖的输入（全部可选）：
 #   CONSOLE_WEB_PORT=8443     换掉对外的 https 端口（默认 443，只绑 127.0.0.1）
+#   CONSOLE_MAX_CONCURRENT_SCANS=2   同时最多几次扫描（默认 1；改它要重算沙箱限额）
 #   STRIX_EXTRA_CA_FILE=/abs/corp-ca.pem   启用 N2 企业 CA（默认关闭）
 #   STRIX_EXTRA_CA_FILE=      （显式给空）关掉已启用的 N2 企业 CA
 #   STRIX_REGEN_CERT=1        显式要求重签 TLS 证书（默认永不覆盖已有证书）
@@ -678,6 +679,24 @@ if [ -f .env ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# C18b：并发扫描槽位（T12c）—— 决定值，只写进 .env
+# ---------------------------------------------------------------------------
+# 优先级与 CONSOLE_WEB_PORT 同一套：本次调用的环境变量 > 已有 .env 里的值 > 默认 1。
+# 中间那一档不是多余的：重跑本脚本不许把操作者调大过的槽位数静默改回 1。
+# 上限刻意不设 —— 该由谁把关写在 compose 那条注释里（并发数与沙箱限额要一起算）。
+SCAN_SLOTS="${CONSOLE_MAX_CONCURRENT_SCANS:-}"
+if [ -z "${SCAN_SLOTS}" ] && [ -f .env ]; then
+  SCAN_SLOTS="$(sed -n 's/^CONSOLE_MAX_CONCURRENT_SCANS=//p' .env | head -1)"
+fi
+SCAN_SLOTS="${SCAN_SLOTS:-1}"
+case "${SCAN_SLOTS}" in
+  ''|*[!0-9]*) fatal "CONSOLE_MAX_CONCURRENT_SCANS 必须是纯数字，当前为 \"${SCAN_SLOTS}\"。" ;;
+esac
+if [ "${SCAN_SLOTS}" -lt 1 ]; then
+  fatal "CONSOLE_MAX_CONCURRENT_SCANS 至少为 1，当前为 ${SCAN_SLOTS}。"
+fi
+
+# ---------------------------------------------------------------------------
 # C19–C20：写出（不静默覆盖）
 # ---------------------------------------------------------------------------
 # 本脚本写出的 .env 只含路径与资源限额。绝不含任何密钥 —— 见文件头。
@@ -689,6 +708,7 @@ STRIX_SANDBOX_CPUS=$SANDBOX_CPUS
 STRIX_SANDBOX_SHM_SIZE=${SANDBOX_SHM_MB}m
 STRIX_SANDBOX_PIDS_LIMIT=2048
 CONSOLE_WEB_PORT=${WEB_PORT}
+CONSOLE_MAX_CONCURRENT_SCANS=${SCAN_SLOTS}
 STRIX_EXTRA_CA_FILE=${EXTRA_CA}
 # 下面这行是**派生值**，由本脚本按 STRIX_EXTRA_CA_FILE 算出，不要手改。
 # 改了上面那行之后必须重跑 ./setup.sh，否则 CA 挂进去了但没有变量指向它。

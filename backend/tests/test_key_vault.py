@@ -35,6 +35,7 @@ from app.services.key_vault import (
     secret_label,
 )
 from app.settings import Settings
+from tests.conftest import FakeClock
 
 # ---- 测试用的凭据值 ----------------------------------------------------------
 # `AWS_SECRET` 是**没有可识别形状**的（40 个 base64 字符）—— 任何能匹配它的正则都会
@@ -43,19 +44,6 @@ from app.settings import Settings
 AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY01"
 AWS_ID = "AKIAIOSFODNN7EXAMPLE"
 REGION = "us-east-1"
-
-
-class FakeClock:
-    """可任意推进的单调时钟。`KeyVault(clock=...)` 的注入点。"""
-
-    def __init__(self, now: float = 1_000.0) -> None:
-        self.now = now
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 def make_single(secret: str = AWS_SECRET) -> CredentialSet:

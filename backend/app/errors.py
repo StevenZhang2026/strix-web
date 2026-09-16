@@ -318,6 +318,25 @@ ALL_ERRORS: tuple[type[ConsoleError], ...] = (
 )
 
 
+def error_for_code(code: str) -> type[ConsoleError]:
+    """机器码 → 错误类。
+
+    为什么需要它：判定服务（`scan_admission`）返回的是**码**，而路由要 `raise` 一个类。
+    在路由里手抄一份 `{"dns_changed": DnsChangedError, ...}` 会让"T6/T8 新增一个护栏码"
+    变成"回来改路由"，而漏改的表现是 500。表由 `ALL_ERRORS` 现建（**不许再写第二份
+    清单**）—— 20 个类的字典构造在一次错误响应里可以忽略，换来的是"只有一份名单"。
+
+    未登记的码 `raise ValueError`：静默兜底成 `InternalError` 会让一个拼错的码
+    （`dns_change` 少个 `d`）变成一个查不出原因的 500。
+    """
+    table = {error.code: error for error in ALL_ERRORS}
+    if code not in table:
+        raise ValueError(
+            f"未登记的错误码 {code!r}。新增码要同时改 errors.py 的类定义与 ALL_ERRORS。"
+        )
+    return table[code]
+
+
 # =============================================================================
 # 扫描归因码 —— 只写进 scans.error_code，从不作为 HTTP 状态
 #

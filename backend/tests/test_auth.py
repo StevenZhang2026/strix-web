@@ -27,7 +27,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -58,7 +57,7 @@ from app.services.auth import (
     write_auth_file,
 )
 from app.settings import Settings
-from tests.conftest import PASSWORD, USERNAME
+from tests.conftest import PASSWORD, USERNAME, FakeClock
 
 WRONG_PASSWORD = "wrong-horse-battery-staple"
 
@@ -72,25 +71,6 @@ PROBE_WS_PATH = "/ws/_probe"
 # =============================================================================
 # 夹具
 # =============================================================================
-@dataclass
-class FakeClock:
-    """可手动推进的单调时钟。
-
-    没有它的话，"8 小时后会话失效"这条测试要么真睡 8 小时，要么去 monkeypatch
-    `time.monotonic`（那是进程级的全局改动，会影响 pytest 自己）。
-    `SessionStore` / `LoginRateLimiter` / `AuthService.load` 都收 `clock` 参数，
-    就是为了这个。
-    """
-
-    now: float = 10_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
 @pytest.fixture
 def app(settings: Settings, auth_file: Path, restore_logging: None) -> FastAPI:
     """真实应用 + 两条探针路由。

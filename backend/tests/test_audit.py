@@ -28,7 +28,12 @@ from pathlib import Path
 import pytest
 
 from app.db import Database
-from app.services.audit import EVENT_ALLOWLIST_CHANGED, AuditEntry, record
+from app.services.audit import (
+    EVENT_ALLOWLIST_CHANGED,
+    EVENT_SCAN_LAUNCHED,
+    AuditEntry,
+    record,
+)
 from app.settings import Settings
 
 ACTOR = "operator"
@@ -82,7 +87,8 @@ def test_record_writes_the_table(
     # 表里那一列**必须是字符串**：schema 上挂着 `CHECK (json_valid(detail_json))`。
     assert isinstance(row["detail_json"], str)
     assert json.loads(row["detail_json"])["label"] == "客户预生产环境"
-    # T8 只有一个事件，两列都留空。T12 会填它们。
+    # `allowlist.changed` 不属于任何一次扫描，两列留空（填上的那条见
+    # `test_scan_and_authorization_ids_reach_both_sinks`）。
     assert row["scan_id"] is None
     assert row["authorization_id"] is None
 
@@ -220,3 +226,26 @@ def test_missing_actor_and_ip_are_recorded_as_null(
     assert row["actor"] is None
     assert row["client_ip"] is None
     assert row["user_agent"] is None
+
+
+def test_scan_and_authorization_ids_reach_both_sinks(
+    db: Database, settings: Settings, conn: sqlite3.Connection
+) -> None:
+    """扫描相关事件的两个引用列**两个落点都要有**（T12c）。
+
+    `ix_audit_scan` 索引的第一列就是 `scan_id`：这一列常年绑 `NULL` 的话，
+    "把一次扫描的全部审计按时间列出来"这个唯一的运维查询会静默地什么都查不到，
+    而表和文件都还在长大 —— 没有任何一处会报错。
+    """
+    write(
+        db,
+        settings.audit_dir,
+        entry(event=EVENT_SCAN_LAUNCHED, scan_id="scan-1", authorization_id="auth-1"),
+    )
+    row = only_row(conn)
+    assert row["event"] == EVENT_SCAN_LAUNCHED
+    assert row["scan_id"] == "scan-1"
+    assert row["authorization_id"] == "auth-1"
+    line = only_line(settings.audit_dir)
+    assert line["scan_id"] == "scan-1"
+    assert line["authorization_id"] == "auth-1"

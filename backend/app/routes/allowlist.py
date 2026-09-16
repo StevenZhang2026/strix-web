@@ -34,6 +34,7 @@ from pydantic import ValidationError
 
 from app.errors import AllowlistFileBrokenError, InvalidRequestError, NotFoundError
 from app.models import BoundaryModel
+from app.routes._context import actor, client_ip
 from app.services.allowlist import (
     AllowlistConfig,
     AllowlistEntry,
@@ -42,7 +43,6 @@ from app.services.allowlist import (
     effective_mode,
 )
 from app.services.audit import EVENT_ALLOWLIST_CHANGED, AuditDetailValue, AuditEntry, record
-from app.services.auth import Session
 from app.services.target_guard import AllowlistMode
 from app.settings import Settings
 
@@ -174,42 +174,13 @@ async def _write_and_audit(
         audit_dir=_settings(request).audit_dir,
         entry=AuditEntry(
             event=EVENT_ALLOWLIST_CHANGED,
-            actor=_actor(request),
+            actor=actor(request),
             detail=detail,
-            client_ip=_client_ip(request),
+            client_ip=client_ip(request),
             user_agent=request.headers.get("user-agent"),
         ),
     )
     return _view(snapshot)
-
-
-def _actor(request: Request) -> str | None:
-    """操作者用户名，来自全局鉴权依赖挂上的 `request.state.session`。
-
-    取不到就记 `None` 而不是抛异常：审计记录**宁可缺一个字段也不能丢一整条**。
-    本路由在鉴权之后，所以取不到意味着鉴权机制被改坏了 —— 那时更需要留下这条记录。
-    """
-    session = getattr(request.state, "session", None)
-    if isinstance(session, Session):
-        return session.username
-    logger.warning("审计缺少操作者：request.state.session 不存在", extra={"path": request.url.path})
-    return None
-
-
-def _client_ip(request: Request) -> str | None:
-    """`X-Real-IP`，**不是** `X-Forwarded-For`。
-
-    `nginx.conf` 用 `proxy_set_header X-Real-IP $remote_addr` —— 它**覆盖**客户端送来的
-    同名头，所以是可信的。`X-Forwarded-For` 用的是 `$proxy_add_x_forwarded_for`，
-    那是"客户端给的值 + 真实地址"的拼接，前半段完全由客户端控制。往审计里写一个
-    可伪造的地址比不写更糟。
-
-    直连（没经过 nginx，比如单测或本机排障）时回落到 `client.host`。
-    """
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip is not None:
-        return real_ip
-    return None if request.client is None else request.client.host
 
 
 # =============================================================================

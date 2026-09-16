@@ -56,6 +56,12 @@ x-console-env: &console-env
   STRIX_SANDBOX_SHM_SIZE: "${STRIX_SANDBOX_SHM_SIZE:-1g}"
   STRIX_SANDBOX_PIDS_LIMIT: "${STRIX_SANDBOX_PIDS_LIMIT:-2048}"
 
+  # ---- 并发扫描槽位（T12c）------------------------------------------------
+  # 默认 1，理由是"一进程一次扫描"之外还有一条：每个沙箱都吃上面那份限额，两次并发
+  # 扫描在本开发机（Docker VM 7.75 GB）就会互相 OOM。**参数化而不是写死**，因为
+  # 部署机规格可变；改它同时要重算上面四个限额。setup.sh 会把这个值写进 .env。
+  CONSOLE_MAX_CONCURRENT_SCANS: "${CONSOLE_MAX_CONCURRENT_SCANS:-1}"
+
   # ---- N2：企业 CA bundle（PLAN.md §N2，2026-09-08 拍板）------------------
   # 默认关闭。启用方式**只有一条**：操作者在 .env 里填 STRIX_EXTRA_CA_FILE=<宿主
   # PEM 绝对路径>，然后**重跑 ./setup.sh**（由它校验 PEM 并派生 CONSOLE_CA_BUNDLE）。

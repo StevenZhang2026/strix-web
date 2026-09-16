@@ -34,6 +34,7 @@ from pydantic import Field, SecretStr
 
 from app.errors import InvalidRequestError, KeyRequiredError, KeyVerifyFailedError
 from app.models import BoundaryModel
+from app.routes._context import actor, client_ip
 from app.services.audit import (
     EVENT_KEY_DROPPED,
     EVENT_KEY_REGISTERED,
@@ -41,7 +42,6 @@ from app.services.audit import (
     AuditEntry,
     record,
 )
-from app.services.auth import Session
 from app.services.key_vault import CredentialSet, KeyVault, labels_for
 from app.services.llm_client import Verifier, check_param_keys, check_secret_keys, spec_for
 from app.settings import Settings
@@ -135,26 +135,6 @@ def _verifier(request: Request) -> Verifier:
     return verifier
 
 
-# `_actor` / `_client_ip` 与 `routes/allowlist.py` 里的两个同名函数**是同一份逻辑**
-# （第二个抄的地方）。它们该被提取到一个共用位置，但那要改 `services/audit.py` 或新开
-# 一个模块 —— 都在本任务的改动边界之外，所以先抄一份并把这件事记在这里。
-def _actor(request: Request) -> str | None:
-    """操作者用户名。取不到就记 `None`：审计宁可缺一个字段，也不能丢一整条。"""
-    session = getattr(request.state, "session", None)
-    if isinstance(session, Session):
-        return session.username
-    logger.warning("审计缺少操作者：request.state.session 不存在", extra={"path": request.url.path})
-    return None
-
-
-def _client_ip(request: Request) -> str | None:
-    """`X-Real-IP`（nginx 覆盖它，所以可信），**不是** `X-Forwarded-For`（前半段由客户端控制）。"""
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip is not None:
-        return real_ip
-    return None if request.client is None else request.client.host
-
-
 async def _audit(request: Request, *, event: str, detail: dict[str, AuditDetailValue]) -> None:
     """写一条审计。`detail` 里**只许有掩码标签与机器码**，明文一个字都不许进。"""
     await record(
@@ -162,9 +142,9 @@ async def _audit(request: Request, *, event: str, detail: dict[str, AuditDetailV
         audit_dir=_settings(request).audit_dir,
         entry=AuditEntry(
             event=event,
-            actor=_actor(request),
+            actor=actor(request),
             detail=detail,
-            client_ip=_client_ip(request),
+            client_ip=client_ip(request),
             user_agent=request.headers.get("user-agent"),
         ),
     )

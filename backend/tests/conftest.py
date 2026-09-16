@@ -42,6 +42,24 @@ _SCAN_COLUMNS = (
 )
 
 
+@dataclass
+class FakeClock:
+    """可手动推进的单调时钟。收 `clock` 参数的那几个服务都靠它测生命周期
+    （`KeyVault`、`SessionStore`、`LoginRateLimiter`、`AuthService.load`）。
+
+    没有它，"8 小时后过期"这类测试要么真睡 8 小时，要么去 monkeypatch
+    `time.monotonic` —— 后者是进程级全局改动，会影响 pytest 自己。
+    """
+
+    now: float = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     """一个指向 tmp_path 的 Settings。

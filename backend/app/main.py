@@ -19,6 +19,10 @@
     5. db.connect() / migrate()        建表
     6. db.assert_no_secret_columns()   **必须在 migrate 之后** —— 要检查的是迁移
                                        实际建出来的 schema，不是迁移文件的文本
+    6b. _reconcile_interrupted_scans() 上一次进程留下的 starting/running 残行翻成
+                                       interrupted。**这是被 `docker kill` 掐死时唯一的
+                                       兜底** —— 那种走法没有任何代码跑得到，所以只能
+                                       在下次启动时收拾。必须在 migrate 之后
     7. AuthService.load()              读 auth.json；读不出来就**拒绝启动**
     8. create_task(run_sweeper)        本进程唯一的后台任务。`finally` 里 cancel
                                        **并 await**，否则每次正常停机都会打出
@@ -54,9 +58,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import Depends, FastAPI, Request
@@ -72,6 +78,7 @@ from app.errors import (
     InvalidRequestError,
     MethodNotAllowedError,
     NotFoundError,
+    assert_scan_failure_code,
 )
 from app.logging_setup import Redactor, configure_logging, trace_id_var
 from app.routes import allowlist as allowlist_routes
@@ -79,11 +86,13 @@ from app.routes import auth as auth_routes
 from app.routes import health as health_routes
 from app.routes import keys as keys_routes
 from app.routes import providers as providers_routes
+from app.routes import scans as scans_routes
 from app.routes import system as system_routes
 from app.routes import targets as targets_routes
 from app.routes import templates as templates_routes
 from app.services import dns_resolver, llm_client
 from app.services.allowlist import AllowlistStore
+from app.services.audit import iso_utc
 from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
 from app.services.key_vault import KeyVault, assert_single_worker
@@ -140,6 +149,39 @@ def _prepare_data_dir(settings: Settings) -> None:
 
     for sub in (settings.scans_dir, settings.audit_dir, settings.config_dir):
         sub.mkdir(parents=True, exist_ok=True)
+
+
+_INTERRUPTED_SUMMARY = "The console process exited while this scan was still running."
+"""`scans.error_message` 的固定摘要。英文：它与 Strix 自己写进这一列的归因摘要同格式
+（UI 文案按 `error_code` 查 `zh-CN.json`，这一列是给排障的人 grep 的）。"""
+
+
+async def _reconcile_interrupted_scans(db: Database) -> None:
+    """把上一次进程留下的 `starting` / `running` 残行翻成 `interrupted`。
+
+    为什么必须有：`docker kill` / 断电这两种走法下 `_run_to_completion` 的 finally 一行
+    都跑不到，那些行会**永远**停在 `running`。而"正在跑"这个状态会被并发闸、列表页、
+    reaper 当真 —— 一行假的 `running` 会让控制台从此拒绝起新扫描。
+
+    `exit_code` / `exit_meaning` 留 NULL：根本没有进程退出过，编一个值是撒谎。
+    """
+    code = assert_scan_failure_code("interrupted_by_restart")
+    finished_at = iso_utc(datetime.now(UTC))
+
+    def reconcile(conn: sqlite3.Connection) -> int:
+        cursor = conn.execute(
+            "UPDATE scans SET status = 'interrupted', error_code = ?, error_message = ?, "
+            "finished_at = ? WHERE status IN ('starting', 'running')",
+            (code, _INTERRUPTED_SUMMARY, finished_at),
+        )
+        return cursor.rowcount
+
+    reconciled = await db.run(reconcile)
+    if reconciled:
+        logger.warning(
+            "上次停机时还有扫描在跑，已标记为 interrupted",
+            extra={"scans": reconciled, "error_code": code},
+        )
 
 
 def console_error_for_http_status(status: int) -> ConsoleError:
@@ -335,6 +377,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if applied:
                 logger.info("迁移完成", extra={"applied": applied})
             db.assert_no_secret_columns()
+            await _reconcile_interrupted_scans(db)
             # 单账号登录（T4b）。放在这个 try 里面是为了让它失败时也走下面的
             # `db.close()` —— 不然 `auth.json` 不存在的机器上会同时留下一个泄漏的
             # SQLite 连接和一对 -wal/-shm 文件，把"没跑 setup.sh"这件事的现场弄脏。
@@ -397,6 +440,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         supervisor = ScanSupervisor(resolved, strix_version, on_scan_finished=reaper.request_sweep)
         app.state.reaper = reaper
         app.state.supervisor = supervisor
+        # T12c。两者都**必须在 lifespan 里**建，不能是模块级常量：`asyncio.Lock` 绑定它被
+        # 创建时的事件循环，模块级那一个会在测试里跨多个循环复用（同一个进程起好几个 app），
+        # 而"锁看起来在但其实属于另一个循环"是一个静默失效。
+        #
+        # 这把锁罩住 `POST /api/scans` 的"查槽位 → 起进程"整段，判据在 routes/scans.py
+        # 的模块 docstring —— 只罩查槽位那一瞬间的话两个并发请求会双双通过。
+        app.state.scan_launch_lock = asyncio.Lock()
+        # 后台收尾任务的强引用集合。`create_task` 的返回值没人拿着的话事件循环可以把它
+        # GC 掉（标准库明写这一点），而它正是唯一会写终态列的地方。
+        scan_tasks: set[asyncio.Task[None]] = set()
+        app.state.scan_tasks = scan_tasks
 
         # T7a。本项目的第一个后台任务。凭据的过期是懒判定（取用时判）为主，但没人再来
         # 取用的凭据不会被懒判定碰到，而"凭据在内存里待多久"就是 KeyVault 的安全属性
@@ -417,6 +471,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # 先让子进程退干净（它们的 tmpfs 清理挂在各自的监控任务上），再撤后台任务
             # 与 DB 连接 —— 反过来的话，监控任务收尾时可能撞上一个已经关掉的库。
             await app.state.supervisor.shutdown()
+            # **必须在 `db.close()` 之前 drain。** `_run_to_completion` 在 `wait()` 返回
+            # 之后才写终态列，而 `shutdown()` 只保证子进程死了、不保证那几个任务跑完 ——
+            # 少了这一步，每一次"停机时还有扫描在跑"都会让后台任务在库关掉之后写库
+            # （表现是一句 ProgrammingError，以及一行永远卡在 running 的扫描）。
+            # `return_exceptions=True`：一个任务的异常不许挡住其它任务的收尾。
+            await asyncio.gather(*tuple(scan_tasks), return_exceptions=True)
             sweeper.cancel()
             with suppress(asyncio.CancelledError):
                 await sweeper
@@ -468,6 +528,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # T9。`/api/scan-templates` 是纯目录（进程内常量、无凭据、无 IO），但同样在全局鉴权
     # 之后：内容全是机器码不等于可以对外裸露 —— 它连带告诉未鉴权的人"这里是 Strix 控制台"。
     app.include_router(templates_routes.router)
+    # T12c。`/api/scans` 也在全局鉴权之后，**而且它是这里面最需要鉴权的一个**：一个未鉴权
+    # 的 POST 等于让任意网页拿着别人登记的 vault_handle 花别人的钱去打任意（已在清单里的）
+    # 目标。挡住"任意网页跨域打它"的是「没有 CORS」+「只把 application/json 喂给 Pydantic」，
+    # 所以这条路由的安全性也依赖于**永远不装 CORSMiddleware**（CLAUDE.md §安全不变式）。
+    app.include_router(scans_routes.router)
 
     return app
 
