@@ -57,11 +57,15 @@ EVENT_AUTHORIZATION_AFFIRMED = "authorization.affirmed"
 EVENT_SCAN_LAUNCHED = "scan.launched"
 EVENT_SCAN_STOPPED = "scan.stopped"
 EVENT_SCAN_FINISHED = "scan.finished"
+EVENT_IMAGE_PULL_STARTED = "image.pull_started"
 """事件名。**字面串只出现在这里**，路由层 import 它们。
 
 集中在本模块而不是各自写在抛出方的路由里：这份名单就是"审计里会出现哪些事件"的全部
 答案，而回答这个问题的人（写查询的、写告警的）不该需要先知道有哪几个路由文件。
 `key.*` 两个是 T7b 加的，登记与忘掉各一条 —— **`detail` 里只许有掩码标签与机器码**。
+`image.pull_started` 是 T11b 加的：拉一个 GB 级镜像是一次真实的资源消耗，而它由人按
+按钮触发 —— `detail` 里只有镜像引用与 epoch（**没有凭据可放**），"已经在本地"那一支
+什么都没发生所以不记。
 `authorization.affirmed` / `scan.*` 三个是 T12c 加的。刻意**没有**
 `override.private_used` / `override.loopback_used`：放行之后 `GuardVerdict.required_opt_in`
 一定是空的（那个字段的 docstring 写死了这一点），要说出"哪一项勾选被用上了"就得从解析

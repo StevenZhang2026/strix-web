@@ -73,6 +73,7 @@ import re
 import socket
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPException
 from pathlib import Path
@@ -190,6 +191,26 @@ class DockerTransport(Protocol):
         self, method: str, path: str, *, payload: object = None, timeout_s: float
     ) -> DockerReply: ...
 
+    def stream_ndjson(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout_s: float,
+        on_line: Callable[[Mapping[str, object]], None],
+    ) -> int:
+        """一次**换行分隔 JSON** 的长应答（docker 的进度流）。返回 HTTP 状态码。
+
+        为什么是这个 Protocol 的第二个方法，而不是另起一个 transport 类（T11b）：
+          · `socket.AF_UNIX` 连接与那 6 个 `DockerApiError.reason` 的映射不许有第二份 ——
+            两份映射迟早给同一种故障两个机器码；
+          · `app.state.docker_transport` 只有一个对象。多一个可替身接口就多一个单测
+            要各自替身的接缝，而"这是本模块唯一的可替身接口"这条性质本身就是资产。
+        `request()` 装不下它：进度流要在**读完之前**逐行回调，而 `DockerReply` 是
+        "全部读完再返回"。
+        """
+        ...
+
 
 class _UnixHTTPConnection(HTTPConnection):
     """`http.client` 的连接，但连的是 AF_UNIX socket。
@@ -232,22 +253,72 @@ class UnixSocketTransport:
             conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
             return DockerReply(status=response.status, body=response.read())
-        except FileNotFoundError as exc:
-            # 必须排在 OSError 之前（它是 OSError 的子类）。这一条对应最常见的那种
-            # 部署错误：忘了挂 docker.sock。它值得一个自己的机器码。
-            raise DockerApiError("socket_missing", f"{self.socket_path} 不存在") from exc
-        except PermissionError as exc:
-            raise DockerApiError(
-                "socket_permission_denied", f"{self.socket_path} 不可访问"
-            ) from exc
-        except TimeoutError as exc:
-            # Python 3.10+ 起 `socket.timeout` 就是 `TimeoutError` 的别名，一条够了。
-            raise DockerApiError("timeout", f"{timeout_s} 秒内 daemon 没有应答") from exc
         except (OSError, HTTPException) as exc:
-            # 不把 str(exc) 之外的东西带出去，也不 bare except（CLAUDE.md §Python）。
-            raise DockerApiError("transport_error", f"{type(exc).__name__}: {exc}") from exc
+            raise self._translate(exc, timeout_s) from exc
         finally:
             conn.close()
+
+    def stream_ndjson(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout_s: float,
+        on_line: Callable[[Mapping[str, object]], None],
+    ) -> int:
+        """逐行读 docker 的进度流。**同步阻塞**，调用方负责 `asyncio.to_thread`。
+
+        `readline()` 而不是 `read()`：`POST /images/create` 的应答是一条持续几分钟的
+        流，整体读完再解析等于"拉完了才有进度"。
+
+        **状态码 200 不代表成功** —— 失败以正文里一行 `{"error": ...}` 出现（T11b）。
+        本方法只负责把每一行原样交出去，那条判定在 `image_puller.LayerTally`。
+        """
+        conn = _UnixHTTPConnection(self.socket_path, timeout_s)
+        try:
+            conn.request(method, path, headers={"Accept": "application/json"})
+            response = conn.getresponse()
+            if response.status != 200:
+                # 非 200 时正文是一个 JSON 错误对象，不是 ndjson。排空（否则关连接时
+                # daemon 侧看到的是写失败）然后把状态码交给调用方判定。
+                response.read()
+                return response.status
+            while True:
+                raw = response.readline()
+                if not raw:
+                    return response.status
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    loaded = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    raise DockerApiError(
+                        "bad_json", f"进度流里有一行不是合法 JSON（{len(text)} 字节）"
+                    ) from exc
+                if isinstance(loaded, dict):
+                    on_line(loaded)
+        except (OSError, HTTPException) as exc:
+            raise self._translate(exc, timeout_s) from exc
+        finally:
+            conn.close()
+
+    def _translate(self, exc: OSError | HTTPException, timeout_s: float) -> DockerApiError:
+        """把传输层异常翻成机器码。**两个方法共用这一份** —— 两份映射迟早给同一种故障
+        两个不同的机器码，而这些码会原样出现在 UI 上。
+
+        判断顺序即优先级：`FileNotFoundError` / `PermissionError` / `TimeoutError` 都是
+        `OSError` 的子类，最常见的那种部署错误（忘了挂 docker.sock）值得自己的码。
+        """
+        if isinstance(exc, FileNotFoundError):
+            return DockerApiError("socket_missing", f"{self.socket_path} 不存在")
+        if isinstance(exc, PermissionError):
+            return DockerApiError("socket_permission_denied", f"{self.socket_path} 不可访问")
+        if isinstance(exc, TimeoutError):
+            # Python 3.10+ 起 `socket.timeout` 就是 `TimeoutError` 的别名，一条够了。
+            return DockerApiError("timeout", f"{timeout_s} 秒内 daemon 没有应答")
+        # 不把 str(exc) 之外的东西带出去，也不 bare except（CLAUDE.md §Python）。
+        return DockerApiError("transport_error", f"{type(exc).__name__}: {exc}")
 
 
 # =============================================================================

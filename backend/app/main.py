@@ -95,6 +95,7 @@ from app.services.allowlist import AllowlistStore
 from app.services.audit import iso_utc
 from app.services.auth import AuthService
 from app.services.docker_probe import UnixSocketTransport, read_self_container_ref
+from app.services.image_puller import ImagePuller
 from app.services.key_vault import KeyVault, assert_single_worker
 from app.services.reaper import Reaper
 from app.services.scan_secrets import ScanSecretRegistry
@@ -406,6 +407,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 内的常量（容器 id 不会变），而单测要替换它时改一个 state 字段就够了。
         app.state.docker_transport = UnixSocketTransport()
         app.state.self_container_ref = read_self_container_ref()
+        # T11b。**一个进程一个 puller**：拉取状态与那个后台任务都挂在它身上，多一个实例
+        # 就多一次并行拉取。同样**不跟 daemon 说话** —— 构造它只是记下传输层。
+        app.state.image_puller = ImagePuller(app.state.docker_transport)
         # T8。授权清单是**文件**，不是表 —— 操作者可以直接编辑它，所以 store 每次读取都
         # 顺带做一次热重载检查。这里主动加载一次，只为了让"清单是坏的"这件事出现在**启动
         # 日志**里而不是第一个请求的响应里；加载失败不影响启动（没有清单是合法状态，
@@ -477,6 +481,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # （表现是一句 ProgrammingError，以及一行永远卡在 running 的扫描）。
             # `return_exceptions=True`：一个任务的异常不许挡住其它任务的收尾。
             await asyncio.gather(*tuple(scan_tasks), return_exceptions=True)
+            # T11b。拉取任务也要在事件循环关掉之前收干净（形状与下面两个后台任务一样：
+            # cancel 并 await）。刻意**不等它拉完**：一个 GB 级镜像会让停机卡上几分钟。
+            await app.state.image_puller.shutdown()
             sweeper.cancel()
             with suppress(asyncio.CancelledError):
                 await sweeper
@@ -516,6 +523,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 会让 docker 抖一下就重启 api，而重启 api 会清空内存 KeyVault。
     app.include_router(health_routes.router)
     app.include_router(system_routes.router)
+    # T11b。`/ws/system`（镜像拉取进度）刻意**不在** `/api/system` 前缀下 —— 见
+    # `routes/system.py` 里 `ws_router` 的注释。它同样受全局鉴权保护（app 级依赖能
+    # 覆盖 websocket 路由，中间件不能，这就是上面那个 `dependencies=` 的理由）。
+    app.include_router(system_routes.ws_router)
     # T8。两者都在全局鉴权之后（**没有**往 EXEMPT_PATHS 加任何路径）：
     # `/api/targets/validate` 会对任意主机名发 DNS 查询，而这个进程在 `strix_sandbox`
     # 网络里能解析内网名字；`/api/allowlist` 写的就是"谁批准扫什么"。

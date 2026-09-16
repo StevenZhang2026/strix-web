@@ -684,3 +684,16 @@ def test_unix_socket_transport_wrong_kind_of_path(tmp_path: Path) -> None:
     with pytest.raises(DockerApiError) as excinfo:
         UnixSocketTransport(socket_path=str(regular)).request("GET", "/version", timeout_s=1.0)
     assert excinfo.value.reason == "transport_error"
+
+
+def test_stream_ndjson_maps_failures_the_same_way(tmp_path: Path) -> None:
+    """流式方法与 `request()` **共用一份**异常映射（`_translate`）。
+
+    两份映射迟早给同一种故障两个不同的机器码，而这些码会原样出现在 UI 上 —— 上面那
+    两条测试正是为此存在的，这一条把它们扩到第二个方法上。T11b 收货 mutation：让
+    `stream_ndjson` 自己写一份、只剩 `transport_error`，在补这条之前一条测试都不红。
+    """
+    transport = UnixSocketTransport(socket_path=str(tmp_path / "nope.sock"))
+    with pytest.raises(DockerApiError) as excinfo:
+        transport.stream_ndjson("POST", "/images/create", timeout_s=1.0, on_line=lambda _line: None)
+    assert excinfo.value.reason == "socket_missing"

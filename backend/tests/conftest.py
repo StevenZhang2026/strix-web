@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -235,6 +235,13 @@ class RecordedCall:
 
 
 Handler = Callable[[RecordedCall], DockerReply]
+OnLine = Callable[[Mapping[str, object]], None]
+StreamHandler = Callable[[RecordedCall, OnLine], int]
+"""流式处理器：拿到这一次调用与 `on_line` 回调，自己决定喂哪几行、返回哪个状态码。
+
+返回值是 **HTTP 状态码**，喂进去的行是 ndjson 的正文 —— 两者刻意分开，因为
+`POST /images/create` 失败时状态码仍然是 200，失败只在正文里（T11b）。
+"""
 
 
 @dataclass
@@ -244,10 +251,14 @@ class FakeTransport:
     **没有匹配就 `AssertionError`**，不是静默返回 404：一次意料之外的 docker 往返
     （比如有人加了 `POST /images/create`，那是拉镜像；或者清扫多发了一个 DELETE）
     必须让测试炸掉，而不是被当成"那个东西不存在"。
+
+    `routes` 与 `streams` 是两张独立的表（对应传输层的两个方法）。**立场完全一样** ——
+    没准备就 `AssertionError`。
     """
 
     routes: list[tuple[str, str, Handler]]
     calls: list[RecordedCall] = field(default_factory=list)
+    streams: list[tuple[str, str, StreamHandler]] = field(default_factory=list)
 
     def request(
         self, method: str, path: str, *, payload: object = None, timeout_s: float
@@ -258,6 +269,14 @@ class FakeTransport:
             if method == want_method and needle in path:
                 return handler(call)
         raise AssertionError(f"替身没有为 {method} {path} 准备应答 —— 发了一个意料之外的请求")
+
+    def stream_ndjson(self, method: str, path: str, *, timeout_s: float, on_line: OnLine) -> int:
+        call = RecordedCall(method=method, path=path, payload=None, timeout_s=timeout_s)
+        self.calls.append(call)
+        for want_method, needle, handler in self.streams:
+            if method == want_method and needle in path:
+                return handler(call, on_line)
+        raise AssertionError(f"替身没有为流式 {method} {path} 准备应答 —— 发了一个意料之外的请求")
 
     def paths(self) -> list[str]:
         return [call.path for call in self.calls]

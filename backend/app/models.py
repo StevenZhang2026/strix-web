@@ -155,6 +155,31 @@ class SandboxImageSection(BoundaryModel):
     unknown_reason: str | None
 
 
+class PullImageResponse(BoundaryModel):
+    """`POST /api/system/pull-image`。字段与 `services.image_puller.PullState` 一一对应。
+
+    **HTTP 状态码才是"起没起"的答案**：`200` = 镜像已在本地（什么都没做），
+    `202` = 已经在拉（这一次起的，或上一次还在跑）。正文两种情况都是当前状态，
+    因为前端拿到之后要做的事一样 —— 连上 `/ws/system` 看进度。
+
+    `status` 只有四个值（`idle` / `pulling` / `done` / `error`），"已经在本地"落在
+    `status="done"` + `phase="already_present"`：那本来就是"不用拉了"，给 `status`
+    加第五个值会让前端多一条分支而没有多一点信息。
+    """
+
+    status: str
+    epoch: int
+    reference: str
+    phase: str
+    percent: float | None
+    downloaded_bytes: int
+    total_bytes: int | None
+    layers_done: int
+    layers_total: int
+    code: str | None
+    reason: str | None
+
+
 class OrphanSandboxSection(BoundaryModel):
     """残留的沙箱容器（`PLAN.md` R8）。
 
