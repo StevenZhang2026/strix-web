@@ -35,6 +35,24 @@ docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/te
 `docker run --rm --entrypoint sh strix-console/api-test:0.1.0 -c 'python -c "import strix,pathlib;p=pathlib.Path(strix.__file__).parent;print((p/\"interface/cli.py\").read_text())"'`
 —— T10 方案里那四段源码就是这么读出来的，比 `/tmp/strix_src`（早没了）可靠。
 
+**⚠️ 2026-09-16 第二段会话：用户拍板砍范围 + 改测试纪律。剩余仍是 20 行**（行不删、只降级：4 行的模板
+从 3 降到 1），**但工作量与人工往返都少一大截**。
+四件事已落地，**开工前必须知道**：
+1. **砍范围**（§派发清单 对应行已改写、§里程碑 M7/M8 已改、单人估时 21→20 天）：
+   **T24** 专家 tab → 降级成 `GET /api/scans/{id}/raw.zip` 一个下载按钮（模板 3→1）；
+   **T25** 审计 UI 砍掉、只留 `GET /api/audit.csv`（3→1）；**T26** 独立诊断页砍掉、并进首页
+   `ReadyRows` 一个可展开区块（3→1）；**T28** 续跑与并发队列 v1 不做、只留留存清理。
+   **T27 DOCX 导出保留** —— 用户明确要"能导 Word"，别顺手一起砍了。
+2. **验收从 28 条变 27 条**：18 号（续跑）已删，**编号刻意留空位不重排**（6–11／19／22／25／27／28
+   被多处按数字引用）；17 号末句也删了。`CLAUDE.md` 与 `README.md` 的数字已同步。
+3. **`agent-rules.md` §十.5 TDD 改成三层**（原为无条件）：纯判定函数 + 安全不变式才 TDD；接线层
+   （路由转发／CRUD／导出格式化）事后补一条正路 + 一条错误形状；**前端不写测试、不引测试栈**
+   （闸门 = `tsc` + `eslint` + `test_message_coverage.py` + 人眼看一次页面）。
+4. **`agent-rules.md` §八.3 ② mutation 数改成"本任务新增不变式条数"**（原为固定 6 处；纯前端 0 处）。
+   T11b 那次 15 处是过量的 —— 那行真正承重的不变式只有 3 条。
+   **剩余 20 行的新增用例总量目标 250–350**（前 18 行是 838）；**T13 一行就该占 100+**，它有真不变式
+   （epoch 单调、id 重排检测、elision 识别），别把这条目标当成对 T13 的封顶。
+
 ## 下一步：**T13**（T11b 已于 2026-09-16 收货并提交，是按用户指令刻意插在 T13 之前做的）
 
 0. **T11 已按 `agent-rules.md` §九.5 拆成 T11a／T11b**（2026-09-15），两行都在 §派发清单里，
@@ -207,7 +225,7 @@ env 是白名单式的，没在名单里就到不了子进程，那个新凭据�
 ① `./scripts/m0_probe.sh` 断言日志出现**容器 IP** 而非 `127.0.0.1`（两个未文档化 env）；② **重验成本估算**
 （strix **或** litellm 升级都可能让**预算护栏静默变 0**，条 38 已实测发生过）：先离线跑一遍候选名 →
 `completion_cost`，再 `M0_BUDGET=0.1 ./scripts/m0_probe.sh` 看断言 6 与拦截；③ Key 卫生：镜像 env 扫 + 任务目录外全盘扫 `LLM_API_KEY`
-（`persist_current()` 写盘路径可能变）；④ `make verify-e2e` 28 条。
+（`persist_current()` 写盘路径可能变）；④ `make verify-e2e` 27 条。
 **阶段 5 可回滚**：**升级必须是一个单独的 commit，不与任何业务改动混** —— 有 pin + hash lock，回滚 =
 `git revert` + 重建镜像；一混进业务改动，回滚就变成手术。（拟写进 `CLAUDE.md` §禁区，**待放行**。）
 
@@ -348,7 +366,7 @@ litellm 自己回的 `response_cost`（`report/state.py:866-887`）。它若也�
   本次凭据形状是 bearer，四个 `AWS_*` 都不在 alias 表里所以没落盘；**换成 `single` 形状，
   `LLM_API_KEY` 就会明文进这个文件** —— tmpfs HOME + 显式 `--config` + `finally rmtree`
   仍然是唯一防线（条 25），且这次是**看着它被写了**才确认防线有效，不再是推断。
-- **④ `make verify-e2e` 28 条**：待 T30b，**仍然记账为"跳过"，不是"通过"**。
+- **④ `make verify-e2e` 27 条**：待 T30b，**仍然记账为"跳过"，不是"通过"**。
 
 **第一次真跑失败了，那次失败本身查出两个缺陷（都已修）**：模型名输成了裸名 `us.anthropic.sonnet 4.6`
 → Strix 在 `interface/main.py:186` 直接 `sys.exit(1)`（面板 `UNKNOWN MODEL NAME`，裸名默认路由到 OpenAI），
@@ -665,9 +683,11 @@ Strix/
 `DELETE /api/keys/{h}` 立即清除。`api` **必须 `--workers 1`**（vault 是进程内 dict，多 worker 会随机 404）——
 启动时校验 `WEB_CONCURRENCY`。不做 `mlock`（容器无 `IPC_LOCK` 会失败，且是虚假安全感）。
 
-**`api` 重启后**：所有 handle 消失。运行中的扫描继续（子进程已持有 Key），但**续跑与报告翻译需重新输入 Key** ——
-这是正确且诚实的行为。`POST /api/scans/{id}/resume` 必须带 `vault_handle`，失效则 `409 key_required`，
-UI 弹窗预填 provider/model、Key 框留空，文案说明"我们从不保存密钥"。
+**`api` 重启后**：所有 handle 消失。运行中的扫描继续（子进程已持有 Key），但**报告翻译需重新输入 Key** ——
+这是正确且诚实的行为。失效的 handle 一律 `409 key_required`，UI 弹窗预填 provider/model、Key 框留空，
+文案说明"我们从不保存密钥"。
+（**`POST /api/scans/{id}/resume` 随 T28 的续跑一起砍了**，2026-09-16；恢复它的时候这条"必须带
+`vault_handle`、失效即 `409 key_required`"的规则原样适用。）
 
 ---
 
@@ -874,7 +894,11 @@ UI 单独显示"报告生成费用 $0.14"（花的是用户自己的 Key，应�
 
 ---
 
-## 专家模式：**不代理 Strix 自带 SPA，自己做一个 tab**
+## 专家模式：**不代理 Strix 自带 SPA**（2026-09-16：自己做的那个 tab 已砍，降级成 zip 下载，见 T24）
+
+> **1–3 条讲的是"为什么不代理它"，那是禁区、永久有效；末尾的"原生查看器逃生门"也保留（M7）。**
+> 砍掉的只是中间那段「所以专家 tab 用自己的 store 渲染」—— 替代品是 `GET /api/scans/{id}/raw.zip`
+> 一个下载按钮（T24）。**那段做法原样留着，将来要恢复直接照抄**（它挂在 T13 的 `RunProjector` 上，不受影响）。
 
 1. **它会外联且有邮箱门**：`/api/runs` 与任何非本次 run 的数据都要 `auth.is_verified()` 打
    `STRIX_APP_URL`（默认 `https://app.strix.ai`）；`POST /api/report/send` 会把客户渗透测试结果的
@@ -887,7 +911,7 @@ UI 单独显示"报告生成费用 $0.14"（花的是用户自己的 Key，应�
    `TuiLiveView().hydrate_from_run_dir(); return {"agents":…, "events":…}` —— 专家 tab 要的东西
    已经全在我们的 WS 流和镜像里了。
 
-**所以专家 tab 用自己的 store 渲染**：原始事件 JSON（带复制按钮）、完整 agent 拓扑与每个 agent 的
+**~~所以专家 tab 用自己的 store 渲染~~（2026-09-16 砍，见本节顶部；以下内容留作将来恢复的蓝图）**：原始事件 JSON（带复制按钮）、完整 agent 拓扑与每个 agent 的
 status/error、不过滤的 `strix.log`（含 DEBUG）、`run.json`/`vulnerabilities.json`/`findings.sarif`/
 `coverage.json` 原文与下载、`llm_usage` 的**按 agent** token 与费用明细（`report/usage.py::to_record`
 给了 `agents[].{agent_id,agent_name,model,cost,...}`）、以及本次启动的 argv 与脱敏 env。
@@ -1251,10 +1275,10 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | M4 | RunProjector（epoch/重同步）、EventMirror（截图落地）、LogTailer、ScanChannel、WS+SSE、重连回放；**现在就造压缩夹具**（用 `STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发）；前端实时面板 | 3 |
 | M5 | 五步向导（含授权步：三勾选 + 逐字输入、期望串显示在框**旁边**）、6 模板、测试账号收集、高级面板、费用预估；发现 tab；服务端重校验 + DNS 变更检查 | 3 |
 | M6 | Translator（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）；**先只出打印 CSS HTML 导出**；报告 tab；md/csv/sarif 直通 | 3 |
-| M7 | 专家 tab（复用同一 store）；审计 UI + CSV；系统诊断页（M3 每个失败模式都有中文修复指引）；原生 viewer 按钮（开关后） | 2 |
-| M8 | DOCX 导出；续跑（重新索要 Key）；并发队列；留存清理任务；`test_strix_contract.py`（**升级预警线**）；`README.md` + `docs/` 四份文档；`make verify-e2e` | 2 |
+| M7 | 原始 run 目录 zip 下载按钮（**专家 tab 已砍**）；审计 CSV 导出接口（**审计 UI 已砍**）；首页诊断区块（M3 每个失败模式都有中文修复指引，**独立诊断页已砍**）；原生 viewer 按钮（开关后） | 1 |
+| M8 | DOCX 导出（**保留**，用户 2026-09-16 明确要"能导 Word"）；留存清理任务（**续跑与并发队列已砍**）；`test_strix_contract.py`（**升级预警线**）；`README.md` + `docs/` 四份文档；`make verify-e2e` | 2 |
 
-单人约 **21 个工作日**（M1 因 TLS 从 2 天增至 3 天）。**M0 永远第一。**
+单人约 **20 个工作日**（M1 因 TLS 从 2 天增至 3 天；2026-09-16 砍范围后 M7 从 2 天降到 1 天）。**M0 永远第一。**
 
 **已完成任务的复核记录**（派发清单只留 ✅ 与日期，细节记在这里，两处别都写）：
 
@@ -1317,16 +1341,19 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3** —— 含**新建迁移 = 表结构设计**（`agent-rules.md` §四 明列）；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |
 | T22 | `exporter_html.py` 打印 CSS + 报告 tab | T21 T5 | `services/exporter_html.py` `frontend/src/components/report/*` | **3** |
 | T23 | md/csv/sarif 直通导出 | T21 | `routes/reports.py` | 1 |
-| T24 | 专家 tab（复用同一 store，**不代理 Strix 自带 SPA**）| T17 | `frontend/src/components/expert/*` | **3** |
-| T25 | 审计 UI + CSV 导出 | T12c | `services/audit.py` `routes/audit.py` **`frontend/src/app/audit/*`** | **3**（前端页面 → 模板 3）|
-| T26 | 系统诊断页（T3/T10 每个失败模式都有中文修复指引）| T3 T10 | `frontend/src/app/diagnostics/*` | **3** |
+| T24 | ~~专家 tab~~ → **降级成「下载原始 run 目录 zip」一个按钮**（2026-09-16 用户拍板砍范围）| T17 | `routes/reports.py`（加 `GET /api/scans/{id}/raw.zip`）| **1** —— 不再有 `components/expert/*`、不再自己维护第二份事件视图；前端只多一个按钮。**§专家模式 那节"不代理 Strix 自带 SPA"仍然有效**（那是禁区，不是范围）；砍掉的是"自己再渲染一份原始事件"。**zip 的内容安全性靠的是既有不变式**（验收 11：`grep -rI "$TEST_KEY" $DATA/` 含 run 目录与 `strix.log` 为 0），**不许为它新造一条读文件路径**：只打包 `${DATA}/scans/<id>/` 下已落盘的产物，**排除 `tmp/`** |
+| T25 | ~~审计 UI~~ 砍掉，**只留 `GET /api/audit.csv` 导出接口**（2026-09-16 用户拍板；`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 双写 T12c 已落地，日常查询用 `grep`）| T12c | `routes/audit.py` | **1** —— **验收 19 条一字不改**（六类事件齐全 + 对 CSV `grep -c "$TEST_KEY"` 为 0），砍掉的只是页面 |
+| T26 | ~~系统诊断页~~ → **并进首页一个可展开区块**（2026-09-16 用户拍板）| T3 T10 | `frontend/src/components/system/ReadyRows.tsx`（扩写）`frontend/messages/zh-CN.json` | **1** —— T3 已返回结构化 JSON、首页 `ReadyRows` 已接真值（`5ddede6`），本行只是给每个失败码配中文修复指引（指引文案进 `zh-CN.json`；**失败码清单以 T3／T10 的实现为权威，不许自己发明码**）。**不新建 `app/diagnostics/`** |
 | T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
-| T28 | 续跑（重新索要 Key）+ 并发队列 + 留存清理任务 | T10 | `routes/scans.py` `services/scan_supervisor.py` | **2 —— ⚠️ 破坏性操作**（留存清理会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run、绝不递归删 `${DATA}` 下其他任何目录。<br>**T10 交回两件**：① **不许碰 `${DATA}/scans/<id>/tmp`** —— 那是 `cleanup_scan_tmpdir()` 的地盘（同 T11 那条禁令）；留存清理删的是**整个** `scans/<id>/`，只在扫描已终态之后；② `--resume` 收的是 **run name**（`strix_runs/` 下的目录名），来源是 `ScanProcess.run.run_name` → T12 落进 `scans.strix_run_name`；续跑必须用**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒 |
+| T28 | ~~续跑（重新索要 Key）+ 并发队列~~ **v1 不做**，只留**留存清理任务**（2026-09-16 用户拍板砍范围）| T10 | `services/retention.py` | **2 —— ⚠️ 破坏性操作**（会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run 打印再删、绝不递归删 `${DATA}` 下其他任何目录；**不许碰 `${DATA}/scans/<id>/tmp`**（那是 `cleanup_scan_tmpdir()` 的地盘，T10 交回，同 T11 那条禁令）；删的是**整个** `scans/<id>/`，且只在扫描已终态之后。<br>**砍掉那两件的连带影响（别丢）**：① **验收 18 整条删除**、**验收 17 末句**（"重启后点继续扫描会预填 provider/model"）删除；② `--resume` 的三条约束（收 **run name** = `strix_runs/` 下目录名，来源 `ScanProcess.run.run_name`；必须**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒；必须显式 `-m <持久化的模式>` 且**无 `-t`**）**原样留在此处**，将来要做直接照抄；③ T10 已落进 `scans.strix_run_name` 的字段**保留、暂不使用**，不许为"砍了续跑"去删列（删列要写迁移，比留一个空列贵）；④ **没有队列** = 超过并发槽位上限直接返回 `too_many_running`（T12c 的槽位闸已经就是这个行为），不排队 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索 |
-| T30b | `make verify-e2e`（28 条）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
+| T30b | `make verify-e2e`（**27 条**，编号到 28、18 号是空位）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
 
 **可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。
+**⚠️ 2026-09-16 砍范围后新增一处文件撞车**：T24 的 `raw.zip` 端点也落在 `routes/reports.py`，与 T23 同文件
+→ **T23 与 T24 不许同批派发**（§九.7：并发时双改是后写覆盖且无冲突提示）。两行现在都是模板 1、都只往
+`routes/reports.py` 加端点，**收货时按提交边界收一次**即可（§八.3 末句）；真要省一次派发就合成一行。
 其余全部串行 —— T2 与 T13 是两个瓶颈，几乎所有东西挂在它们后面。同时在跑的 subagent **≤3**。
 **T15a 是「自」，不占 subagent 名额**，但它卡着 T15b。
 
@@ -1415,7 +1442,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 
 ---
 
-## 端到端验收（`make verify-e2e`；6–11 是 Key 卫生安全门，22 与 25 是 TLS 阻断项，27 与 28 是登录阻断项，全绿才能发布）
+## 端到端验收（`make verify-e2e`；**27 条**，编号到 28 但 **18 号已删且刻意留空位**，见该条；6–11 是 Key 卫生安全门，22 与 25 是 TLS 阻断项，27 与 28 是登录阻断项，全绿才能发布）
 
 **准备**：自己有权测试的靶场 —— `docker run --rm -d -p 13000:3000 bkimminich/juice-shop`，
 （**用 13000 不用 3000** —— 本机 3000 已被占用且监听在所有网卡上，`make verify-e2e` 会起不来；端口在验收脚本里参数化）
@@ -1462,10 +1489,10 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 16. **导出**：`report/print?lang=zh` 在 Chrome 里 `⌘P` → A4 PDF 中文正常、发现卡不跨页断裂、截图内嵌；
     `report/docx` 在 Word/Pages 打开中文无豆腐块
 17. **Key 生命周期**：`DELETE /api/keys/{h}` → 204；用死 handle 请求报告 → 409 `key_required`；
-    重启 `api` → 所有 handle 消失，可续跑的扫描点"继续扫描"会预填 provider/model 且 Key 框为空
-18. **续跑**：中途停止后续跑，断言 argv 用**同一个 cwd**、`--resume <strix_run_name>`、
-    **显式 `-m <持久化的模式>`**（否则会静默回落到默认 `deep`）、**且无 `-t`**（Strix 会报错）；
-    transcript 是接续而非重来；`strix.log` 是**追加**（老行还在）
+    重启 `api` → 所有 handle 消失
+18. ~~**续跑**~~ —— **2026-09-16 随 T28 砍掉续跑功能而删除**。**编号刻意保留空位、不重排**：
+    6–11／19／22／25／27／28 这些编号被本文件与 `CLAUDE.md` 多处按数字引用，重排会静默改掉引用的含义。
+    所以本节是 **27 条实跑 + 18 号空位**，`make verify-e2e` 的用例数是 **27**
 19. **审计**：CSV 含 `authorization.affirmed`/`scan.launched`/`override.loopback_used`/`scan.stopped`/
     `report.exported`/`key.registered`（掩码）/`key.forgotten`；对 CSV `grep -c "$TEST_KEY"` → **0**
 20. **重启恢复**：扫描中 `docker compose restart api` → 标 `orphaned_running`、WS 重连并从镜像续流、
