@@ -1,0 +1,43 @@
+/* 「本机就绪状态」五行**下方**的修复指引。全站唯一一处折叠区，用原生
+   `<details>` / `<summary>`（没有第二处需要它，不值得为它做一个组件）。
+
+   刻意只有两件事：`summary` 看得出可点、条目之间有呼吸。不做动画、不做图标 ——
+   这块东西只在有阻断项时出现，它要的是"读完就去修"，不是被观赏。 */
+
+.fixes {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  /* 与 `Rows.module.css` 的行分隔线同一种点线：它是同一张面板里的下一段，
+     不是另一件事。实线会把它讲成一个独立的卡片。 */
+  border-top: 1px dotted var(--rule);
+  font-size: var(--fs-2);
+}
+
+.summary {
+  /* `--gate` = 「真的会发生事情」的动作色。这里点开只是展开文字，所以只借它的
+     颜色表示"可点"，不做成按钮。`:focus-visible` 的描边由 globals.css 统一给。 */
+  color: var(--gate);
+  cursor: pointer;
+}
+
+.list {
+  list-style: none;
+  margin: var(--s3) 0 0;
+  padding: 0;
+}
+
+.item + .item {
+  margin-top: var(--s3);
+}
+
+.title {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.fix {
+  margin: var(--s1) 0 0;
+  color: var(--ink-2);
+  line-height: 1.6;
+}

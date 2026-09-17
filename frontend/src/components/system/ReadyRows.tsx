@@ -5,7 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Rows, type StatusRow } from "@/components/ui/Rows";
 import { type DotTone } from "@/components/ui/StatusDot";
 import { fetchSession, fetchSystemStatus, type SystemStatusSummary } from "@/lib/api/client";
-import { t } from "@/lib/messages";
+import { t, type MessageKey } from "@/lib/messages";
+
+import styles from "./ReadyRows.module.css";
 
 /**
  * 首页侧栏「本机就绪状态」那几行的**真值**。客户端叶子，`Panel` 与标题仍在服务端页面上。
@@ -45,11 +47,21 @@ import { t } from "@/lib/messages";
  *
  * · **不轮询、不加 `refetchInterval`。** 这个接口每次都真起一个容器（几百毫秒到一两秒），
  *   而它回答的是"这台机器配好了没有" —— 那是人去改配置才会变的事。
- *   要重新检测的入口在 T26 的诊断页。
+ *   重新检测的办法就是刷新页面（诊断页已砍掉，所以每条修复指引都以"刷新本页"收尾）。
  * · **不做骨架屏/加载动画。** 五行的行数与行高在三种状态下完全一样，值从「尚未检测」
  *   变成结论时**零布局位移**，再加一层 loading 只是多一次闪烁。
- * · **不把 `blockers` 数组直接渲染出来。** 那样会得到"没有对应行的码就消失、有对应行的
- *   码显示两次"。这里按行去读它自己那个字段，`blockers` 留给 T26。
+ * · **五行不读 `blockers` 数组。** 按数组渲染那五行会得到"没有对应行的码就消失、有对应
+ *   行的码显示两次"。所以每行只读它自己那个字段。
+ *
+ * =============================================================================
+ * 四、`blockers` 在下方的修复指引里（T26）
+ *
+ * 五行只回答"哪一项没过"，不回答"那我该怎么办"。后者是 `<FixHints>`：**照着
+ * `status.blockers` 的顺序一个码一条**，标题用短标签、正文用 `systemStatus.fixes.*`。
+ *
+ * 这里**不做任何判定**（不排序、不去重、不抑制）—— `compute_blockers` 已经做完了：
+ * docker 排在最前，且 docker 不可达时那四条派生项一条都不报（一个根因不该变成五条
+ * 待办）。前端再排一遍等于把同一条规则实现两次，而两份实现必然漂移。
  */
 
 interface Verdict {
@@ -88,7 +100,7 @@ interface ReadyCheck {
  * `api_not_on_sandbox_network` 原先在首页没有任何位置 —— 于是沙箱网络坏掉时这个
  * 面板会四行全绿，而扫描根本发不起来（`ready_for_scan: false`）。一个说"就绪"却
  * 不能扫的面板正是这块 UI 要防的东西，所以加了这一行。两个码共用一行是因为它们的
- * 修法是同一件事（把网络和 api 接上），而 T26 的诊断页会逐码展开。
+ * 修法是同一件事（把网络和 api 接上），而下方的 `<FixHints>` 会逐码展开。
  */
 const CHECKS: readonly ReadyCheck[] = [
   {
@@ -153,6 +165,63 @@ function toRow(check: ReadyCheck, status: SystemStatusSummary | undefined, faile
   return { id: check.id, label: check.label, value: verdict.value, tone: verdict.tone };
 }
 
+/**
+ * 一个阻断码的两句话：短标签（五行右侧那句）+ 修复指引。
+ *
+ * `t()` 的参数是**字面量联合类型**，而码是运行期从 JSON 里来的字符串，所以这里必须
+ * 断言一次。断言是安全的，而且这条安全性是**被测的**：
+ * `backend/tests/test_message_coverage.py` 拿 `ALL_BLOCKER_CODES` 对
+ * `systemStatus.blockers.*` 与 `systemStatus.fixes.*` 各做一次双向比对，缺一条或多一条
+ * 都会红。真漏了的话 `t()` 也不会静默 —— 它按兜底原样露出 key（`lib/messages.ts`），
+ * 一串英文点分路径出现在一片中文里是刺眼且可搜索的。
+ *
+ * 反过来在这里写一张"码 → key"的表就得把六个码抄进前端，那份副本没有任何测试守着。
+ */
+function copyFor(code: string): { readonly label: string; readonly fix: string } {
+  return {
+    label: t(`systemStatus.blockers.${code}` as MessageKey),
+    fix: t(`systemStatus.fixes.${code}` as MessageKey),
+  };
+}
+
+interface FixHintsProps {
+  /** `undefined` = 还没拿到响应。 */
+  readonly blockers: readonly string[] | undefined;
+}
+
+/**
+ * 五行下方的修复指引。**没有阻断项时整块不渲染**（返回 `null`）——
+ * 全绿的机器上留一个"查看修复指引"的入口，等于让人怀疑面板刚说的"已就绪"。
+ */
+function FixHints({ blockers }: FixHintsProps) {
+  if (blockers === undefined || blockers.length === 0) {
+    return null;
+  }
+  return (
+    <details className={styles.fixes}>
+      {/* 数量单独一个文本节点，前后两句从文案表取：`t()` 刻意不支持占位符插值
+          （`messages/README.md` 约定 4 禁占位符、约定 3 要求"值渲染成自己的节点"），
+          而为一个计数去给它加一套插值机制，代价比这里多两个 key 大得多。 */}
+      <summary className={styles.summary}>
+        {t("systemStatus.fixesSummaryPrefix")}
+        {blockers.length}
+        {t("systemStatus.fixesSummarySuffix")}
+      </summary>
+      <ul className={styles.list}>
+        {blockers.map((code) => {
+          const copy = copyFor(code);
+          return (
+            <li key={code} className={styles.item}>
+              <p className={styles.title}>{copy.label}</p>
+              <p className={styles.fix}>{copy.fix}</p>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
 export function ReadyRows() {
   const { data: session } = useQuery({
     queryKey: ["session"],
@@ -165,5 +234,10 @@ export function ReadyRows() {
   });
 
   const rows: readonly StatusRow[] = CHECKS.map((check) => toRow(check, data, isError));
-  return <Rows rows={rows} />;
+  return (
+    <>
+      <Rows rows={rows} />
+      <FixHints blockers={data?.blockers} />
+    </>
+  );
 }

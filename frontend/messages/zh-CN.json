@@ -414,6 +414,16 @@
       "same_path_mount_unverified": "同路径挂载未通过",
       "sandbox_image_missing": "沙箱镜像不存在",
       "telemetry_not_disabled": "遥测没有关闭"
+    },
+    "fixesSummaryPrefix": "查看修复指引（",
+    "fixesSummarySuffix": " 项待处理）",
+    "fixes": {
+      "docker_unreachable": "先启动 Docker Desktop（本项目只支持 Docker Desktop），等它完全起来之后刷新本页。",
+      "sandbox_network_missing": "沙箱网络 strix_sandbox 由本项目的 compose 配置创建：在仓库目录执行 docker compose -p strix-console up -d api，完成后刷新本页。",
+      "api_not_on_sandbox_network": "后端容器要重建一次才会接到沙箱网络上：在仓库目录执行 docker compose -p strix-console up -d api，完成后刷新本页。",
+      "same_path_mount_unverified": "把 .env 里的 STRIX_HOST_DATA_DIR 改成一个绝对宿主路径（容器内外必须是同一个路径），或者重新跑一次 ./setup.sh 生成它；改完执行 docker compose -p strix-console up -d api 重建后端。",
+      "sandbox_image_missing": "在终端执行 docker pull ghcr.io/usestrix/strix-sandbox:1.3.0 把沙箱镜像拉下来（镜像引用以 docker-compose.yml 里的 STRIX_IMAGE 为准），拉完刷新本页。",
+      "telemetry_not_disabled": "确认 STRIX_TELEMETRY 的值是 false（仓库的 compose 配置里已经固定成 false，出现这一条通常是后端容器还带着旧配置），再执行 docker compose -p strix-console up -d api 重建后端。"
     }
   },
 

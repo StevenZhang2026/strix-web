@@ -324,6 +324,13 @@ export interface SystemStatusSummary {
   readonly data_dir: { readonly identical_path_ok: boolean | null };
   readonly sandbox_image: { readonly present: boolean | null };
   readonly telemetry: { readonly strix_telemetry: boolean };
+  /**
+   * 后端 `compute_blockers` 的输出，**已经排好序、已经抑制过派生项**。
+   * 侧栏五行下方的修复指引照这个顺序逐条渲染，前端不再判定
+   * （`components/system/ReadyRows.tsx` 第四节）。码表在
+   * `services/system_status.py` 的 `ALL_BLOCKER_CODES`。
+   */
+  readonly blockers: readonly string[];
 }
 
 export function fetchSystemStatus(signal?: AbortSignal): Promise<SystemStatusSummary> {

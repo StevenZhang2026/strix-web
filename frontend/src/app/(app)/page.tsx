@@ -26,11 +26,14 @@ import styles from "./page.module.css";
  *     （读作"接下来会问你五件事"）。信息一字未改，性质从命令变成预告。
  *
  * 为什么在 T5 就改而不是留给后面某个任务：`PLAN.md` 的派发清单里 `src/app/*` 只有
- * T5 一个 owner（`PLAN.md:873`）。后面碰前端的四个任务各有地盘 —— T17 是
- * `components/live/*`、T18/T19 是 `components/wizard/*`、T25 是 `app/audit/*`、
- * T26 是 `app/diagnostics/*`；T3 只把侧栏那一栏的值换成真值（收尾时多了一行沙箱网络，
- * 理由在 `ReadyRows.tsx` 的 `CHECKS` 上）。**没有任何后续任务会来加这段介绍**，
- * 现在不改就一直是原样。
+ * T5 一个 owner（`PLAN.md:873`）。后面碰前端的任务各有地盘 —— T17 是
+ * `components/live/*`、T18/T19 是 `components/wizard/*`；T3 只把侧栏那一栏的值换成真值
+ * （收尾时多了一行沙箱网络，理由在 `ReadyRows.tsx` 的 `CHECKS` 上）。
+ * **没有任何后续任务会来加这段介绍**，现在不改就一直是原样。
+ *
+ * 原先这里写着「T25 是 `app/audit/*`、T26 是 `app/diagnostics/*`」——**两页都在 2026-09-16
+ * 砍范围时取消了**（审计页 → 只留 `GET /api/audit.csv`；诊断页 → 只在本页侧栏
+ * `ReadyRows` 下方加一个修复指引区块）。这两个路径都不存在，别照着建。
  *
  * `PLAN.md` 对首屏只有一条硬要求：`PLAN.md:1144`「合规声明（README 与 UI 首屏都要有）」。
  * 那三段条款原地保留，位置也没动 —— 它仍然紧挨在按钮上方，让人在按下去之前读到。

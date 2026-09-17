@@ -82,6 +82,7 @@ from app.errors import (
 )
 from app.logging_setup import Redactor, configure_logging, trace_id_var
 from app.routes import allowlist as allowlist_routes
+from app.routes import audit as audit_routes
 from app.routes import auth as auth_routes
 from app.routes import health as health_routes
 from app.routes import keys as keys_routes
@@ -544,6 +545,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 目标。挡住"任意网页跨域打它"的是「没有 CORS」+「只把 application/json 喂给 Pydantic」，
     # 所以这条路由的安全性也依赖于**永远不装 CORSMiddleware**（CLAUDE.md §安全不变式）。
     app.include_router(scans_routes.router)
+    # T25。`/api/audit.csv` 同样在全局鉴权之后：审计流水里写着谁在什么时候批准扫了什么，
+    # 未鉴权导出等于把内网资产清单（主机名 + 解析出来的地址 + 授权人 + 工单号）交出去。
+    # 它是只读的，也**不写**自己的审计事件（理由在 `routes/audit.py` 的模块 docstring）。
+    app.include_router(audit_routes.router)
 
     return app
 

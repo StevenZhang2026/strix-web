@@ -394,3 +394,34 @@ def test_blocker_copy_entries_are_plain_sentences(messages: dict[str, Any]) -> N
 # `test_system_status.py::test_blocker_codes_are_disjoint_from_http_error_codes` 已经测了，
 # 而上面那两条双向比对已经把"文案树 == ALL_BLOCKER_CODES"钉死，
 # 在这里再写一条就是同一条不变式的第三个副本（`agent-rules.md` §十.4）。
+
+
+# =============================================================================
+# 修复指引：`systemStatus.fixes.*`（T26）
+#
+# 与上面那棵 `blockers` 是**兄弟**，一码一条，形状同样是纯字符串。分工：
+# `blockers.<code>` 是侧栏那一行右侧的短标签（"哪一项没过"），
+# `fixes.<code>` 是它下方可展开区块里的一句话（"那我该怎么办"）。
+#
+# 这两条双向比对是 T26 唯一的自动闸门 —— 那个区块是纯前端的（前端不写测试），
+# 少一条 `fixes` 文案时 `t()` 会把 key 原样渲染到用户眼前，而阻断项面板恰恰是
+# 机器没配好时才打开的地方，靠人去撞不现实。
+# =============================================================================
+
+
+def _fix_copy(messages: dict[str, Any]) -> dict[str, Any]:
+    subtree = messages[_STATUS_TREE]["fixes"]
+    assert isinstance(subtree, dict), f"{_STATUS_TREE}.fixes 必须是对象"
+    return subtree
+
+
+def test_every_blocker_code_has_fix_copy(messages: dict[str, Any]) -> None:
+    missing = set(ALL_BLOCKER_CODES) - set(_fix_copy(messages).keys())
+    assert not missing, (
+        f"这些就绪阻断码没有修复指引，去 zh-CN.json 的 {_STATUS_TREE}.fixes 里加：{sorted(missing)}"
+    )
+
+
+def test_no_orphan_fix_copy(messages: dict[str, Any]) -> None:
+    orphans = set(_fix_copy(messages).keys()) - set(ALL_BLOCKER_CODES)
+    assert not orphans, f"{_STATUS_TREE}.fixes 里这些码后端已经不存在了：{sorted(orphans)}"
