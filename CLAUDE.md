@@ -5,7 +5,7 @@
 
 **`PLAN.md` 是设计的唯一权威**（事实出处 `file:line`、泄漏矩阵、里程碑、**T0–T30 派发清单**、27 条端到端验收）；与本文件冲突以它为准，并回头修本文件。
 **`PLAN.md` 有 1000+ 行，禁止整读**：先 `grep -n "^## " PLAN.md` 看小节，再按行区间 `Read`（整读一次要在此后每一次调用上重复付费，`agent-rules.md` §九）。
-本文件只放长期稳定、每轮都需要的项目事实，**硬上限 130 行且 10,500 字**（现 10,337）（行数管不住长行；本文件进**每一次**调用、**每一个**子 agent）—— 写满就往层二/层三下沉，不许硬塞。
+本文件只放长期稳定、每轮都需要的项目事实，**硬上限 130 行且 10,500 字**（现 10,371）（行数管不住长行；本文件进**每一次**调用、**每一个**子 agent）—— 写满就往层二/层三下沉，不许硬塞。
 
 ## 规则分流（记录任何新规则/新坑之前先读这一节）
 
@@ -25,7 +25,7 @@
 - 排查"连不上模型" / 设计错误码映射 → 条 19（哪家能用见下方环境表「出网」行）；展示扫描结论 / 做预算 UI → 条 24
 - 要用户跑需要输入凭据的交互式脚本 → 条 21（**只给命令，不给逐项输入表**）；想读写 `.env*` 或被 deny 挡住 → 条 13
 - 改本文件的 `@import` → 条 6；派发 subagent → 条 7；**拆任务粒度 / 复用子 agent 会话 → 条 40**；
-  **写交底任务书 / 收货读产物代码 / 查上次派发花在哪（`scripts/agent_budget.sh`）→ 条 41**
+  **写交底任务书 / 给子 agent 写闸门命令 / 收货读产物代码 / 查上次派发花在哪 → 条 41＋41b**
 - 要导出企业根 CA / 动 `STRIX_EXTRA_CA_FILE`（N2）/ 跑任何 docker 清理命令 → 读 `pitfalls/local-env.md`（**未跟踪**，只在本机）
 
 **层三的归属**：建模块时**同时**建该目录的 `CLAUDE.md`，把对应条目搬过去、只留一句结论（已搬 `frontend/`；T9 搬 `services/`，T13 搬 `strix_bridge/`）—— **代码写出来之前一律留在本文件**。
@@ -69,7 +69,7 @@
 - **同路径挂载 `${STRIX_HOST_DATA_DIR}:${STRIX_HOST_DATA_DIR}`，绝不用 named volume** —— 它的宿主路径在 VM 内、两侧不一致，会静默重现路径别名 bug。`TMPDIR` 也指到该卷下
 - **`agents.db` 不是只追加的** —— 上下文压缩与图片淘汰会 `clear_session()` 后重插、id 重排 → 朴素游标增量必错，要 epoch + 重同步检测 + 自己的只追加镜像
 - **截图只保留最近 3 张**（内联 data URL）→ **首次见到就落地**到 `media/<sha256>.png`
-- **import 边界（import-linter 强制）**：web 进程只许 import `strix.interface.tui.backend.live_view`（**子类**才有游标 API）与 `strix.interface.viewer.transcript`，**禁止** `strix.core.*` / `strix.runtime.*`；全部收口在 `backend/app/strix_bridge/`
+- **import 边界（import-linter 强制）**：web 进程只许 import `strix.interface.tui.backend.live_view`（**子类**才有 10k FIFO 上界与 `event_snapshot()`；游标 API 反而用不上）与 `strix.interface.viewer.transcript`，**禁止** `strix.core.*` / `strix.runtime.*`；全部收口在 `backend/app/strix_bridge/`
 - **必设** `STRIX_TELEMETRY=false`、`STRIX_NO_UPDATE_CHECK=1`、`LITELLM_LOG=ERROR`；**绝不设 `STRIX_DEBUG`**（把 `strix.log` 拉到 DEBUG，是泄漏面）
 - **`api` 必须 `--workers 1`**（KeyVault 是进程内 dict，多 worker 会随机 404），启动时校验 `WEB_CONCURRENCY`
 

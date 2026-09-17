@@ -1,8 +1,81 @@
 # Strix Web 控制台 — 实施计划
 
-## 交接（2026-09-16）
+## 交接（2026-09-17）
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
+
+### 本轮（2026-09-17）：T13／T25／T26 三条已提交，**T13 的收货只做了两步半，欠 mutation 与整读**
+
+> **下一轮开工第一件事（唯一的欠账，别跳过）**：T13 的 §八.3 收货**没做完**。已做：
+> ① 官方闸门 `make lint` + `make test` → **985 passed / 0 skipped**（基线 838 + T13 的 138
+> + T25 的 7 + T26 的 2 = 147，对得上）。**欠**：② **主会话自己跑那 5 处 mutation**
+> （靶子表在 `/tmp/T13-prompt.md` §F；子 agent 自陈"全对"**不算证据**，§八.3）、
+> ③ **整读 1575 行产物**（`services/run_projector.py` 274 + `strix_bridge/projection.py` 139
+> + 两个测试文件 672／480 + `conftest.py` 追加的 71 行）。
+> **为什么这一步不能省**：T13 那个 agent **发生过一次 auto-compact**，压缩点之后它是"读着摘要写
+> 代码" —— 判定表顺序（B6 六行）、fingerprint 只对 `data` 取、I3 的排他性这三处要逐字核。
+> 它自报的 M2 只变红 1 条（比预期窄，它如实报了）：**判定表的顺序只被
+> `test_version_bump_beats_elision_detection` 一条测试守着**，这是已知的薄弱点，值得补一条。
+> 复跑用具它留在了 `/tmp/t13mutate.py` 与 `/tmp/t13gate.sh`（**不要直接信它的脚本**，看一眼再用）。
+
+**Docker Desktop 的"文稿"权限故障已由人解决**（2026-09-17 本轮中途；macOS TCC 丢授权 →
+仓库路径挂不进容器 → 全部官方闸门瘫掉）。归因与复现判据留在 `pitfalls/local-env.md`（未跟踪），
+**再遇到同样报错先读那一节**，不要重新排查。
+
+三条的文件列**零重叠**，所以当时可以并发：
+
+| 行 | 交底任务书（**收货判据在里面，别凭记忆收**）| 它改哪些文件 |
+|---|---|---|
+| **T13** `RunProjector` | `/tmp/T13-prompt.md`（方案原文 + 5 条已批准裁决 + 3 条不变式 + 5 处 mutation 靶子 + 交付报告格式）；源码附录 `/tmp/T13-strix-source.md`（828 行，**区间表在任务书 §D，文件自带的目录是错的**）| `app/strix_bridge/{__init__,projection}.py`、`app/services/run_projector.py`、`app/strix_profile.py`（+4 字段）、`tests/test_run_projector.py`、`tests/test_strix_bridge_projection.py`、`tests/conftest.py`（追加 `make_agents_db`／`make_agents_json`）|
+| **T25** `GET /api/audit.csv` | `/tmp/T25-prompt.md` | `app/routes/audit.py`、`app/main.py`（一行 `include_router`）、`tests/test_routes_audit.py` |
+| **T26** 首页修复指引 | `/tmp/T26-prompt.md` | `components/system/ReadyRows.tsx`＋新 `.module.css`、`messages/zh-CN.json`（新 `systemStatus.fixes.*`）、`tests/test_message_coverage.py`（追加两条对称测试）|
+
+**收货三件事的完成情况（§八.3）**：① 官方闸门 **985 passed / 0 skipped**（三条一起过的）；
+② mutation = 新增不变式条数 → **T25 零处**（接线层）、**T26 零处**（纯前端）、**T13 五处欠着**；
+③ 整读 → T25／T26 **已做**，**T13 欠着**。
+
+**另外两处欠账**：
+- **T26 欠"人眼看一次页面"**（前端闸门第四项）：`docker compose -p strix-console up -d api web nginx`
+  之后看首页侧栏 —— 具体看那个 `<summary>` 借 `--gate` 色在面板里是不是太抢眼。
+- **T13 的粒度是错的，已记进 `pitfalls` 条 41b**：一条任务 3 条不变式／7 个文件／1575 行 →
+  必然压缩。规则已同步改（`agent-rules.md` §三.2 新增"新增行数超 ~500 行必拆"＋"不变式超 1 条 =
+  超 1 条任务"；§九.4 新增"快闸门必须按文件过滤，全量与 mutation 一律主会话自己跑"）。
+  **下次派 T14／T16 这种带不变式的任务照新规则拆。**
+- **T26 越界改了第 5 个文件**（任务书只给了 4 个）：`frontend/src/lib/api/client.ts` 的
+  `SystemStatusSummary` 加了 `readonly blockers: readonly string[]`。**已裁决：接受** ——
+  那是个后端响应的子集类型，本来就漏了这个字段（后端 `system_status.py:539` 一直在返回），
+  `strict` 下不加就只能写 `as unknown as Record<…>` 的强转，那更糟。
+- **T26 纠正了我任务书里三处错事实**（都已复核，以它为准）：① `strix_sandbox` **不是** `setup.sh`
+  建的，是 compose 的 `networks:` 段（`docker-compose.yml:289-294`，靠 `name: strix_sandbox` 去掉项目名
+  前缀）；② **首页没有镜像拉取按钮** —— T11b 只落了后端 `/ws/system` 与进度信封，**前端按钮还没人做**
+  （谁做要在派 T19／T20 时定），所以那条指引只能给 `docker pull`；③ `STRIX_TELEMETRY` 在
+  `docker-compose.yml:40` 是**硬编码字面量 `"false"`**，改 `.env` 没用，所以那条指引改成
+  "通常是容器带着旧配置 → 重建 api"。`STRIX_IMAGE` 同理是 compose 里的字面量
+  （`docker-compose.yml:36`，`ghcr.io/usestrix/strix-sandbox:1.3.0`）。
+- **主会话替它补的两处 docstring**（它被禁止碰／漏掉的）：`app/(app)/page.tsx` 与
+  `ReadyRows.tsx` 的 `CHECKS` 上都还写着"T25 是 `app/audit/*`、T26 是 `app/diagnostics/*`" ——
+  **两页在 2026-09-16 砍范围时就取消了**，已改成指向真实落点。
+
+**下一批可派**：T25 已提交 → **T28 解锁**（当初要等它是因为两者都改 `app/main.py`）；
+**T18 等 T13 收货补完**（它吃 T13 的 `ProjectedEvent`／`project()` 形状，先把上面那两步做了再派，
+否则形状可能还要动）。**派之前先按新的 §三.2 估行数**。
+
+**本轮已落地的三处文档修正**（T13 方案审出来的，已提交前的工作区改动）：
+① `CLAUDE.md` §Strix 集成 的 import 边界 —— 理由从"子类才有游标 API"改成"子类才有 10k FIFO 上界与
+`event_snapshot()`"。**结论没变**（仍只许 import 那两个模块），错的是理由：`hydrate_from_run_dir` 不清
+状态、每次读都必须新建 view，实例内的游标随 view 一起丢，所以 `event_changes_since()` 永远用不上。
+② §实时流设计 把"三个 elision 字面量 → `compaction_notice`"**拆成两件事**（截图淘汰保序保长度、
+不 bump epoch；压缩才是真重排、认 `<conversation-checkpoint>` 作正证据）。
+③ 连带把 WS 信封的 `compaction_notice` 类型改成 `notice` + 机器码，验收 14 条改成分开断言两个 env。
+
+**T25 报回的三处事件名不一致已于 2026-09-17 拍板结案，全部"只改文案、不改代码"**（改动已落在
+验收 19、§护栏＋审计 那段、T25 行）：① `override.loopback_used` → 改成断言 `authorization.affirmed`
+的 detail 含被用上的 opt-in（发那个事件要写 `target_guard` 判定逻辑的第二份副本）；
+② `key.forgotten` → `key.dropped`（事件名是**已落盘的数据**，改代码会让老行新行双名）；
+③ `report.exported` 不是矛盾，只是还没实现 —— 它是 T23 的活，验收 19 是端到端验收，跑的时候 T23 已完成。
+**代码一行没动**，`services/audit.py` 的 10 个常量保持原样。
+
+---
 
 **代码状态**：**T0–T12c 与 T11b 已完成并提交**（T11b = `git log` 最新一条、T12c = `42501d1`、T11a = `f308e72`、T10 = `0b04d13`）。
 **下一条是 T13**（T11b 是 2026-09-16 按用户指令刻意插在 T13 之前做的，理由与后果都在 §派发清单 T11b 行）。
@@ -753,12 +826,28 @@ Strix/
   6. read_vulnerabilities 按 id 差分 → 7. read_report_markdown 变了才推
 ```
 
-**差分与重同步**（应对 `agents.db` 重写）：维护 `_sent{event_id→fingerprint}`、`_order[]`、`_epoch`。
-`shrank`（变短）/ `reordered`（前缀不稳定）/ `mutated`（fingerprint 变而 `version` **没**递增）任一成立
-→ `_epoch += 1` 并整体 `events.snapshot`。
-`version` **递增**且 `data.status` 从 `running→completed/failed` 是**正常更新**，发 `event.update`。
-识别 `sessions.py:60-62` 那三个 elision 字面量 → 发 `compaction_notice` 而非吓人的全量重同步，
-**并继续从镜像提供那张截图**，用户不会眼前一黑。这是我们比 Strix 自带 viewer 强的地方。
+**差分与重同步**（应对 `agents.db` 重写）：维护 `_sent{event_key→fingerprint}`、`_order[]`、`_epoch`。
+判据**按顺序、命中即停**：`shrank`（变短）/ `prefix_unstable`（同位置的 key 被换掉）任一成立 →
+`_epoch += 1` 并整体 `events.snapshot`；`version` **递增**（如 `data.status` `running→completed/failed`）
+是**正常更新**，发 `event.update`、**不动 epoch**。
+
+**截图淘汰与上下文压缩是两件事**（2026-09-17 T13 读源码核实；本节原文把它们当成了一件）：
+
+1. **截图淘汰保序保长度、不该 bump epoch。** `core/sessions.py:177-199 enforce_image_budget` 的
+   `_transform` 只把靠前的 image output **原位**换成 `core/sessions.py:60-62` 那三个字面量之一，
+   `rebuilt` 与 `items` **等长同序** —— 所以它既不 `shrank` 也不 `prefix_unstable`，只表现为
+   fingerprint 变而 `version` 没变。而这件事**根本不需要重同步**：我们首见即落地了 media 镜像，
+   前端照样显示。→ 发 `screenshot_elided` notice，epoch 不动。
+2. **真正的重排是压缩。** `llm/compaction.py:389` `new_items = [_checkpoint_item(summary), *recent]`
+   —— 头部 N 条塌成 1 条 `role=user`、content 带 `llm/compaction.py:34` 的
+   `<conversation-checkpoint>`。它**同时**命中 `shrank` 与 `prefix_unstable` → 必须 `_epoch += 1`。
+   重同步时若首条事件带那个 tag，就把它当**正证据**报 `context_compacted`（人话「早期对话已被摘要
+   替代」），否则只报 `stream_resynced`。
+3. fingerprint 变、`version` 没变、又**不是**那三条字面量之一 → 这才是可疑的 `mutated`，`_epoch += 1`。
+
+把 ① 认成 ② 的代价是：每淘汰一张截图就给前端一次全量重同步 + 一句不真的「上下文已压缩」。
+这一整套（尤其把 ① 与 ② 分开）是我们比 Strix 自带 viewer 强的地方。
+**elision 识别必须排他**：只认那三条字面量，不许用"包含 `elided`"之类的模糊匹配（T13 的 I3）。
 
 **EventMirror（只追加真源）**：每个 snapshot/delta/update 写 `scan_events(scan_id, epoch, seq, ...)`；
 `data:image/...;base64` 解码一次落到 `<data>/scans/<id>/media/<sha256>.png`，事件里改写成
@@ -773,7 +862,10 @@ Strix/
 —— 复用 `tui/backend/projection.py::sanitize_terminal_text` 去 ANSI/控制字符。
 
 **WS 信封**：`{v, epoch, seq, type, ts, payload}`，`type ∈ phase|agents|event.add|event.update|
-events.snapshot|vuln.add|summary|log|report|report.progress|compaction_notice|error|done`。
+events.snapshot|vuln.add|summary|log|report|report.progress|notice|error|done`。
+`notice` 的 payload 带机器码（`screenshot_elided` / `context_compacted` / `stream_resynced`，T13 定义），
+中文文案在 `zh-CN.json`。原先那个 `compaction_notice` 类型名把"码"写进了"类型"，加第二种通知就得加
+第二个类型 —— 而 T13 一上来就有三种。
 客户端 `{"type":"hello","resume_from":{epoch,seq}}`，epoch 匹配则从镜像回放，否则给新 epoch 的全量快照。
 
 ---
@@ -852,7 +944,14 @@ allow_private/allow_loopback/max_budget_usd/forbidden_paths`。最长后缀优�
 **审计**：`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 镜像（DB 丢了也在、可 grep）。
 事件含 `allowlist.changed`/`target.rejected`/`authorization.affirmed`/`scan.launched`（**含完整 argv 与
 env 变量名，值脱敏**）/`scan.stopped`/`scan.finished`/`report.exported`/`key.registered`（仅掩码标签）/
-`key.forgotten`/`override.private_used`/`override.loopback_used`。UI 只读展示 + CSV 导出。
+`key.dropped`。**导出只有 CSV**（`GET /api/audit.csv`，审计 UI 已于 2026-09-16 砍掉）。
+
+**原先这里还列了 `override.private_used`／`override.loopback_used`，2026-09-17 用户拍板去掉**：
+放行之后 `GuardVerdict.required_opt_in` 必为空，要说出"哪个勾选被用上"就得写 `target_guard` 判定
+逻辑的第二份副本 —— 改为记进 `authorization.affirmed` 的 detail（§护栏 那条 ③ 与
+`services/audit.py` 的常量块 docstring 早已这么写，这次只是把设计段和验收 19 对齐到实现）。
+同一次拍板把 `key.forgotten` 更名为代码里实际的 `key.dropped`（**事件名是已落盘的数据**，
+改代码会让老行新行双名，grep 审计从此要查两个名字）。
 
 ---
 
@@ -1342,7 +1441,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T22 | `exporter_html.py` 打印 CSS + 报告 tab | T21 T5 | `services/exporter_html.py` `frontend/src/components/report/*` | **3** |
 | T23 | md/csv/sarif 直通导出 | T21 | `routes/reports.py` | 1 |
 | T24 | ~~专家 tab~~ → **降级成「下载原始 run 目录 zip」一个按钮**（2026-09-16 用户拍板砍范围）| T17 | `routes/reports.py`（加 `GET /api/scans/{id}/raw.zip`）| **1** —— 不再有 `components/expert/*`、不再自己维护第二份事件视图；前端只多一个按钮。**§专家模式 那节"不代理 Strix 自带 SPA"仍然有效**（那是禁区，不是范围）；砍掉的是"自己再渲染一份原始事件"。**zip 的内容安全性靠的是既有不变式**（验收 11：`grep -rI "$TEST_KEY" $DATA/` 含 run 目录与 `strix.log` 为 0），**不许为它新造一条读文件路径**：只打包 `${DATA}/scans/<id>/` 下已落盘的产物，**排除 `tmp/`** |
-| T25 | ~~审计 UI~~ 砍掉，**只留 `GET /api/audit.csv` 导出接口**（2026-09-16 用户拍板；`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 双写 T12c 已落地，日常查询用 `grep`）| T12c | `routes/audit.py` | **1** —— **验收 19 条一字不改**（六类事件齐全 + 对 CSV `grep -c "$TEST_KEY"` 为 0），砍掉的只是页面 |
+| T25 | ~~审计 UI~~ 砍掉，**只留 `GET /api/audit.csv` 导出接口**（2026-09-16 用户拍板；`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 双写 T12c 已落地，日常查询用 `grep`）| T12c | `routes/audit.py` | **1** —— 砍掉的只是页面，**验收 19 的实质不变**（六类事件齐全 + 对 CSV `grep -c "$TEST_KEY"` 为 0）。原话"验收 19 条一字不改"**已作废**：2026-09-17 收货时对出两处事件名与代码不符，用户拍板**只改验收/设计文案、不改代码**（`override.loopback_used` → 查 `authorization.affirmed` 的 detail；`key.forgotten` → `key.dropped`），理由记在验收 19 与 §护栏＋审计 那两段 |
 | T26 | ~~系统诊断页~~ → **并进首页一个可展开区块**（2026-09-16 用户拍板）| T3 T10 | `frontend/src/components/system/ReadyRows.tsx`（扩写）`frontend/messages/zh-CN.json` | **1** —— T3 已返回结构化 JSON、首页 `ReadyRows` 已接真值（`5ddede6`），本行只是给每个失败码配中文修复指引（指引文案进 `zh-CN.json`；**失败码清单以 T3／T10 的实现为权威，不许自己发明码**）。**不新建 `app/diagnostics/`** |
 | T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
 | T28 | ~~续跑（重新索要 Key）+ 并发队列~~ **v1 不做**，只留**留存清理任务**（2026-09-16 用户拍板砍范围）| T10 | `services/retention.py` | **2 —— ⚠️ 破坏性操作**（会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run 打印再删、绝不递归删 `${DATA}` 下其他任何目录；**不许碰 `${DATA}/scans/<id>/tmp`**（那是 `cleanup_scan_tmpdir()` 的地盘，T10 交回，同 T11 那条禁令）；删的是**整个** `scans/<id>/`，且只在扫描已终态之后。<br>**砍掉那两件的连带影响（别丢）**：① **验收 18 整条删除**、**验收 17 末句**（"重启后点继续扫描会预填 provider/model"）删除；② `--resume` 的三条约束（收 **run name** = `strix_runs/` 下目录名，来源 `ScanProcess.run.run_name`；必须**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒；必须显式 `-m <持久化的模式>` 且**无 `-t`**）**原样留在此处**，将来要做直接照抄；③ T10 已落进 `scans.strix_run_name` 的字段**保留、暂不使用**，不许为"砍了续跑"去删列（删列要写迁移，比留一个空列贵）；④ **没有队列** = 超过并发槽位上限直接返回 `too_many_running`（T12c 的槽位闸已经就是这个行为），不排队 |
@@ -1482,7 +1581,10 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 13. **跑到自然结束**：退出码 `2`、`exit_meaning: completed_with_findings`（juice-shop 必有发现）；
     `vulnerabilities.json` 非空；`findings.sarif` 合法 JSON；`severity_counts` 与 `scan_findings` 行数一致
 14. **压缩韧性（R3 验收）**：注入 `STRIX_MAX_CONTEXT_IMAGES=1` + `STRIX_CONTEXT_BUFFER_TOKENS=1` 重跑。
-    断言 WS 至少发出一次 `compaction_notice` 或 epoch 递增的 `events.snapshot`；`scan_events` 保留**所有** epoch；
+    **两个 env 各驱动一件不同的事，所以分开断言**（2026-09-17 随 §实时流设计 那处修正改）：
+    `STRIX_MAX_CONTEXT_IMAGES=1` → 至少一次 `notice(screenshot_elided)` 且 **epoch 不变**；
+    `STRIX_CONTEXT_BUFFER_TOKENS=1` → 至少一次 epoch 递增的 `events.snapshot` 伴随
+    `notice(context_compacted)`。`scan_events` 保留**所有** epoch；
     **截图画廊仍显示每一张截图**，尽管 `agents.db` 里已变成 `[older screenshot elided…]`
 15. **中文报告**：每条 finding 的 `title_zh/what_zh/impact_zh/fix_zh/severity_reason_zh` 均非空；
     无词表里的未翻译术语；`not_tested_zh` 非空（来自 `coverage.json`）；重复 POST → `translated_findings: 0`（命中缓存）
@@ -1493,8 +1595,15 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 18. ~~**续跑**~~ —— **2026-09-16 随 T28 砍掉续跑功能而删除**。**编号刻意保留空位、不重排**：
     6–11／19／22／25／27／28 这些编号被本文件与 `CLAUDE.md` 多处按数字引用，重排会静默改掉引用的含义。
     所以本节是 **27 条实跑 + 18 号空位**，`make verify-e2e` 的用例数是 **27**
-19. **审计**：CSV 含 `authorization.affirmed`/`scan.launched`/`override.loopback_used`/`scan.stopped`/
-    `report.exported`/`key.registered`（掩码）/`key.forgotten`；对 CSV `grep -c "$TEST_KEY"` → **0**
+19. **审计**：CSV 含 `authorization.affirmed`（**detail 里含本次被用上的 opt-in**）/`scan.launched`/
+    `scan.stopped`/`report.exported`（T23 提供）/`key.registered`（掩码）/`key.dropped`；
+    对 CSV `grep -c "$TEST_KEY"` → **0**
+    （**2026-09-17 用户拍板改了两处措辞**，T25 收货时对出来的：① 原先点的 `override.loopback_used`
+    改成"查 `authorization.affirmed` 的 detail" —— 代码里刻意不发那个事件，理由见 `services/audit.py`
+    常量块与本文件 §护栏 那条 ③：放行后 `GuardVerdict.required_opt_in` 必为空，要说出"哪个勾选被用上"
+    就得写 `target_guard` 判定逻辑的第二份副本，两份必然漂移；② `key.forgotten` 改成代码里实际的
+    `key.dropped` —— 事件名是**已经落盘的数据**（`audit_log` 行 + NDJSON 镜像 + 现有测试），
+    改代码会让老行新行两个名字并存，日后 grep 审计要永远查两个名字。**这两处只改文案、不改代码。**）
 20. **重启恢复**：扫描中 `docker compose restart api` → 标 `orphaned_running`、WS 重连并从镜像续流、
     `run.json` 到终态后正常收尾
 21. **拆除**：`docker compose down` → `docker ps -a --filter label=strix-run-type=console` 里**没有带非空 `strix-run-id` 的容器**（不是"为空"—— M0 靶场带着同一个 `strix-run-type`，它在跑的时候这条永远不可能为空，2026-09-11 T3 实测）；
