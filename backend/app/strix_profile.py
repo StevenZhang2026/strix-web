@@ -12,6 +12,9 @@ diff 对象；`profile_for()` 对未知版本直接抛，所以"有人绕过 run
 本模块只放"Strix 说什么"，**不放"我们怎么叫它"** —— `SCAN_FAILURE_CODES`（`errors.py`）、
 `SCAN_STATUSES` / `EXIT_MEANINGS` / 四个超时常量（`services/scan_supervisor.py`）都是
 我们自己的词汇，混进来就分不清哪一半是升级时要重验的。
+
+升级时**只许往 `PROFILES` 加条目，不许删旧条目**：老扫描行里存着它当时的 `strix_version`，
+删掉那份对照表就是"升级弄坏了我以前的报告"（`profile_for()` 会对它直接抛）。
 """
 
 from __future__ import annotations
@@ -37,6 +40,10 @@ class StrixProfile:
     exit_code_failed: int
     exit_code_vulnerabilities_found: int
     attribution_rules: tuple[tuple[str, str], ...]
+    image_elision_texts: tuple[str, ...]
+    compaction_checkpoint_tag: str
+    event_kinds: frozenset[str]
+    terminal_run_statuses: frozenset[str]
 
 
 # stdout 正文 → 归因码。**顺序即优先级**，来自 `scripts/m0_probe_inner.sh` 里实测通过的
@@ -101,6 +108,20 @@ _P_1_6_2 = StrixProfile(
     # 2 = 有发现（`interface/main.py:533`），**必须当成功**。
     exit_code_vulnerabilities_found=2,
     attribution_rules=_ATTRIBUTION_RULES_1_6_2,
+    # core/sessions.py:60-62 —— 上下文里的截图被淘汰时，output 会被**原位**换成这三条之一。
+    # 投影层靠它把"截图淘汰"和"事件被改写"区分开（前者不需要重同步）。
+    image_elision_texts=(
+        "[image rejected by the model]",
+        "[older screenshot elided to bound context memory]",
+        "[screenshot omitted from inherited context]",
+    ),
+    # llm/compaction.py:34 _CHECKPOINT_TAG —— 压缩后新的第一条 user turn 以它开头。
+    compaction_checkpoint_tag="<conversation-checkpoint>",
+    # interface/tui/live_view.py:396 事件 id 的前缀，只有这两种。
+    event_kinds=frozenset({"chat", "tool"}),
+    # interface/viewer/transcript.py:19 _TERMINAL_STATUSES —— **与上面 run_statuses 的 8 个
+    # 不是一回事**：这 4 个是 read_run_summary 判 `finished` 用的。
+    terminal_run_statuses=frozenset({"completed", "stopped", "failed", "interrupted"}),
 )
 
 PROFILES: Mapping[str, StrixProfile] = {"1.6.2": _P_1_6_2}

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -151,6 +151,75 @@ def make_run_dir(
     record.update(extra)
     (run_dir / "run.json").write_text(json.dumps(record), encoding="utf-8")
     return run_dir
+
+
+def make_agents_json(
+    run_dir: Path,
+    statuses: Mapping[str, str],
+    **rest: object,
+) -> Path:
+    """在 `run_dir/.state/agents.json` 写 agent 图，返回那个文件。
+
+    形状照 `live_view.hydrate_from_run_dir`（`live_view.py:103-106`）：`statuses` 是**唯一**
+    的 agent 清单（只有出现在它里面的 agent_id 才会被读事件），`names` / `parent_of` /
+    `errors` 都是可选的旁挂表，经 `**rest` 传。
+    """
+    state_dir = run_dir / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {"statuses": dict(statuses)}
+    payload.update(rest)
+    path = state_dir / "agents.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def make_agents_db(
+    run_dir: Path,
+    items: Sequence[tuple[str, Mapping[str, object]]],
+) -> Path:
+    """在 `run_dir/.state/agents.db` 建一个**真** SQLite 库，按顺序插 `(agent_id, item)`。
+
+    表结构照 openai-agents 的 `SQLiteSession._init_db_for_connection`，因为
+    `load_session_history`（`interface/tui/history.py:39`）就一句
+    `select id, session_id, message_data, created_at from agent_messages order by id`
+    —— `session_id` 就是 agent_id，`message_data` 是一条 JSON。
+
+    **刻意现场造而不提交二进制夹具**：`.db` 没法 review，而这几行 SQL 把"事件从哪来"
+    写在了测试看得见的地方。
+    """
+    state_dir = run_dir / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / "agents.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_sessions ("
+            " session_id TEXT PRIMARY KEY,"
+            " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            " updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_messages ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " session_id TEXT NOT NULL,"
+            " message_data TEXT NOT NULL,"
+            " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            " FOREIGN KEY (session_id) REFERENCES agent_sessions (session_id)"
+            " ON DELETE CASCADE)"
+        )
+        for agent_id, item in items:
+            conn.execute(
+                "INSERT OR IGNORE INTO agent_sessions (session_id) VALUES (?)",
+                (agent_id,),
+            )
+            conn.execute(
+                "INSERT INTO agent_messages (session_id, message_data) VALUES (?, ?)",
+                (agent_id, json.dumps(dict(item))),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
 
 
 @pytest.fixture
