@@ -4,19 +4,37 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 本轮（2026-09-17）：T13／T25／T26 三条已提交，**T13 的收货只做了两步半，欠 mutation 与整读**
+### 本轮（2026-09-17）：T13／T25／T26 三条已提交，**T13 的收货已于第二段会话补完结清**
 
-> **下一轮开工第一件事（唯一的欠账，别跳过）**：T13 的 §八.3 收货**没做完**。已做：
-> ① 官方闸门 `make lint` + `make test` → **985 passed / 0 skipped**（基线 838 + T13 的 138
-> + T25 的 7 + T26 的 2 = 147，对得上）。**欠**：② **主会话自己跑那 5 处 mutation**
-> （靶子表在 `/tmp/T13-prompt.md` §F；子 agent 自陈"全对"**不算证据**，§八.3）、
-> ③ **整读 1575 行产物**（`services/run_projector.py` 274 + `strix_bridge/projection.py` 139
-> + 两个测试文件 672／480 + `conftest.py` 追加的 71 行）。
-> **为什么这一步不能省**：T13 那个 agent **发生过一次 auto-compact**，压缩点之后它是"读着摘要写
-> 代码" —— 判定表顺序（B6 六行）、fingerprint 只对 `data` 取、I3 的排他性这三处要逐字核。
-> 它自报的 M2 只变红 1 条（比预期窄，它如实报了）：**判定表的顺序只被
-> `test_version_bump_beats_elision_detection` 一条测试守着**，这是已知的薄弱点，值得补一条。
-> 复跑用具它留在了 `/tmp/t13mutate.py` 与 `/tmp/t13gate.sh`（**不要直接信它的脚本**，看一眼再用）。
+> **T13 §八.3 收货三步全部做完（2026-09-17 第二段会话，主会话自己做的）**：
+> ① 官方闸门重跑 —— `make lint` 干净、`make test` **985 passed / 0 skipped**；
+> ② **5 处 mutation 全部只红该红的那几条**（主会话自己写的复跑器 `/tmp/t13_mutate_main.py`：
+> 把 `backend/app` 拷到 `/tmp/t13mut/M<n>/`、在拷贝上改一处、`:ro` 挂进测试镜像跑全量，
+> **工作区一字不改**。子 agent 留的 `/tmp/t13mutate.py` 没用）：
+>
+> | # | 改坏 | 红的条数 | 结论 |
+> |---|---|---|---|
+> | M1 | `shrank` 那一支不 bump epoch | 5 | 全是 shrank 相关（含 I1 的 `shrank`／`emptied` 参数与单调性那条）|
+> | M2 | elision 判定挪到 version 判定之前 | 1 → **补测试后 2** | 见下 |
+> | M3 | elision 改成 `"elided" in text` 模糊匹配 | 15 | 全是 I3 与截图淘汰用例 |
+> | M4 | 桥里复用同一个 `TuiLiveView` | 15 | 整个桥的测试都红（view 跨用例累积），含"不翻倍"那两条 |
+> | M5 | 桥不再用 `profile.event_kinds`、字面量硬编码 | 1 | 恰好是 profile 驱动那条 |
+>
+> **M2 的薄弱点已补掉（本轮唯一的代码改动）**：`test_i2_exactly_one_channel_reports_each_change`
+> 原来只断言"三个渠道里恰好一个报了"，所以判据表被重排时它照绿 —— 已改成
+> `test_i2_exactly_the_right_channel_reports_each_change`，`i2_mutations()` 的 12 条各自带上
+> **该由哪个渠道报**（`updated`／`notice`／`resync`）。M2 现在红 2 条。用例总数不变（仍 985）。
+> ③ **1575 行产物已整读**（两个源文件 + 两个测试文件 + `conftest.py` 那 71 行 + profile 的 4 个字段）。
+> **顺手核了 profile 那 4 个字段的出处**（它们是判定的根，而那个 agent 压缩过）：三条淘汰字面量、
+> `<conversation-checkpoint>`、`_TERMINAL_STATUSES` 四个值 **逐字对上装了 1.6.2 的镜像里的源码**；
+> `event_kinds={"chat","tool"}` 也核了 —— `live_view.py` 里 `_append_event` 的**每一处**调用点
+> 只传这两个字面量。**判定表顺序、fingerprint 只对 `data` 取、I3 排他性三处均与 §B 一致。**
+>
+> **读代码留下的两条观察（不是缺陷，别当 bug 修）**：① `project()` 在循环中途决定 `mutated`
+> 重同步时，**前面几个 key 已经攒下的 `screenshot_elided` 提示会被丢掉** —— 整份重推本来就覆盖了
+> 它们，是刻意的；② `_state_after` 每轮对**每一条**事件重算一次 `canonical_json`（`elided` 集合），
+> 与桥里算 fingerprint 的那次重复，一个 run 上万条事件时是常数倍浪费。**留给 T14 在真 tick 循环
+> 上量过再说**，现在不许为它加"把上一轮 elided 抄过来"的分支（`CLAUDE.md` §编码哲学 5）。
 
 **Docker Desktop 的"文稿"权限故障已由人解决**（2026-09-17 本轮中途；macOS TCC 丢授权 →
 仓库路径挂不进容器 → 全部官方闸门瘫掉）。归因与复现判据留在 `pitfalls/local-env.md`（未跟踪），
@@ -30,13 +48,14 @@
 | **T25** `GET /api/audit.csv` | `/tmp/T25-prompt.md` | `app/routes/audit.py`、`app/main.py`（一行 `include_router`）、`tests/test_routes_audit.py` |
 | **T26** 首页修复指引 | `/tmp/T26-prompt.md` | `components/system/ReadyRows.tsx`＋新 `.module.css`、`messages/zh-CN.json`（新 `systemStatus.fixes.*`）、`tests/test_message_coverage.py`（追加两条对称测试）|
 
-**收货三件事的完成情况（§八.3）**：① 官方闸门 **985 passed / 0 skipped**（三条一起过的）；
-② mutation = 新增不变式条数 → **T25 零处**（接线层）、**T26 零处**（纯前端）、**T13 五处欠着**；
-③ 整读 → T25／T26 **已做**，**T13 欠着**。
+**收货三件事的完成情况（§八.3）**：① 官方闸门 **985 passed / 0 skipped**；
+② mutation = 新增不变式条数 → **T25 零处**（接线层）、**T26 零处**（纯前端）、
+**T13 五处已跑完**（表在上面）；③ 整读 → 三条**全部已做**。
+**T13／T25／T26 三条全部结清（含 T26 的人眼），T18 与 T28 可以派了。**
 
-**另外两处欠账**：
-- **T26 欠"人眼看一次页面"**（前端闸门第四项）：`docker compose -p strix-console up -d api web nginx`
-  之后看首页侧栏 —— 具体看那个 `<summary>` 借 `--gate` 色在面板里是不是太抢眼。
+**欠账已清零**：**T26 的"人眼看一次页面"用户已于 2026-09-17 看过 —— `<summary>` 借 `--gate` 色
+不抢眼，通过，CSS 一行不改**（`ReadyRows.module.css:16-21` 那个取舍就地定案，别再回头调它）。
+下次要复看这块：它**只在有阻断项时才渲染**，全绿得先制造一个阻断项。
 - **T13 的粒度是错的，已记进 `pitfalls` 条 41b**：一条任务 3 条不变式／7 个文件／1575 行 →
   必然压缩。规则已同步改（`agent-rules.md` §三.2 新增"新增行数超 ~500 行必拆"＋"不变式超 1 条 =
   超 1 条任务"；§九.4 新增"快闸门必须按文件过滤，全量与 mutation 一律主会话自己跑"）。
@@ -56,9 +75,10 @@
   `ReadyRows.tsx` 的 `CHECKS` 上都还写着"T25 是 `app/audit/*`、T26 是 `app/diagnostics/*`" ——
   **两页在 2026-09-16 砍范围时就取消了**，已改成指向真实落点。
 
-**下一批可派**：T25 已提交 → **T28 解锁**（当初要等它是因为两者都改 `app/main.py`）；
-**T18 等 T13 收货补完**（它吃 T13 的 `ProjectedEvent`／`project()` 形状，先把上面那两步做了再派，
-否则形状可能还要动）。**派之前先按新的 §三.2 估行数**。
+**下一批可派**：**T28**（T25 已提交解锁，当初要等它是因为两者都改 `app/main.py`）与
+**T18**（T13 已收货结清，`ProjectedEvent`／`project()` 的形状定了）。**派之前先按新的 §三.2 估行数**
+（T28 是破坏性操作 + 至少一条"只删自己那个终态 scan 目录"的路径不变式，按新规则很可能要拆成
+"纯判定 + 执行器" 与 "接线（`main.py` 定时任务 + 审计事件 + 文案）" 两条）。
 
 **本轮已落地的三处文档修正**（T13 方案审出来的，已提交前的工作区改动）：
 ① `CLAUDE.md` §Strix 集成 的 import 边界 —— 理由从"子类才有游标 API"改成"子类才有 10k FIFO 上界与

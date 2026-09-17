@@ -485,29 +485,42 @@ def test_i1_resync_never_carries_added_or_updated() -> None:
 # --------------------------------------------------------------------------- I2：不许静默丢变化
 
 
-def i2_mutations() -> list[tuple[str, ProjectedEvent]]:
-    """一批"已推送过的 key 的内容发生了变化"，每条都必须被报出去。"""
+def i2_mutations() -> list[tuple[str, ProjectedEvent, str]]:
+    """一批"已推送过的 key 的内容发生了变化"，每条都必须被报出去。
+
+    第三项是**该由哪个渠道报** —— 判据表是有序的，"报了"和"报对了"是两件事：
+    `bump-and-elision` 必须走 `updated`（version 递增先命中），把它当淘汰就等于
+    悄悄丢掉一次真的内容更新。
+    """
     source = BASE[1]
     return [
-        ("version-bump", changed(source, data={"result": "later"}, version=2)),
-        ("version-bump-many", changed(source, data={"result": "later"}, version=9)),
-        ("elision-rejected", changed(source, data={"result": ELISION_TEXTS[0]})),
-        ("elision-elided", changed(source, data={"result": ELISION_TEXTS[1]})),
-        ("elision-inherited", changed(source, data={"result": ELISION_TEXTS[2]})),
-        ("plain-rewrite", changed(source, data={"result": "rewritten"})),
-        ("key-added", changed(source, data={"tool_name": "browser", "result": "ok", "x": 1})),
-        ("key-removed", changed(source, data={"result": "ok"})),
-        ("emptied", changed(source, data={})),
-        ("version-backwards", changed(source, data={"result": "y"}, version=0)),
-        ("fuzzy-elided-word", changed(source, data={"result": "elided"})),
-        ("bump-and-elision", changed(source, data={"result": ELISION_TEXTS[1]}, version=2)),
+        ("version-bump", changed(source, data={"result": "later"}, version=2), "updated"),
+        ("version-bump-many", changed(source, data={"result": "later"}, version=9), "updated"),
+        ("elision-rejected", changed(source, data={"result": ELISION_TEXTS[0]}), "notice"),
+        ("elision-elided", changed(source, data={"result": ELISION_TEXTS[1]}), "notice"),
+        ("elision-inherited", changed(source, data={"result": ELISION_TEXTS[2]}), "notice"),
+        ("plain-rewrite", changed(source, data={"result": "rewritten"}), "resync"),
+        (
+            "key-added",
+            changed(source, data={"tool_name": "browser", "result": "ok", "x": 1}),
+            "resync",
+        ),
+        ("key-removed", changed(source, data={"result": "ok"}), "resync"),
+        ("emptied", changed(source, data={}), "resync"),
+        ("version-backwards", changed(source, data={"result": "y"}, version=0), "resync"),
+        ("fuzzy-elided-word", changed(source, data={"result": "elided"}), "resync"),
+        (
+            "bump-and-elision",
+            changed(source, data={"result": ELISION_TEXTS[1]}, version=2),
+            "updated",
+        ),
     ]
 
 
 @pytest.mark.parametrize(
     "replacement",
-    [event for _name, event in i2_mutations()],
-    ids=[name for name, _event in i2_mutations()],
+    [event for _name, event, _channel in i2_mutations()],
+    ids=[name for name, _event, _channel in i2_mutations()],
 )
 def test_i2_every_fingerprint_change_is_reported_somehow(replacement: ProjectedEvent) -> None:
     """`updated` / `notices` / `resync` **三者必居其一**，不许"什么都不发"。
@@ -524,19 +537,27 @@ def test_i2_every_fingerprint_change_is_reported_somehow(replacement: ProjectedE
 
 
 @pytest.mark.parametrize(
-    "replacement",
-    [event for _name, event in i2_mutations()],
-    ids=[name for name, _event in i2_mutations()],
+    ("replacement", "expected"),
+    [(event, channel) for _name, event, channel in i2_mutations()],
+    ids=[name for name, _event, _channel in i2_mutations()],
 )
-def test_i2_exactly_one_channel_reports_each_change(replacement: ProjectedEvent) -> None:
-    """而且**只**由一个渠道报：同时进 `updated` 和 `resync` 会让前端重复渲染。"""
+def test_i2_exactly_the_right_channel_reports_each_change(
+    replacement: ProjectedEvent,
+    expected: str,
+) -> None:
+    """而且**只**由**该报的那一个**渠道报。
+
+    "只有一个渠道"挡的是重复渲染（同时进 `updated` 和 `resync` 会让前端插两次）；
+    "是这一个渠道"挡的是判据表被重排 —— 把 elision 判定挪到 version 判定之前，
+    `bump-and-elision` 就会从 `updated` 变成一条提示，而前端手上那份再也不会更新。
+    """
     result = project(seen(*BASE), snap(BASE[0], replacement, BASE[2]), PROFILE)
-    channels = [
-        bool(result.updated),
-        bool(result.notices) and not result.resync,
-        bool(result.resync),
-    ]
-    assert sum(channels) == 1, channels
+    channels = {
+        "updated": bool(result.updated),
+        "notice": bool(result.notices) and not result.resync,
+        "resync": bool(result.resync),
+    }
+    assert [name for name, hit in channels.items() if hit] == [expected]
 
 
 def test_i2_a_change_is_still_reported_after_a_resync() -> None:
