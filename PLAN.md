@@ -1,122 +1,70 @@
 # Strix Web 控制台 — 实施计划
 
-## 交接（2026-09-17）
+## 交接（2026-09-18）
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 本轮（2026-09-17）：T13／T25／T26 三条已提交，**T13 的收货已于第二段会话补完结清**
+### 本轮（2026-09-18）：**T14a／T14b／T28a 三条并发已提交结清**
 
-> **T13 §八.3 收货三步全部做完（2026-09-17 第二段会话，主会话自己做的）**：
-> ① 官方闸门重跑 —— `make lint` 干净、`make test` **985 passed / 0 skipped**；
-> ② **5 处 mutation 全部只红该红的那几条**（主会话自己写的复跑器 `/tmp/t13_mutate_main.py`：
-> 把 `backend/app` 拷到 `/tmp/t13mut/M<n>/`、在拷贝上改一处、`:ro` 挂进测试镜像跑全量，
-> **工作区一字不改**。子 agent 留的 `/tmp/t13mutate.py` 没用）：
->
-> | # | 改坏 | 红的条数 | 结论 |
-> |---|---|---|---|
-> | M1 | `shrank` 那一支不 bump epoch | 5 | 全是 shrank 相关（含 I1 的 `shrank`／`emptied` 参数与单调性那条）|
-> | M2 | elision 判定挪到 version 判定之前 | 1 → **补测试后 2** | 见下 |
-> | M3 | elision 改成 `"elided" in text` 模糊匹配 | 15 | 全是 I3 与截图淘汰用例 |
-> | M4 | 桥里复用同一个 `TuiLiveView` | 15 | 整个桥的测试都红（view 跨用例累积），含"不翻倍"那两条 |
-> | M5 | 桥不再用 `profile.event_kinds`、字面量硬编码 | 1 | 恰好是 profile 驱动那条 |
->
-> **M2 的薄弱点已补掉（本轮唯一的代码改动）**：`test_i2_exactly_one_channel_reports_each_change`
-> 原来只断言"三个渠道里恰好一个报了"，所以判据表被重排时它照绿 —— 已改成
-> `test_i2_exactly_the_right_channel_reports_each_change`，`i2_mutations()` 的 12 条各自带上
-> **该由哪个渠道报**（`updated`／`notice`／`resync`）。M2 现在红 2 条。用例总数不变（仍 985）。
-> ③ **1575 行产物已整读**（两个源文件 + 两个测试文件 + `conftest.py` 那 71 行 + profile 的 4 个字段）。
-> **顺手核了 profile 那 4 个字段的出处**（它们是判定的根，而那个 agent 压缩过）：三条淘汰字面量、
-> `<conversation-checkpoint>`、`_TERMINAL_STATUSES` 四个值 **逐字对上装了 1.6.2 的镜像里的源码**；
-> `event_kinds={"chat","tool"}` 也核了 —— `live_view.py` 里 `_append_event` 的**每一处**调用点
-> 只传这两个字面量。**判定表顺序、fingerprint 只对 `data` 取、I3 排他性三处均与 §B 一致。**
->
-> **读代码留下的两条观察（不是缺陷，别当 bug 修）**：① `project()` 在循环中途决定 `mutated`
-> 重同步时，**前面几个 key 已经攒下的 `screenshot_elided` 提示会被丢掉** —— 整份重推本来就覆盖了
-> 它们，是刻意的；② `_state_after` 每轮对**每一条**事件重算一次 `canonical_json`（`elided` 集合），
-> 与桥里算 fingerprint 的那次重复，一个 run 上万条事件时是常数倍浪费。**留给 T14 在真 tick 循环
-> 上量过再说**，现在不许为它加"把上一轮 elided 抄过来"的分支（`CLAUDE.md` §编码哲学 5）。
+**收货三件事全做完**（§八.3，一条自陈都没采信）：① 官方闸门 `make lint` 全绿、
+`make test` **1064 passed / 0 skipped**（基线 985，+79 = 23+28+28，逐条对得上）；
+② **6 处 mutation**（= 每条任务 2 条不变式），一个脚本一轮跑完，**6/6 全部只红该红的那几条**；
+③ 6 个产物文件整读。逐条结论在 §派发清单 T14／T28 行，本节不复述。
 
-**Docker Desktop 的"文稿"权限故障已由人解决**（2026-09-17 本轮中途；macOS TCC 丢授权 →
-仓库路径挂不进容器 → 全部官方闸门瘫掉）。归因与复现判据留在 `pitfalls/local-env.md`（未跟踪），
-**再遇到同样报错先读那一节**，不要重新排查。
+**当前闸门基线：`make lint` 干净、`make test` 1064 passed / 0 skipped。**
 
-三条的文件列**零重叠**，所以当时可以并发：
+**这一批的派发方式是成功的**（三条都 ≤300 行、都只碰 2 个文件、都 0 压缩，工具调用 20／22／37）
+—— 拆分与交底规则见 §派发方法学 第 7 条与 `agent-rules.md` §三.2，别回退。
 
-| 行 | 交底任务书（**收货判据在里面，别凭记忆收**）| 它改哪些文件 |
-|---|---|---|
-| **T13** `RunProjector` | `/tmp/T13-prompt.md`（方案原文 + 5 条已批准裁决 + 3 条不变式 + 5 处 mutation 靶子 + 交付报告格式）；源码附录 `/tmp/T13-strix-source.md`（828 行，**区间表在任务书 §D，文件自带的目录是错的**）| `app/strix_bridge/{__init__,projection}.py`、`app/services/run_projector.py`、`app/strix_profile.py`（+4 字段）、`tests/test_run_projector.py`、`tests/test_strix_bridge_projection.py`、`tests/conftest.py`（追加 `make_agents_db`／`make_agents_json`）|
-| **T25** `GET /api/audit.csv` | `/tmp/T25-prompt.md` | `app/routes/audit.py`、`app/main.py`（一行 `include_router`）、`tests/test_routes_audit.py` |
-| **T26** 首页修复指引 | `/tmp/T26-prompt.md` | `components/system/ReadyRows.tsx`＋新 `.module.css`、`messages/zh-CN.json`（新 `systemStatus.fixes.*`）、`tests/test_message_coverage.py`（追加两条对称测试）|
+### ⚠️ 待你拍板的阻断项：`scan_events.strix_id` 的类型是错的
 
-**收货三件事的完成情况（§八.3）**：① 官方闸门 **985 passed / 0 skipped**；
-② mutation = 新增不变式条数 → **T25 零处**（接线层）、**T26 零处**（纯前端）、
-**T13 五处已跑完**（表在上面）；③ 整读 → 三条**全部已做**。
-**T13／T25／T26 三条全部结清（含 T26 的人眼），T18 与 T28 可以派了。**
+`001_init.sql:202` 起的 `scan_events` 表是 `STRICT` 的，其中 `strix_id INTEGER`；
+但 T13 实际产出的 `ProjectedEvent.key` **是上游的字符串**（`strix_bridge/projection.py` 里
+`key=_text(raw.get("id"))`，形如 `"tool_12"`）—— **往那一列写字符串会在运行期直接抛**。
+表是 T2（2026-09-08）建的，T13（2026-09-17）才发现上游 id 是字符串，两边一直没对上过，
+因为**至今没有任何代码往这张表写过一行**。
 
-**欠账已清零**：**T26 的"人眼看一次页面"用户已于 2026-09-17 看过 —— `<summary>` 借 `--gate` 色
-不抢眼，通过，CSS 一行不改**（`ReadyRows.module.css:16-21` 那个取舍就地定案，别再回头调它）。
-下次要复看这块：它**只在有阻断项时才渲染**，全绿得先制造一个阻断项。
-- **T13 的粒度是错的，已记进 `pitfalls` 条 41b**：一条任务 3 条不变式／7 个文件／1575 行 →
-  必然压缩。规则已同步改（`agent-rules.md` §三.2 新增"新增行数超 ~500 行必拆"＋"不变式超 1 条 =
-  超 1 条任务"；§九.4 新增"快闸门必须按文件过滤，全量与 mutation 一律主会话自己跑"）。
-  **下次派 T14／T16 这种带不变式的任务照新规则拆。**
-- **T26 越界改了第 5 个文件**（任务书只给了 4 个）：`frontend/src/lib/api/client.ts` 的
-  `SystemStatusSummary` 加了 `readonly blockers: readonly string[]`。**已裁决：接受** ——
-  那是个后端响应的子集类型，本来就漏了这个字段（后端 `system_status.py:539` 一直在返回），
-  `strict` 下不加就只能写 `as unknown as Record<…>` 的强转，那更糟。
-- **T26 纠正了我任务书里三处错事实**（都已复核，以它为准）：① `strix_sandbox` **不是** `setup.sh`
-  建的，是 compose 的 `networks:` 段（`docker-compose.yml:289-294`，靠 `name: strix_sandbox` 去掉项目名
-  前缀）；② **首页没有镜像拉取按钮** —— T11b 只落了后端 `/ws/system` 与进度信封，**前端按钮还没人做**
-  （谁做要在派 T19／T20 时定），所以那条指引只能给 `docker pull`；③ `STRIX_TELEMETRY` 在
-  `docker-compose.yml:40` 是**硬编码字面量 `"false"`**，改 `.env` 没用，所以那条指引改成
-  "通常是容器带着旧配置 → 重建 api"。`STRIX_IMAGE` 同理是 compose 里的字面量
-  （`docker-compose.yml:36`，`ghcr.io/usestrix/strix-sandbox:1.3.0`）。
-- **主会话替它补的两处 docstring**（它被禁止碰／漏掉的）：`app/(app)/page.tsx` 与
-  `ReadyRows.tsx` 的 `CHECKS` 上都还写着"T25 是 `app/audit/*`、T26 是 `app/diagnostics/*`" ——
-  **两页在 2026-09-16 砍范围时就取消了**，已改成指向真实落点。
+- 修它要动迁移（新增 `003`，或改 `001` 那一列的类型）→ 按 §四 是**模板 3**，要先出方案给你审。
+- **应对（已做）**：把原 T14 的写库那一半（`event_mirror.py`）拆出来挂起成 **T14c**，
+  本批只派不依赖表结构的两条。`event_media.py` 刻意只吃 `Mapping`、不吃 `ProjectedEvent`，
+  所以 T14c 无论表结构怎么定都能直接复用它。
+- **本批已收完，这就是开工第一件事**（用户 2026-09-18 明确说"等这批收完再说"）。
+  **它卡着 T14c → T16 → 实时流整条**。
 
-**下一批可派**：**T28**（T25 已提交解锁，当初要等它是因为两者都改 `app/main.py`）与
-**T18**（T13 已收货结清，`ProjectedEvent`／`project()` 的形状定了）。**派之前先按新的 §三.2 估行数**
-（T28 是破坏性操作 + 至少一条"只删自己那个终态 scan 目录"的路径不变式，按新规则很可能要拆成
-"纯判定 + 执行器" 与 "接线（`main.py` 定时任务 + 审计事件 + 文案）" 两条）。
+### 这一批交回、必须带进下一棒的三件
 
-**本轮已落地的三处文档修正**（T13 方案审出来的，已提交前的工作区改动）：
-① `CLAUDE.md` §Strix 集成 的 import 边界 —— 理由从"子类才有游标 API"改成"子类才有 10k FIFO 上界与
-`event_snapshot()`"。**结论没变**（仍只许 import 那两个模块），错的是理由：`hydrate_from_run_dir` 不清
-状态、每次读都必须新建 view，实例内的游标随 view 一起丢，所以 `event_changes_since()` 永远用不上。
-② §实时流设计 把"三个 elision 字面量 → `compaction_notice`"**拆成两件事**（截图淘汰保序保长度、
-不 bump epoch；压缩才是真重排、认 `<conversation-checkpoint>` 作正证据）。
-③ 连带把 WS 信封的 `compaction_notice` 类型改成 `notice` + 机器码，验收 14 条改成分开断言两个 env。
+1. **`InvalidScanIdError` 刻意不继承 `ConsoleError`**（`retention.py:47`）—— 因为
+   `test_message_coverage.py` 的 `_backend_http_codes()` 取 `ConsoleError.__subclasses__()`
+   并要求每个码在 `zh-CN.json` 的 `errors` 里有中文文案。**接线任务若要把它暴露成 HTTP 错误，
+   必须同时补文案**，否则那条测试一旦 import 到 retention.py 就变红。
+2. **`RetentionOutcome` 契约里没有 `failed` 字段** → `_remove_dir` 的 `OSError`（如 `PermissionError`）
+   现在会**中断整轮**并向上抛。接线任务若要"单个失败不中断整轮"（`Reaper` 有 `failed`），
+   **要先改契约**，不许在执行器里偷偷吞掉。
+3. **`conftest.insert_scan` 不接受 `status`／`finished_at`**（只写 `queued`、不写 `finished_at`），
+   而留存判定读的正是这两列 → T28a 在自己的测试文件里建了本地 `seed_scan()`。
+   **第 2 个要用它的任务出现时才提取进 `conftest.py`**（§十.3，重复第三次才提取）。
 
-**T25 报回的三处事件名不一致已于 2026-09-17 拍板结案，全部"只改文案、不改代码"**（改动已落在
-验收 19、§护栏＋审计 那段、T25 行）：① `override.loopback_used` → 改成断言 `authorization.affirmed`
-的 detail 含被用上的 opt-in（发那个事件要写 `target_guard` 判定逻辑的第二份副本）；
-② `key.forgotten` → `key.dropped`（事件名是**已落盘的数据**，改代码会让老行新行双名）；
-③ `report.exported` 不是矛盾，只是还没实现 —— 它是 T23 的活，验收 19 是端到端验收，跑的时候 T23 已完成。
-**代码一行没动**，`services/audit.py` 的 10 个常量保持原样。
+### 本批之后的顺序（别乱序）
 
----
+1. **拍板 `scan_events.strix_id`** →（模板 3）**T14c** `EventMirror` 落盘＋写库
+2. **一条串行接线任务**：`ScanChannel` tick 循环 + `main.py`（`app.state` + 留存定时任务）+
+   `settings.py`（`CONSOLE_RETENTION_DAYS`）+ 审计事件 + `.env.example` + 前端 404 文案。
+   **必须串行** —— 这三样东西全挤在 `main.py` 与 `settings.py` 上。
+   ⚠️ 它要接的三样都已就位且**都只吃构造参数**：`LogTailer(path, redact, min_level=)`、
+   `RetentionSweeper(db, scans_dir, retention_days=)`、`extract_media(data, scan_id)`。
+   `LogTailer.min_level` **不该与 `LOG_LEVEL` 共用一个值**（给前端的流应更严，默认 `INFO`，
+   且永远不许调到 `DEBUG` —— `CLAUDE.md` 明写 `STRIX_DEBUG` 是泄漏面）；
+   `LogTailer` 的偏移活在实例里 → **一次扫描一个长命实例**，不许每次请求新建。
+3. **T29** 单独跑（契约断言要读整个工作区，有半成品就没意义）
+4. T18（T13 已解锁）可以插在任何位置，它与上面几条无文件重叠
 
-**代码状态**：**T0–T12c 与 T11b 已完成并提交**（T11b = `git log` 最新一条、T12c = `42501d1`、T11a = `f308e72`、T10 = `0b04d13`）。
-**下一条是 T13**（T11b 是 2026-09-16 按用户指令刻意插在 T13 之前做的，理由与后果都在 §派发清单 T11b 行）。
-T11b 的落地内容、七件钉死决定的核对、15 处 mutation（7 处存活里 5 处已补测试、2 处记为已知空白）、
-读代码抓到的那处并发缺陷与修法，**全部记在 T11b 行**；
-T11a 的落地内容、9 次 mutation、三处判断题、交给 T30／T26 的东西，**全部记在 §派发清单 的 T11a 行**；
-T10 的同理在 T10 行。本节不复述。
-**T11a 的真环境只读核对已做**（不只是单测）：本机唯一带 `strix-run-type=console` 的容器就是靶场
-`m0-juice-shop`（`run-id=None`、`Exited`），第一级命中 1 个、第二级命中 0 个、dry-run 只发出 GET
-—— 也就是"只有第一级判据的实现会删掉靶场"这件事**在真 daemon 上验过了**。重跑：
-`/tmp/reaper_verify.py`（未跟踪，护栏是把传输层包一层、非 GET 直接抛）。
-T9 的复验同理在 T9 行；升级四件待决与实录在 §Strix 版本升级 §七/§八/§九。
+### 长期有效的操作事实（每次开工都用得上）
 
-未跟踪但**不提交**的只剩 `pitfalls/local-env.md`（在 `.gitignore` 里）；`plan-t10.md` 已于 2026-09-16 删除。
-靶场 `m0-juice-shop` **刻意没删**（`CLAUDE.md` 说它已就绪、重跑 M0 要用它）。
+**Docker Desktop 的"文稿"权限故障**（2026-09-17 由人解决；macOS TCC 丢授权 → 仓库路径挂不进容器
+→ 全部官方闸门瘫掉）：归因与复现判据在 `pitfalls/local-env.md`（未跟踪），**再遇到同样报错先读那一节**。
 
-**闸门（2026-09-16 T11b 收货时亲自跑的官方闸门）**：`make lint` 干净（ruff + eslint + tsc）、
-`make test` **838 passed / 0 skipped**（T10 时 736、T12a+b 后 780、T12c 后 804）。**T13 收货的基线就是 838。**
-⚠️ **`make lint` 是 `&&` 链**：`ruff format --check` 失败会让后面的 `pytest` 根本不跑，
-而屏幕上只有一段 diff、没有红字 —— 别把"没看到 failed"当成绿。
-快闸门命令（`agent-rules.md` §九.4 要的秒级闸门，**已实测，别改**）：
+快闸门命令（`agent-rules.md` §九.4 要的秒级闸门，**已实测，别改**；给子 agent 时**必须按文件过滤**，
+末尾改成 `pytest tests/<本任务的那个文件>`）：
 
 ```
 docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/tests:ro" \
@@ -124,119 +72,73 @@ docker run --rm -v "$PWD/backend/app:/app/app:ro" -v "$PWD/backend/tests:/app/te
   strix-console/api-test:0.1.0 pytest
 ```
 
+**给子 agent 的 ruff 快闸门必须带 `--no-cache`**（2026-09-18 三个 agent 各自撞到同一处）：
+源码是 `:ro` 挂进去的，ruff 想在 `/app/.ruff_cache` 建缓存 → `Read-only file system` 直接 exit 2,
+看起来像"代码有问题"其实是闸门自己坏了。官方 `make lint` 没这个问题（它在镜像内的可写目录跑）。
+
 那个镜像里装的是**真的 `strix-agent==1.6.2`**（升级后已重建），所以核 Strix 源码不用 clone：
-`docker run --rm --entrypoint sh strix-console/api-test:0.1.0 -c 'python -c "import strix,pathlib;p=pathlib.Path(strix.__file__).parent;print((p/\"interface/cli.py\").read_text())"'`
-—— T10 方案里那四段源码就是这么读出来的，比 `/tmp/strix_src`（早没了）可靠。
 
-**⚠️ 2026-09-16 第二段会话：用户拍板砍范围 + 改测试纪律。剩余仍是 20 行**（行不删、只降级：4 行的模板
-从 3 降到 1），**但工作量与人工往返都少一大截**。
-四件事已落地，**开工前必须知道**：
-1. **砍范围**（§派发清单 对应行已改写、§里程碑 M7/M8 已改、单人估时 21→20 天）：
-   **T24** 专家 tab → 降级成 `GET /api/scans/{id}/raw.zip` 一个下载按钮（模板 3→1）；
-   **T25** 审计 UI 砍掉、只留 `GET /api/audit.csv`（3→1）；**T26** 独立诊断页砍掉、并进首页
-   `ReadyRows` 一个可展开区块（3→1）；**T28** 续跑与并发队列 v1 不做、只留留存清理。
-   **T27 DOCX 导出保留** —— 用户明确要"能导 Word"，别顺手一起砍了。
-2. **验收从 28 条变 27 条**：18 号（续跑）已删，**编号刻意留空位不重排**（6–11／19／22／25／27／28
-   被多处按数字引用）；17 号末句也删了。`CLAUDE.md` 与 `README.md` 的数字已同步。
-3. **`agent-rules.md` §十.5 TDD 改成三层**（原为无条件）：纯判定函数 + 安全不变式才 TDD；接线层
-   （路由转发／CRUD／导出格式化）事后补一条正路 + 一条错误形状；**前端不写测试、不引测试栈**
-   （闸门 = `tsc` + `eslint` + `test_message_coverage.py` + 人眼看一次页面）。
-4. **`agent-rules.md` §八.3 ② mutation 数改成"本任务新增不变式条数"**（原为固定 6 处；纯前端 0 处）。
-   T11b 那次 15 处是过量的 —— 那行真正承重的不变式只有 3 条。
-   **剩余 20 行的新增用例总量目标 250–350**（前 18 行是 838）；**T13 一行就该占 100+**，它有真不变式
-   （epoch 单调、id 重排检测、elision 识别），别把这条目标当成对 T13 的封顶。
+```
+docker run --rm --entrypoint sh strix-console/api-test:0.1.0 -c \
+  'python -c "import strix,pathlib;p=pathlib.Path(strix.__file__).parent;print((p/\"interface/cli.py\").read_text())"'
+```
 
-## 下一步：**T13**（T11b 已于 2026-09-16 收货并提交，是按用户指令刻意插在 T13 之前做的）
+未跟踪但**不提交**的只剩 `pitfalls/local-env.md`（在 `.gitignore` 里）。
+靶场 `m0-juice-shop` **刻意没删**（`CLAUDE.md` 说它已就绪、重跑 M0 要用它）。
 
-0. **T11 已按 `agent-rules.md` §九.5 拆成 T11a／T11b**（2026-09-15），两行都在 §派发清单里，
-   两行都已收货并提交。落地内容、逐条核对、mutation 表、读代码抓到的缺陷**全在那两行**，本节不复述。
-   **T11b 留给后面几行的两条约定**（这是它唯一需要在交接里出现的理由）：
+**剩余用例总量目标**：砍范围后剩 20 行，新增用例目标 250–350（前 18 行 838，现 985 —— T13 一行
+就占了 147）。这不是封顶，真有不变式的行该占多少就占多少。
+
+## 派发方法学（历次收货实测出来的，写新 prompt 前必读）
+
+> 这一节是**跨任务**的经验，不随进度变。单条任务的落地细节一律在 §派发清单 对应行。
+
+1. **T11b 留给 T14／T16 的三条约定**：
    · **`app/ws_envelope.py` 是全项目 WS 信封的定义方，T14／T16 继承它**（`Envelope` 的
    `v/epoch/seq/type/ts/payload` ＋ `Sequencer.next(epoch)` 在 epoch 变化时把 `seq` 归零）。
-   T11b 原本的前置是 T14，2026-09-16 用户指令先派 T11b，于是**倒过来** —— 定义方变成了它。
    `/ws/system` **刻意不实现 `hello`／`resume`**：进度是幂等快照，回放没意义；T14 的
    `/ws/scans/{id}` 推的是不可重建的事件序列，`resume` 是**在那里**才要造的东西。
-   · **`DockerTransport` 现在有第二个方法 `stream_ndjson`**（回调式 + 调用方 `to_thread`），
-   与 `request()` 共用 `AF_UNIX` 连接和那 6 个 `DockerApiError.reason` 的映射。再有流式 docker
-   API 要用（`/events`、`/containers/{id}/logs`）就加在它旁边，**不许新建第二个 transport**。
-   · WS 上的 cookie 鉴权 T4b 就做完了（`require_session(conn: HTTPConnection)` 覆盖 websocket
-   scope，匿名握手产真 401 + JSON body），`nginx.conf` 的四条 WS 指令与 `location /ws/` 也早已齐 ——
+   · **`DockerTransport` 有第二个方法 `stream_ndjson`**（回调式 + 调用方 `to_thread`），与 `request()`
+   共用 `AF_UNIX` 连接和那 6 个 `DockerApiError.reason` 映射。再有流式 docker API 要用
+   （`/events`、`/containers/{id}/logs`）就加在它旁边，**不许新建第二个 transport**。
+   · WS 上的 cookie 鉴权 T4b 就做完了（`require_session(conn: HTTPConnection)` 覆盖 websocket scope，
+   匿名握手产真 401 + JSON body），`nginx.conf` 的四条 WS 指令与 `location /ws/` 也早已齐 ——
    **T14／T16 都不需要再动这两处**。
-1. **T12 已按 §九.5 拆成三行**（2026-09-16；原 T12 一行的文件面跨"路由＋服务＋审计＋文案"四维、
-   交回事项 8 件、落在三个互不相同的失败模式上）。三行都在 §派发清单里：
-   **T12a** 准入判定（模板 2）、**T12b** `ScanSecretRegistry`（模板 2）、**T12c** 路由＋槽位＋落库（模板 3）。
-   · **T12a 与 T12b 无依赖、可并发派发**；并发期间主会话只做编排 —— 不碰他们的文件、不跑闸门、
-   不 commit（§九.7），那段时间只更新交接／写下一份 prompt／核对上一份报告。
-   · **文案四键**（`errors.invalid_request.params` ＋ `paramLabels` 的 `index`／`reason`／`missing_opt_in`
-   ／**`resolution_error`**）由主会话在 T12a 收货时自己补，**不派 agent**。第四个键是派发时新决定的
-   （见 T12a 行「主会话在 prompt 里定死的七件」第 2 条）。**已补，且实际多改了三处**：
-   `not_in_allowlist`／`blocked_metadata`／`split_horizon`／`dns_changed` 四条的 `params` 数组都补上了
-   `field`＋`index` —— 准入判定给这四个码发的正是 `{field,index}`，而它们原来只列了 `target`／
-   `resolved_ip` 之类**准入路径根本不发**的名字，不补的话多目标扫描被拒时卡片上一个参数都不显示、
-   操作者无从知道是哪一行。`dns_changed.detail` 也加了一句（它现在还承载"这次根本没解析出来"那一支，
-   只说重绑定对超时的用户是一句不真的话）。**`test_no_orphan_param_labels` 要求新标签必须被某条错误
-   引用**，所以 `paramLabels` 与 `params` 必须成对改。
-   · **两份 prompt 已发出**（2026-09-16，模板 2，各带完整原文摘录 + 5 处 mutation 自检要求 + 快闸门）。
-   主会话在 prompt 里替它们拍了若干设计，**全部记在 T12a／T12b 行**，收货时按那几条逐项核；
-   agent 相对契约的偏离**要求它自己在报告里列出来**（有偏离不算错，藏起来算）。
-   · **收货已完成（2026-09-16，主会话自己做的三件，§八.3）**：① 官方闸门 `make lint` 全绿（含
-   `ruff format --check`，57 文件）＋ `make test` **780 passed / 0 skipped**（T10 基线 736，本轮 +27）；
-   ② **按安全不变式 8 处 mutation，全部被杀且血溅范围逐条精确**（M1 params 塞原始输入／M2 删 DNS 比对／
-   M3 硬拦与缺勾选顺序调反／M4 缺解析结果静默当零地址／M5 删逐字确认／M6 只登记第一条口令／
-   M7 `secret_values` 不并 `base()`／M8 `main.py` 接线改回只喂 vault）。M7 额外咬到
-   `test_key_vault.py::test_lifespan_wires_the_vault_into_the_redactor` —— **这是好消息**：包一层之后
-   T8 那条老不变式（vault → 唯一 Redactor）仍然被强制，不是被新代码绕过；③ 四份交付文件与两处 diff
-   逐行读过。**T12a 报的"`test_scan_secrets.py:118` 过不了 `ruff format`"是它读到并发同伴半成品时的
-   瞬时态**，收货时不存在 —— 并发期间的跨 agent 发现要等工作区静止后再核，别直接当缺陷修。
-   · **T12c 方案已由主会话写、用户于 2026-09-16 批准，实现 agent 已派发**（模板 3；方案原文在
-   `/tmp/T12c-prompt.md`，那份文件就是派发 prompt 本身）。三件旧的拍板照旧（槽位=1 且参数化、
-   `stop(force=True)` 留、`interrupted_by_restart` 只改文案）。**方案阶段新拍的六件，收货时逐条核**：
-   ① 多目标"以上 N 个均已授权"→ **挤进 `overrides_json` 的 `multi_target_affirmed` 键，且后端强制**
-   （`len(targets)>1` 而未勾 → 422），不选"只由前端强制"；`affirmations_json` 的 `CHECK = 3` 不动；
-   ② `authorization.affirmed` 收**三个 id 串**（`owns_or_authorized`／`not_third_party_production`／
-   `understands_real_attacks`）而不是三个 bool —— 让 DB 的 `CHECK=3`、请求模型形状、"三条都勾了"
-   是同一件事；③ **`override.private_used`／`override.loopback_used` 两个事件本行不发**（偏离 §护栏
-   事件清单，已获批）：`GuardVerdict.required_opt_in` 在 `allowed=True` 时必然为空，硬发就要从
-   `addresses` 反推分类 = `target_guard` 逻辑的第二份副本；信息改由 `authorization.affirmed` 的 detail
-   逐目标记 `category` + 三个 override 标志承载；④ **`docker_unavailable` 本行不产出**（不加启动前
-   docker 探测，理由同 T3 的"启动期一次都不探"）；⑤ **新增启动步骤 6b `_reconcile_interrupted_scans`**
-   —— 残留 `starting`／`running` 行翻成 `interrupted` + `interrupted_by_restart`，这是被 `docker kill`
-   掐死时唯一的兜底，也让"一码两因"真的有两个因；⑥ `ScanOutcome` 8 个字段只有 **7 个**有列，
-   `run_status` **刻意无列**（权威是 `status` 列），它活在 `error_message` 摘要与 `scan.finished` detail 里。
-   · **T12c 收货已完成（2026-09-16，主会话自己做的三件，§八.3；逐条记录在 §派发清单 T12c 行）**：
-   ① 官方闸门 `make lint` 全绿 + `make test` **804 passed / 0 skipped**（基线 780，+24）；
-   ② mutation **11 处全部被杀、血溅范围逐条精确**，但**交付时 3 处是全绿的**（M4b 只删
-   `vault.release`／M7 删 `_mark_failed_to_start`／M8 删事务后的 `audit.mirror`）—— 收货补了三条
-   接线测试才红；③ 读代码修了四件（交付的测试里有一处竞态、拍板 ③ 的文案漏做、槽位数没进
-   compose／`.env`、`allowlist_snapshot` 与 DDL 要求不符）。**方法学结论**：闸门全绿 + 六条指定
-   mutation 全对，仍然漏了三处"接线没有任何测试"与一处会让 CI 随机变红的竞态 —— §八.3 那句
-   "没人写过的测试不会失败"第四次被实测证实，**自己设计的 mutation（不止跑清单上那几条）
-   是唯一抓到它们的手段**。
-2. **另一条路 T13**（`RunProjector`，全项目最难，后面挂 T14／T15a／T16／T21／T29 五个），模板 3、
-   方案待主会话写。**方案里必须一并裁决两件**（窗口就是"T13 动工之前"，写完再回来改要重采夹具）：
-   ① §四 追加项 #4 —— 按 `scans.strix_version` 选 profile 解析旧 run 目录 + 夹具分层
-   `fixtures/run_dirs/1.6.2/`；② profile 要不要在此补第二项（`agents.db` 关键列名，§七.2 说等 T13 补）。
-3. **每一份新 prompt 都要抄进去的四条仓库事实**（T10 那个 agent 花了 4 次调用自己发现）：
+2. **每一份新 prompt 都要抄进去的五条仓库事实**（T10 那个 agent 花了 4 次调用自己发现）：
    本仓刻意**没有** `pytest-asyncio`（用 `asyncio.run(scenario())`）、共享夹具的 import 形式是
-   `from tests.conftest import`、`zh-CN.json` 的 `scanFailures` 布局、`Settings` 的字段名。
-   **第五条（2026-09-16 T12b 实测加的）：把测试要断言的那些类型的字段名／构造参数一起贴上**
-   （`ScanOutcome` 的 8 个字段、`CredentialSet` 的构造参数、`TestCredential` 的三个字段…）。
-   判据是 §九.1 的一个新变种：**只给生产代码的摘录、不给它要断言的那个类型的字段名，agent 必然
-   去读原文** —— T12b 为这一件事花了 3 次调用，正好就是它超出 prompt 预算的那 4 次里的 3 次。
-   顺带一条：`tests/conftest.py` 里**哪些夹具可以被别的测试文件请求**也要说（它为此也查了一次）。
-   **T11a 复盘又加四段必须直接贴原文的**（它写代码前探路 11 次，其中 4 次是我出处没给够）：
-   `key_vault.run_sweeper()` 的 cancel+await 先例、`conftest.py` 的**全貌**（只贴 `settings` 夹具不够）、
-   `test_scan_supervisor.py` 里 `/bin/sh -c` 当假 strix 那段写法、以及**改动点周边的既有测试**。
-   另外三次是它违反了 prompt 明令（我贴过原文、且写了"禁止再读原文/不许读第二遍"，它照读）——
-   **结论：那两条禁令基本无效，只有"把内容贴够"有效**（`agent-rules.md` §九.1 的"实测都会发生"第三次复现）。
-4. **收货清单第一条（T10 立、T11a 验证有效）**：**每一处"接线"都必须有一条会因为删掉那次调用而
-   变红的测试**，并且**在 prompt 里要求它自己先删一次、跑一遍、把红的测试名贴进报告**。
-   T7b 的 `params`、T9 的 `_PINNED_ENV`、T10 的两次 `main.py` 调用都是"声明了、接线了、没有任何
-   一处强制"，全靠 mutation 才抓到；**T11a 是第一次三处接线全部真的会红**（9/9 mutation 验证）。
-   配套的一条：**"停机顺序"类断言不要断言状态，要断言顺序** —— `asyncio.run` 收尾本来就会 cancel
-   剩余任务，所以"cancelled 为真"恒成立、那条测试是空的（T11a 第一版就栽在这里）。
+   `from tests.conftest import`、`zh-CN.json` 的 `scanFailures` 布局、`Settings` 的字段名，
+   以及 **把测试要断言的那些类型的字段名／构造参数一起贴上**（`ScanOutcome` 的 8 个字段、
+   `CredentialSet` 的构造参数…）。判据是 §九.1 的变种：**只给生产代码的摘录、不给它要断言的那个
+   类型的字段名，agent 必然去读原文** —— T12b 为这一件事花掉 3 次调用。
+   顺带：`tests/conftest.py` 里**哪些夹具可以被别的测试文件请求**也要说。
+   **T11a 复盘再加四段必须直接贴原文的**：`key_vault.run_sweeper()` 的 cancel+await 先例、
+   `conftest.py` 的**全貌**（只贴 `settings` 夹具不够）、`test_scan_supervisor.py` 里 `/bin/sh -c`
+   当假 strix 那段写法、**改动点周边的既有测试**。
+3. **"禁止再读原文"这类禁令基本无效**（三次复现），只有"把内容贴够"有效。所以交底文件里
+   **只出现它要写的那几个文件的真路径**，摘录一律只标附录行号（§九.1）。
+4. **每一处"接线"都必须有一条会因为删掉那次调用而变红的测试**（T10 立、T11a 验证有效），
+   并在 prompt 里要求它自己先删一次、跑一遍、把红的测试名贴进报告。T7b 的 `params`、T9 的
+   `_PINNED_ENV`、T10 的两次 `main.py` 调用都是"声明了、接线了、没有任何一处强制"。
+   配套：**"停机顺序"类断言不要断言状态，要断言顺序** —— `asyncio.run` 收尾本来就会 cancel
+   剩余任务，所以"cancelled 为真"恒成立、那条测试是空的（T11a 第一版栽在这里）。
+5. **方法学结论（T12c 实测，四次复现）**：闸门全绿 + 清单上那几条 mutation 全对，仍然漏了三处
+   "接线没有任何测试"与一处会让 CI 随机变红的竞态。**自己设计的 mutation（不止跑清单上那几条）
+   是唯一抓到它们的手段**；"没人写过的测试不会失败"（§八.3）。
+6. **并发期间的跨 agent 发现要等工作区静止后再核**，别直接当缺陷修 —— T12a 报的
+   "`test_scan_secrets.py:118` 过不了 `ruff format`"是它读到并发同伴半成品时的瞬时态。
+7. **粒度**：T13 一条任务 3 条不变式／7 个文件／1575 行 → 必然压缩（`pitfalls` 条 41b）。
+   规则已同步进 `agent-rules.md` §三.2（新增行数超 ~500 必拆、不变式超 1 条 = 超 1 条任务）
+   与 §九.4（快闸门必须按文件过滤，全量与 mutation 一律主会话自己跑）。
+   **2026-09-18 反向验证成立**：T14a／T14b／T28a 三条并发，各 2 个文件／2 条不变式／
+   374–511 行，**三条全部 0 压缩**（工具调用 20／22／37）。**这个形状是模板，别回退。**
+8. **mutation 至少要有一处靶子是自己想的**（2026-09-18 又一次验证）：本轮 6 处里 4 处照子 agent
+   的清单、2 处我自选（`rfind`→`find`、`_delete_detail_rows` 顺手删 `scans` 行），**两处自选都被
+   现有测试抓住了** —— 这才叫"清单之外也有覆盖"。顺带发现**子 agent 的 mutation 预测会算错血溅
+   范围**（T14b 报告说红 8、实测红 6：`in_unparsed_line` 那两格对"只脱 msg"没有区分力，因为
+   未解析行的整行原文本来就进了 `msg`）。→ **预测数字一律要自己跑一遍才算数**，它连自己写的
+   测试都会数错。
 
-**仍待你拍板的一件旧事**（与 T10 无关，不阻塞任何派发）：`--workspace-file` 在 1.6.2 里存在了，
+**仍待你拍板的一件旧事**（不阻塞任何派发）：`--workspace-file` 在 1.6.2 里存在了，
 T9 行 ③「spec 上传 v1 不做」的**理由**作废，结论要不要跟着变是产品决策。
 **顺带定过的一件小事**（§Strix 版本升级 §八 副产品 ②）：1.6.2 新增的 `EXA_API_KEY` /
 `STRIX_WEB_SEARCH_PROVIDER` / 两个 `STRIX_EXA_*` **都不加进 `_PINNED_ENV`／`_PASSTHROUGH_ENV`** ——
@@ -876,8 +778,18 @@ Strix/
 **自适应轮询**：running 且近 3 tick 有变化 → 250ms；空闲 ×2 退避到 2s 上限；
 `read_run_summary(...)["finished"]` 为真且子进程已退出 → 停。
 
-**日志**：按字节偏移续读 `strix.log`，按 `telemetry/logging.py:47` 的格式解析成
-`{ts, level, agent_id, logger, msg}`；`--resume` 是 append 模式所以偏移跨续跑仍有效；默认只推 `INFO+`。
+**日志**：按字节偏移续读 `strix.log`，按 `telemetry/logging.py:45-46` 的格式解析成
+`{ts, level, scan_id, agent_id, logger, msg}`（**五个字段，2026-09-18 从装了 1.6.2 的测试镜像里
+逐字核过；原来写的 `:47` 与四字段列表都是错的**）：
+
+```
+_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-7s %(scan_id)s %(agent_id)s %(name)s: %(message)s"
+_DATEFMT = "%Y-%m-%d %H:%M:%S"
+```
+
+`levelname` 是 `-7s` **左对齐补空格**（级别后空格数不固定）；`scan_id`／`agent_id` 未设时
+`_StrixContextFilter` 渲染成字面量 `-`（要解析成 `None`）；消息正文里可能含 `": "`，别用第一个冒号切。
+`--resume` 是 append 模式所以偏移跨续跑仍有效；默认只推 `INFO+`。
 **用户看到的"终端"其实不是 `strix.log`**，而是 `tool_name == exec_command` 事件的 `args.command` / `result`
 —— 复用 `tui/backend/projection.py::sanitize_terminal_text` 去 ANSI/控制字符。
 
@@ -1449,7 +1361,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T12b | **`ScanSecretRegistry`**：把 `spec.test_credentials` 的值注册进 Redactor 的精确子串集合（泄漏矩阵 **#17 结案**）| T9 | `services/scan_secrets.py` `tests/test_scan_secrets.py` | **2** ✅ 2026-09-16（由 T12 拆出）—— **T10 交回 ②**：注册**每一个值**（口令与 Key 走同一个精确子串通道；§N1 那条"一个 handle 可能装 2–3 个值"同理）、扫描终态时注销；并给 `scan_supervisor` 那行带 `stdout_tail` 的 warning 补一条"那行日志真的被脱敏了"的测试 —— 现在**没有**测试钉住它（泄漏矩阵第 17 行就是这个洞）。**脱敏点只有一处**是本项目的设计，别在这里挂第二个 Redactor 副本。<br>**主会话在 prompt 里定死的五件（2026-09-16 派发时决定；收货逐项核）**：① **只登记 `password`，不登记 `role`／`username`** —— 它们不是秘密，而报告里要说"用这个账号登录时发现了…"，把账号名塞进脱敏集合是可读性损失换零安全收益；但要登记**每一条** `TestCredential` 的口令，不是只第一条；② **组合发生在构造处**：`ScanSecretRegistry(base: SecretProvider)` 包住 `key_vault.secret_values`，对外只暴露**一个** provider 交给唯一的 `Redactor`。刻意不在 `main.py` 写 `lambda: a() | b()` —— 那样"两个来源"这件事就没有可单测的落点（`logging_setup` 一行不改）；③ **`secret_values()` 必须先 `tuple(...)` 取快照再遍历**（provider 在工作线程里被调，`register`/`forget` 在事件循环线程；否则 `RuntimeError: dictionary changed size` 会被 `Handler.handleError` 吞掉 → **那一行日志整条消失**）。判据是 `key_vault.secret_values()` 的 docstring，它对同一件事已经这么做了；④ **`MIN_SECRET_LENGTH` 不许动、不许在这里再加一层长度校验**；短口令（<8）不被脱敏是**已知且接受**的事实，要求有一条测试把它**明写**下来，免得下一个人以为是漏了。请求体该不该拒短口令是 T12c 的请求模型的事；⑤ 那条 `stdout_tail` 测试**必须同时断言 JSON 行里有 `stdout_tail` 字段**（证明那行 warning 真的发生了）+ 值里含 `[REDACTED]` 且不含口令原文 —— 只断言"口令不在输出里"的话，warning 根本没打出来时它会照样通过（pitfalls 条 23：「检查都通过」≠「被检查的事真发生了」）。<br>**接线归 T12c**：`register()`（扫描启动）／`forget()`（终态）在本行交付时**没有生产调用方**；接线之前口令会一直留在脱敏集合里<br>**✅ 2026-09-16 收货**：`services/scan_secrets.py` 79 行 + `tests/test_scan_secrets.py` **9 个用例** + `main.py` 只动 lifespan 那 3 行（diff 逐行核过，`logging_setup.py` 一行没改）。上面五件**逐项核过、全部落地**。**收货时主会话补了一行文档**：`main.py` 模块 docstring 的启动顺序表第 2d 步原来只写 `KeyVault()`，现已写成 `KeyVault() + ScanSecretRegistry()` 并说明"包住"—— 那张表是"启动顺序是设计的一部分"的唯一记录处，落后一个组件就等于骗下一个读它的人。**一个已知的测试空白（agent 如实报的，主会话确认）**：把 `secret_values()` 里那次 `tuple(...)` 快照删掉，**没有任何测试变红**。它防的是"事件循环线程 register／forget vs 工作线程 redact"的竞态，确定性地测它要么往生产代码插同步点、要么靠概率性压测，两者都比它防的问题更糟。**`key_vault.secret_values()` 有完全相同的空白**（同一条判据、同样没测），所以这是一条**跨两个模块的已知缺口**，不是本行的疏漏 —— 谁哪天动这两处任一，判据在各自的 docstring 里，别当防御性写法删掉。预算：34 次调用（prompt 给的是 ≤30，**超 4 次**）、第 8 次开始写代码、无压缩 —— §九.6 的三条门槛都没破，但**超支原因值得抄进下一份 prompt**：prompt 贴了 `scan_supervisor` 那行 warning 的原文，却没贴**被断言的那个 dataclass 的字段名**（`ScanOutcome`）、`CredentialSet` 的构造参数、以及"`restore_logging` 能不能被别的测试文件请求"，这三样是写测试的必需品，agent 为它们花了 3 次调用（§九.1「只给文件名而不给摘录，它必然整读」的一个新变种：**只给生产代码的摘录而不给它要断言的那个类型的字段名，它必然去读**）|
 | T12c | `POST /api/scans`：并发槽位 + `ScanSupervisor.start()` 调用方 + 状态与 `ScanOutcome` 落库 + 审计 + 停止端点 | T12a T12b | `routes/scans.py` `main.py` `tests/test_routes_scans.py` | **3**（2026-09-16 由 T12 拆出；方案由主会话写，`agent-rules.md` §四 模板 3）—— **三条 2026-09-16 用户拍板**：① **并发槽位 = 1**，且**槽位数参数化进 `.env`、默认 1**，不许写成结构性单例（沙箱四个限额是按本机 VM `11 核 / 7.75 GB` 算出来的，两个并发扫描互相饿死；"一进程一次扫描"约束的是 strix 库、不是我们，>1 技术可行只是这台机器扛不住）；② **`ScanProcess.stop(force=True)` 留**，做成"再点一次立即强杀"（T10 已写好，删了 T26 诊断页就没有兜底手段）；③ **`interrupted_by_restart` 保持一码两因、只改文案**，v1 不拆第二个码（将来要拆，判据是 `stopped_by == "shutdown"` 而非 `run_status`）。<br>**T10 交回的其余三件**：① **把 supervisor 接进路由** —— `app.state.supervisor` 已在 lifespan 里建好、停机 `shutdown()` 已接，本行要做的是 `start()` 的调用方、并发闸、以及 `ScanProcess.wait()` 回来后**把 `ScanOutcome` 的 8 个字段落进 `scans` 行 + 写审计**（T10 只算出它，刻意不落库）；② `starting`／`running` 两个状态值 T10 永不返回，**它们的写入点在这里**；③ `scans.strix_run_name` 由 `RunDiscovery` 抢到后放在 `ScanProcess.run`，**落库也在这里**。<br>**把 T12a 的「码 + `params`」透出成 HTTP status**（422／403／409，映射判据在 T12a 行），本行**不新增错误码**。<br>**T12a／T12b 派发时交回本行的四件（2026-09-16）**：① `scan_admission.audit_for()` 与 `ScanSecretRegistry.register()`／`forget()` 三个函数在那两行交付时**都没有生产调用方**，接线全在这里 —— 按收货清单第一条，**每一处接线都要有一条会因为删掉那次调用而变红的测试**；② 多目标的"以上 N 个均已授权"**没有存储列**（`affirmations_json` 被 CHECK 钉死 = 3），本行要拍：v1 只由前端强制、还是挤进 `overrides_json`；③ 逐字确认串的期望值是**第一个目标的 host**，请求模型的 `targets[]` 顺序因此是有语义的，不许在路由层排序或去重后重排；④ `resolutions` 缺键与"`allowed` 为假而两个原因都空"在 T12a 里都是 `ValueError`（→500），本行调它之前必须自己先把每个主机名解析一遍并填齐 mapping<br>**✅ 2026-09-16 收货（主会话自己做的三件，§八.3；含修复，修完全部复验）**：交付物 `routes/scans.py` 854 行 + `routes/_context.py` 50 行（取 `app.state` 的三个小函数，从 `routes/allowlist.py`／`keys.py` 抽出来共用）+ `tests/test_routes_scans.py` **23 个用例** + `test_audit.py` 补 1 条（双写真的落两处）+ `services/audit.py` 拆成 `prepare()`／`insert(conn, prepared)`／`mirror(prepared)`（**ndjson 镜像只在事务提交之后写**）+ `main.py` 启动步 6b 与停机 drain + `errors.py`／`zh-CN.json`。上面方案阶段那六件、三件旧拍板、T10／T12a／T12b 交回的七件**逐条核过、全部落地**（多目标那件选了"挤进 `overrides_json` 的 `multi_target_affirmed` 且后端强制"）。<br>**① 官方闸门**：`make lint` 全绿（ruff check／format 60 个文件、eslint、tsc），`make test` **804 passed / 0 skipped**（基线 780，**+24**）。<br>**② mutation 11 处，全部被杀且血溅范围逐条精确 —— 但交付时有 3 处是全绿的**：**M4b**（`finally` 里只删 `vault.release`、`forget` 留着）、**M7**（删起进程失败时的 `_mark_failed_to_start`）、**M8**（删事务提交后的 `audit.mirror`）。收货补的三条接线测试：`test_credentials_are_forgotten_when_the_scan_ends` 改成注入 `FakeClock` 的 vault，扫描跑完后**推进 idle TTL 再断言 `get(handle) is None`** —— `get()` 不反映 `ref_count`，"`release()` 真的发生过"唯一可观测的后果就是空闲 TTL 重新起算；新增 `test_a_failure_to_spawn_marks_the_row_failed`，用上了交付时**没有调用方**的 `FakeSupervisor.start_error` 钩子（`pytest.raises(OSError)` 拿得到原异常：Starlette 的 `ServerErrorMiddleware` 出完 500 正文还会重抛）；`test_launch_writes_authorization_scan_and_audit` 补 ndjson 镜像断言（两条事件名按序 + `scan_id` 一致）。另补的 M9／M10 也各红一条。<br>**③ 读代码修了四件**：(a) `test_status_walks_starting_running_terminal` 拿"终态状态"当审计写入信号，而 `mark_finished` 先提交、`audit.record` 后走 —— **实测 13 次里红 2 次**，还让 M1 的血溅范围虚报成 3 条；改成先等 `audit_log` 里出现 `scan.finished` 行，改后**连跑 6 次全绿**、M1 收敛成该红的那 2 条。**竞态在测试侧也是缺陷，交付报告里的"全绿"只代表那一次**；(b) 拍板 ③ "只改文案"那件**漏做了**：`zh-CN.json` 的 `interrupted_by_restart` 补上"控制台重启，或者它的进程被强制终止（docker kill、掐电、机器重启）"，一码两因这件事现在文案里也说了；(c) 槽位数只读 `Settings`，**没进 `docker-compose.yml` 也没进 `.env`** —— "参数化"只做了一半（用户拍板"compose 补一行 + `setup.sh` 写进 `.env`"）：`x-console-env` 加 `CONSOLE_MAX_CONCURRENT_SCANS: "${CONSOLE_MAX_CONCURRENT_SCANS:-1}"`，`setup.sh` 加 C18b（纯数字 + ≥1 校验，取值优先级照 `CONSOLE_WEB_PORT`：env > 已有 `.env` > 默认 1）并写进生成的 `.env`；`docker compose -p strix-console config -q` 通过、渲染出 `"1"`，`bash -n setup.sh` 通过；(d) `allowlist_snapshot` 只存了逐目标结论，而 `001_init.sql:64` 要的是"当时该条目的完整快照"（用户拍板"存完整条目"）：按 `decision.entry_label` 反查存整条 `model_dump(mode="json")` —— 反查是**一次 dict 取值、不是第二份匹配逻辑**（`AllowlistConfig._labels_are_unique` 保证标签唯一）。这一处踩了一次：`_store(request).current` 返回的是 `AllowlistSnapshot` **不是** `AllowlistConfig`，第一版改完 11 条红。<br>**两处结构性收紧（读代码时决定的，不在交付里）**：① `try:` 上移到 `acquire()` 之后第一行，把 `TestCredential` 构造与 `scan_secrets.register()` 也圈进去 —— 否则这两行任一抛异常，那份凭据的 `ref_count` 就一直挂着直到 24h 硬 TTL；② `launched = True` 下移到 `create_task(_run_to_completion(...))` 紧前一行，也就是所有权交接的那一刻 —— 早置一行就意味着某次抛异常时 `finally` 会去 `forget()` 一个**正在跑**的扫描的口令，那是泄漏面而不是清理。<br>**一处提取（§十.3 的"第三次"）**：`FakeClock` 从 `test_key_vault.py`／`test_auth.py` 两份副本提到 `tests/conftest.py`，本行新测试是第三个用户。<br>**方法学结论（同一件事第四次被实测）**：闸门全绿 + 清单上六条 mutation 全对，仍然漏了**三处"接线一条测试都没有"** + 一处会让 CI 随机变红的竞态。抓到它们的唯一手段是**自己补设计 mutation**（M4b／M7／M8 都不在清单上），而 M4b 还给出了一条新判据：M4 删 `forget+release` 会红、只删 `release` 就不红 —— **粗粒度 mutation 会把细粒度的空白掩掉，以后按"每一次调用"设计 mutation，不是按"每个 `finally` 块"**。<br>**验收脚本本身的坑（已记进 `pitfalls` 触发条件 35 一带）**：测试镜像的 addopts 里已有 `-q`，再传一个就成 `-qq`，pytest **不再打那行汇总计数** —— 之前每次 mutation 都报"没拿到汇总行"就是这个原因，循环里必须同时打退出码与计数行。<br>**派发预算复算（2026-09-16，`scripts/agent_budget.sh`）**：这一条任务**填满了三个上下文窗口、压缩 4 次**（交底 1／实现 1／收货 2），而子 agent 只占总花费的三成 —— **粒度不是问题，交底与收货的方式是**（它要 16 个模块的签名才能动手，按层再拆每一半仍要那 16 个）。三条已落成规则：交底不许整读源码（§九.1）、收货整读产物别拼 `sed` 片段（§八.3）、单文件别用几十次小 Edit 堆（§十.6）；根因与量具见 `pitfalls` 条 41 |
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3** —— **T14／T15／T16／T21／T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界 |
-| T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 |
+| T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 —— **2026-09-18 按 §三.2 拆成三条**：**T14a** = 纯函数 `services/event_media.py`（抽 data URL、算 `sha256`、改写成 `/api/scans/{id}/media/<sha256>.png`，**不写库不落盘**，任务书 `/tmp/T14a-prompt.md`）；**T14b** = `services/log_tailer.py`（任务书 `/tmp/T14b-prompt.md`）；**T14c**（未派）= `services/event_mirror.py` 落盘＋写 `scan_events`／`scan_media`，**被 `scan_events.strix_id` 的表结构缺陷卡住，见 §交接**。`ScanChannel` 与 `main.py` 接线归到 T14a/b/T28a 之后的那条串行接线任务。<br>**✅ 2026-09-18 T14a 收货（主会话三件事全做，一条自陈都没采信）**：`services/event_media.py` **151** 行 + `tests/test_event_media.py` **223** 行，新增 **28** 条用例。**2 处 mutation 只红该红的**：递归改成只看顶层 → 红 9（4 个嵌套形状 + 双图 + `non_png` 4）；`sha256` 改成对 base64 原文取 → 红 18（恰好是"有 PNG 被成功抽出"那 18 条，`undecodable` 6 与 `non_png` 4 不红）。<br>**整读之后认下的三处**：① **空／只有空白／只有 padding 的 base64 判 `undecodable_base64`、不产 0 字节图**（任务书没规定，子 agent 自己定的，我认可 —— 否则 T14c 会往 `media/e3b0c442….png` 写一个空文件）；② **正则的 base64 续行只认换行、不认一般空白** —— 收进一般空白**已实测出 bug**：`"a <urlA> b <urlB> c"` 里第一个匹配会吃掉 `= b data`（`b`／`data` 全在 base64 字母表内），于是两张图一张都抽不出来还误报 `undecodable_base64`。理由已写进 `_DATA_URL_RE` 上方，**别去"简化"它**；③ ⚠️ **"序列化后零命中 `data:image`"只对全 PNG 且 base64 合法的 payload 成立** —— `data:image/jpeg;base64,…` 这个字面串本身就含 `data:image`，而契约要求非 PNG **原样保留**。**不许把它当全局后置条件**，否则会照字面"修"出一个把 jpeg 也删掉的实现。<br>**已知不做（都不是缺陷）**：`media_url()` 不提取（只一个调用点；测试里刻意写死那个形状、**不从生产代码 import**，否则改坏 URL 测试会跟着一起改 —— 等 T14c 的 `GET /api/scans/{id}/media/{sha}.png` 出现是第 3 个用处再提取）；递归无深度上限（payload 来自 Strix 自己 `json.dump`，受 json 递归限制约束；要兜 `RecursionError` 就兜在 T14c 的调用点）；单事件抽出的总字节数无上限（护栏放在写库那一半，只有它知道磁盘配额）；只下钻 `Mapping`／`list`（JSON 反序列化产不出 tuple／set）。<br>**✅ 2026-09-18 T14b 收货**：`services/log_tailer.py` **155** 行 + `tests/test_log_tailer.py` **266** 行，新增 **23** 条。**脱敏的落法是「整行原文先过一次 `redact`、再解析」**，这是设计要求不是实现细节：反过来（先解析、只脱几个字段）就要求我们枚举"哪些字段可能含凭据"，而 `strix.log` 里连 logger 名和 `agent_id` 都是 Strix 那边填的字符串。`[REDACTED]` 不含空格，所以整行替换不打乱格式。<br>**2 处 mutation**：① 改成"先解析、只脱 `msg`" → 红 **6**（`in_logger_name`／`in_agent_id`／`in_scan_id` × 两种凭据）。⚠️ **`in_unparsed_line` 那两个用例对这个 mutation 没有区分力** —— 未解析行的整行原文本来就进了 `msg`，所以"只脱 msg"照样把它脱干净了（子 agent 报告里列举的"红 8"是错的，实测 6；它文字里的 6 是对的）；② **`rfind(b"\n")` → `find`**（**我自选的靶子，不在它清单上**）→ 红 4（`append_returns_only_the_new_lines`、`shrunken_file_is_re_read_from_zero`、`min_level[debug]`／`[info]`）。<br>**已知不做**：`__init__` 对非法 `min_level` 抛 `ValueError`（3 行，防"配置拼错导致整条流静默为空"）**刻意没有专门测试** —— 一条编程错误不值一格；偏移不持久化（接线约束见 §交接）。 |
 | T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自** —— 要真凭据、真扫描，派发规则第 3 条禁止把 Key 给子 agent，**结构上不可派发** |
 | T15b | 重同步测试（吃 T15a 的夹具）| T15a | `tests/test_projector_resync.py` | 2 |
 | T16 | WS + SSE 路由、重连回放 | T14 | `routes/stream.py` | 2 |
@@ -1464,7 +1376,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T25 | ~~审计 UI~~ 砍掉，**只留 `GET /api/audit.csv` 导出接口**（2026-09-16 用户拍板；`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 双写 T12c 已落地，日常查询用 `grep`）| T12c | `routes/audit.py` | **1** —— 砍掉的只是页面，**验收 19 的实质不变**（六类事件齐全 + 对 CSV `grep -c "$TEST_KEY"` 为 0）。原话"验收 19 条一字不改"**已作废**：2026-09-17 收货时对出两处事件名与代码不符，用户拍板**只改验收/设计文案、不改代码**（`override.loopback_used` → 查 `authorization.affirmed` 的 detail；`key.forgotten` → `key.dropped`），理由记在验收 19 与 §护栏＋审计 那两段 |
 | T26 | ~~系统诊断页~~ → **并进首页一个可展开区块**（2026-09-16 用户拍板）| T3 T10 | `frontend/src/components/system/ReadyRows.tsx`（扩写）`frontend/messages/zh-CN.json` | **1** —— T3 已返回结构化 JSON、首页 `ReadyRows` 已接真值（`5ddede6`），本行只是给每个失败码配中文修复指引（指引文案进 `zh-CN.json`；**失败码清单以 T3／T10 的实现为权威，不许自己发明码**）。**不新建 `app/diagnostics/`** |
 | T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
-| T28 | ~~续跑（重新索要 Key）+ 并发队列~~ **v1 不做**，只留**留存清理任务**（2026-09-16 用户拍板砍范围）| T10 | `services/retention.py` | **2 —— ⚠️ 破坏性操作**（会删用户的扫描产物）。prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run 打印再删、绝不递归删 `${DATA}` 下其他任何目录；**不许碰 `${DATA}/scans/<id>/tmp`**（那是 `cleanup_scan_tmpdir()` 的地盘，T10 交回，同 T11 那条禁令）；删的是**整个** `scans/<id>/`，且只在扫描已终态之后。<br>**砍掉那两件的连带影响（别丢）**：① **验收 18 整条删除**、**验收 17 末句**（"重启后点继续扫描会预填 provider/model"）删除；② `--resume` 的三条约束（收 **run name** = `strix_runs/` 下目录名，来源 `ScanProcess.run.run_name`；必须**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒；必须显式 `-m <持久化的模式>` 且**无 `-t`**）**原样留在此处**，将来要做直接照抄；③ T10 已落进 `scans.strix_run_name` 的字段**保留、暂不使用**，不许为"砍了续跑"去删列（删列要写迁移，比留一个空列贵）；④ **没有队列** = 超过并发槽位上限直接返回 `too_many_running`（T12c 的槽位闸已经就是这个行为），不排队 |
+| T28 | ~~续跑（重新索要 Key）+ 并发队列~~ **v1 不做**，只留**留存清理任务**（2026-09-16 用户拍板砍范围）| T10 | `services/retention.py` | **2 —— ⚠️ 破坏性操作**（会删用户的扫描产物）。**2026-09-18 拆成 T28a（判定 + 执行器，任务书 `/tmp/T28a-prompt.md`）与接线（`settings.py` 加 `CONSOLE_RETENTION_DAYS`、`main.py` 定时任务、审计事件、`.env.example`、前端 404 文案）两条。**<br>**留存策略已由用户 2026-09-18 拍板（属"已确认决策"，改要先问）**：① **删的范围** = 整个 `${DATA}/scans/<id>/` 目录 + **4 张表**（`scan_events`／`scan_media`／`scan_agents`／`scan_findings`）里该 scan 的行；**保留 `scans` 那一行**（历史列表仍看得到摘要/结论计数/成本）；**保留** `authorizations`／`audit_log`／`${DATA}/audit/*.ndjson`；**表结构不改**（无新列无新迁移），前端拿不到产物时按 404 显示"产物已按留存策略清理"。⚠️ **`report_translations` 也该删，但那张表 `001_init.sql` 里不存在**（T21 的 `002` 才建）→ **T21 落地时必须把它加进清理清单**，否则译文会活过它的原文。② **默认关闭**：`CONSOLE_RETENTION_DAYS` 默认 `0` = 永不自动删，用户在 `.env` 显式写 `30` 才生效（理由：这是渗透测试证据，默认销毁是不可逆的坏默认）。开启后 api 启动跑一次 + 每 24h 一次；每次先 INFO 打印将删清单 → 再删 → 写审计事件。③ 目录里仍有 `tmp/` → **整条跳过**并记 `tmp_dir_present`（说明 supervisor 清理没跑完或 scan 其实还活着）。<br>prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run 打印再删、绝不递归删 `${DATA}` 下其他任何目录；**不许碰 `${DATA}/scans/<id>/tmp`**（那是 `cleanup_scan_tmpdir()` 的地盘，T10 交回，同 T11 那条禁令）；删的是**整个** `scans/<id>/`，且只在扫描已终态之后。<br>**砍掉那两件的连带影响（别丢）**：① **验收 18 整条删除**、**验收 17 末句**（"重启后点继续扫描会预填 provider/model"）删除；② `--resume` 的三条约束（收 **run name** = `strix_runs/` 下目录名，来源 `ScanProcess.run.run_name`；必须**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒；必须显式 `-m <持久化的模式>` 且**无 `-t`**）**原样留在此处**，将来要做直接照抄；③ T10 已落进 `scans.strix_run_name` 的字段**保留、暂不使用**，不许为"砍了续跑"去删列（删列要写迁移，比留一个空列贵）；④ **没有队列** = 超过并发槽位上限直接返回 `too_many_running`（T12c 的槽位闸已经就是这个行为），不排队。<br>**✅ 2026-09-18 T28a 收货（判定 + 执行器；接线仍未做）**：`services/retention.py` **229** 行（超 200 行预算 29 行，全是"为什么"的注释，判定不值得再压）+ `tests/test_retention.py` **282** 行，新增 **28** 条。形状照 `reaper.py`（本仓另一个破坏性操作）：判定是无 IO 纯函数（`plan_retention`／`scan_dir_for`）、动手前把整条计划打进日志（`dry_run` 与否都打）、`dry_run=True` 一个字节都不动、**默认不删**。<br>**路径护栏的承重点是 `resolve()` 之后"父目录恰好是 `scans_dir`"，不是字符串黑名单**：黑名单永远漏一种写法、且抓不到符号链接（`scans/looks-fine` 指向别人的目录时字符串完全干净，有一条专门测试钉它）。前置的 `("/", "\\", "\x00")` 检查只是提前挡掉分隔符与 NUL（**反斜杠在 POSIX 上是合法文件名字符，`resolve()` 抓不到它**；NUL 会让 `os.lstat` 抛 `ValueError`，那不是我们的机器码）。<br>**2 处 mutation**：① 删掉 `retention_days <= 0` 的短路 → 红 2（`retention_days=0`／为负那两格）。**全模块只有这一处短路**（`sweep()` 里刻意没有第二处提前返回，否则这个 mutation 杀不死）；② **`_delete_detail_rows` 顺手把 `scans` 那一行也删了**（**我自选的靶子，不在它清单上**）→ 红 1（`test_sweep_purges_..._but_keeps_the_scan_row`）—— 证明"摘要永不删"真的有测试承重。<br>**先删目录后删 DB 行**是刻意的：目录删不掉就整条不动（明细行还在，下一轮再来）；反过来会留下"DB 说没有、磁盘上还占着几百 MB"。中途崩了也自愈（下一轮 `_remove_dir` 吞掉 `FileNotFoundError` 再删 DB 行）。<br>**交回给接线任务的两件**（详见 §交接）：`InvalidScanIdError` 刻意不继承 `ConsoleError`（要暴露成 HTTP 就必须同时补 `zh-CN.json` 文案）；`RetentionOutcome` 没有 `failed` 字段，`_remove_dir` 的其它 `OSError` 会**中断整轮**，要改行为得先改契约。<br>**`test_purged_tables_is_exactly_the_four_detail_tables` 是给 T21 的定时炸弹**：T21 建 `report_translations` 后必须把它加进 `PURGED_TABLES`，那条测试会在那天变红，正好当提醒。 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索 |
 | T30b | `make verify-e2e`（**27 条**，编号到 28、18 号是空位）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
