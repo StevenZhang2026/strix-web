@@ -58,6 +58,7 @@ EVENT_SCAN_LAUNCHED = "scan.launched"
 EVENT_SCAN_STOPPED = "scan.stopped"
 EVENT_SCAN_FINISHED = "scan.finished"
 EVENT_IMAGE_PULL_STARTED = "image.pull_started"
+EVENT_SCAN_PURGED = "scan.purged"
 """事件名。**字面串只出现在这里**，路由层 import 它们。
 
 集中在本模块而不是各自写在抛出方的路由里：这份名单就是"审计里会出现哪些事件"的全部
@@ -70,7 +71,10 @@ EVENT_IMAGE_PULL_STARTED = "image.pull_started"
 `override.private_used` / `override.loopback_used`：放行之后 `GuardVerdict.required_opt_in`
 一定是空的（那个字段的 docstring 写死了这一点），要说出"哪一项勾选被用上了"就得从解析
 出来的地址逐个重新分类 —— 那是 `target_guard` 判定逻辑的第二份副本。改为在
-`authorization.affirmed` 的 detail 里逐目标记下类别与三个 override 标志。"""
+`authorization.affirmed` 的 detail 里逐目标记下类别与三个 override 标志。
+`scan.purged` 是 T28 加的，也是唯一由**定时任务**发起的事件 → `actor` 为 None（`AuditEntry.actor`
+的 docstring 预留了这一种）；`detail` 只有 `retention_days` 与被清空的表名，**没有路径** ——
+留存清理删的是产物，而审计本身永不删，它就是"那次扫描曾经存在过"的唯一凭据。"""
 
 AuditDetailValue = str | int | float | bool | None | list[str]
 """`detail` 里允许的值域。

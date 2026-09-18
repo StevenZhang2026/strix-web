@@ -10,13 +10,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
+from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.db import Database
+from app.services.audit import EVENT_SCAN_PURGED
 from app.services.retention import (
     PURGED_TABLES,
     SKIP_TMP_DIR_PRESENT,
@@ -24,10 +31,12 @@ from app.services.retention import (
     RetentionOutcome,
     RetentionSweeper,
     ScanRecord,
+    _remove_dir,
     plan_retention,
     scan_dir_for,
 )
-from tests.conftest import insert_authorization, insert_scan
+from app.settings import Settings
+from tests.conftest import FakeTransport, const, insert_authorization, insert_scan
 
 NOW = datetime(2026, 9, 18, 12, 0, 0, tzinfo=UTC)
 # `now - 30 天` 那一刻，逐微秒对齐：边界用例的整个意义就在这一微秒上。
@@ -201,9 +210,19 @@ def make_scan_dir(scans_dir: Path, scan_id: str, *, with_tmp: bool = False) -> P
 
 
 def sweep(
-    db: Database, scans_dir: Path, *, retention_days: int = 1, dry_run: bool = False
+    db: Database,
+    scans_dir: Path,
+    *,
+    retention_days: int = 1,
+    dry_run: bool = False,
+    audit_dir: Path | None = None,
 ) -> RetentionOutcome:
-    sweeper = RetentionSweeper(db, scans_dir, retention_days=retention_days)
+    """`audit_dir` 不传时落在 `scans_dir` 隔壁（`${DATA}/audit`），与生产同形。"""
+    resolved_audit_dir = audit_dir if audit_dir is not None else scans_dir.parent / "audit"
+    resolved_audit_dir.mkdir(parents=True, exist_ok=True)
+    sweeper = RetentionSweeper(
+        db, scans_dir, retention_days=retention_days, audit_dir=resolved_audit_dir
+    )
     return asyncio.run(sweeper.sweep(now=NOW, dry_run=dry_run))
 
 
@@ -280,3 +299,209 @@ def test_a_scan_id_that_is_not_a_direct_child_is_skipped_without_aborting_the_ro
     )
     assert not old_dir.exists()
     assert scans_dir.exists()
+
+
+# =============================================================================
+# F. 接线 —— 配置项、定时任务、审计事件、lifespan
+# =============================================================================
+@pytest.fixture
+def audit_dir(tmp_path: Path) -> Path:
+    path = tmp_path / "data" / "audit"
+    path.mkdir(parents=True)
+    return path
+
+
+async def _drain_until(predicate: Callable[[], bool], *, ticks: int = 200) -> None:
+    """让出控制权直到 `predicate` 成立（或让够 `ticks` 次）。
+
+    不断言"让够了就一定成立" —— 那是各条测试自己的事，这里只负责别死等。
+    """
+    for _ in range(ticks):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+
+
+async def _cancel(task: asyncio.Task[None]) -> None:
+    """cancel **并 await**，形状同 lifespan 的 `finally`。"""
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+def test_run_forever_returns_immediately_when_retention_is_disabled(
+    db: Database, conn: sqlite3.Connection, scans_dir: Path, audit_dir: Path
+) -> None:
+    """F1。`retention_days=0` 是默认值，也是这个开关的唯一落点。
+
+    **自己就返回**这件事本身就是断言：进了循环的话它会睡在 `interval` 上。`wait_for`
+    只是给那种情况一个有限的失败时间 —— 不然这条测试会挂死而不是变红。
+    """
+    insert_authorization(conn)
+    seed_scan(conn, "scan-old")
+    old_dir = make_scan_dir(scans_dir, "scan-old")
+    sweeper = RetentionSweeper(db, scans_dir, retention_days=0, audit_dir=audit_dir)
+
+    async def scenario() -> None:
+        await asyncio.wait_for(sweeper.run_forever(interval=1000.0), timeout=5.0)
+
+    asyncio.run(scenario())
+
+    assert (old_dir / "strix_runs" / "run-1" / "run.json").exists()
+    assert detail_rows(conn, "scan-old") == dict.fromkeys(PURGED_TABLES, 1)
+    assert conn.execute("SELECT count(*) FROM audit_log").fetchone()[0] == 0
+
+
+def test_run_forever_sweeps_once_at_startup_without_waiting_for_the_interval(
+    db: Database, conn: sqlite3.Connection, scans_dir: Path, audit_dir: Path
+) -> None:
+    """F2。`interval=1000.0`：要是第一轮排在 sleep 之后，这条测试就等不到删除。"""
+    insert_authorization(conn)
+    seed_scan(conn, "scan-old")
+    old_dir = make_scan_dir(scans_dir, "scan-old")
+    sweeper = RetentionSweeper(db, scans_dir, retention_days=1, audit_dir=audit_dir)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(sweeper.run_forever(interval=1000.0))
+        await _drain_until(lambda: not old_dir.exists())
+        await _cancel(task)
+
+    asyncio.run(scenario())
+
+    assert not old_dir.exists()
+
+
+def test_run_forever_survives_a_permission_error_and_lives_into_the_next_round(
+    db: Database,
+    conn: sqlite3.Connection,
+    scans_dir: Path,
+    audit_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3。`_remove_dir` 对 `PermissionError` 是重抛的 —— 那一次重抛不许把循环带走。"""
+    insert_authorization(conn)
+    seed_scan(conn, "scan-old")
+    old_dir = make_scan_dir(scans_dir, "scan-old")
+    attempts: list[Path] = []
+
+    def flaky_remove(directory: Path) -> None:
+        attempts.append(directory)
+        if len(attempts) == 1:
+            raise PermissionError(13, "Permission denied")
+        _remove_dir(directory)
+
+    monkeypatch.setattr("app.services.retention._remove_dir", flaky_remove)
+    sweeper = RetentionSweeper(db, scans_dir, retention_days=1, audit_dir=audit_dir)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(sweeper.run_forever(interval=0.01))
+        await _drain_until(lambda: len(attempts) >= 2 and not old_dir.exists())
+        await _cancel(task)
+
+    asyncio.run(scenario())
+
+    assert len(attempts) >= 2, "第一轮抛了之后循环就没了"
+    assert not old_dir.exists()
+
+
+def test_purging_writes_one_scan_purged_audit_to_both_the_table_and_the_ndjson(
+    db: Database, conn: sqlite3.Connection, scans_dir: Path, settings: Settings
+) -> None:
+    """F4。审计是双写的（DB 丢了 ndjson 还在），`detail` 里只有机器码与数字。"""
+    insert_authorization(conn)
+    seed_scan(conn, "scan-old")
+    make_scan_dir(scans_dir, "scan-old")
+
+    outcome = sweep(db, scans_dir, retention_days=1, audit_dir=settings.audit_dir)
+
+    assert outcome.purged == ("scan-old",)
+    expected_detail = {"retention_days": 1, "tables": list(PURGED_TABLES)}
+    rows = conn.execute(
+        "SELECT event, actor, scan_id, detail_json FROM audit_log WHERE event = ?",
+        (EVENT_SCAN_PURGED,),
+    ).fetchall()
+    assert len(rows) == 1
+    # `actor` 为空是契约的一部分：这条事件由定时任务发起，没有操作者。
+    assert rows[0][1] is None
+    assert rows[0][2] == "scan-old"
+    assert json.loads(rows[0][3]) == expected_detail
+
+    files = sorted(settings.audit_dir.glob("*.ndjson"))
+    assert len(files) == 1
+    mirrored = json.loads(files[0].read_text(encoding="utf-8"))
+    assert mirrored["event"] == EVENT_SCAN_PURGED
+    assert mirrored["scan_id"] == "scan-old"
+    assert mirrored["actor"] is None
+    assert mirrored["detail"] == expected_detail
+
+
+def test_dry_run_writes_no_audit_at_all(
+    db: Database, conn: sqlite3.Connection, scans_dir: Path, settings: Settings
+) -> None:
+    """F5。`dry_run` 什么都没删，所以"删掉了什么"这条审计也不许存在。"""
+    insert_authorization(conn)
+    seed_scan(conn, "scan-old")
+    make_scan_dir(scans_dir, "scan-old")
+
+    sweep(db, scans_dir, retention_days=1, dry_run=True, audit_dir=settings.audit_dir)
+
+    assert conn.execute("SELECT count(*) FROM audit_log").fetchone()[0] == 0
+    assert list(settings.audit_dir.glob("*.ndjson")) == []
+
+
+class _RecordingSweeper:
+    """记下构造参数，以及"我是在 `db.close()` **之前**被 cancel 的"。刻意不继承。
+
+    **只断言"最后 cancelled 为真"是无效的**（`asyncio.run` 收尾时会把剩下的任务统统
+    cancel 并 await 一遍）。有区别的是**时机** —— 所以这里记的是顺序。
+    """
+
+    events: ClassVar[list[str]] = []
+    positional: ClassVar[list[tuple[object, ...]]] = []
+    keywords: ClassVar[list[dict[str, object]]] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        _RecordingSweeper.positional.append(args)
+        _RecordingSweeper.keywords.append(kwargs)
+
+    async def run_forever(self) -> None:
+        _RecordingSweeper.events.append("started")
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            _RecordingSweeper.events.append("cancelled")
+            raise
+
+
+def test_lifespan_starts_the_sweeper_and_cancels_it_before_db_close(
+    app: FastAPI, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F6。构造参数、任务真的起了、cancel 排在 `db.close()` 之前，三件一起钉。"""
+    _RecordingSweeper.events.clear()
+    _RecordingSweeper.positional.clear()
+    _RecordingSweeper.keywords.clear()
+    original_close = Database.close
+
+    def recording_close(self: Database) -> None:
+        _RecordingSweeper.events.append("db_closed")
+        original_close(self)
+
+    monkeypatch.setattr(Database, "close", recording_close)
+    monkeypatch.setattr("app.main.RetentionSweeper", _RecordingSweeper)
+    # 同一个 lifespan 里的 reaper 会真的去列容器（那是它的第一轮清扫），所以替身得给它
+    # 一个"一个泄漏都没有"的应答 —— 不给的话失败信息会指向 reaper 而不是本测试。
+    monkeypatch.setattr(
+        "app.main.UnixSocketTransport",
+        lambda: FakeTransport([("GET", "/containers/json", const(200, []))]),
+    )
+    with TestClient(app, base_url="https://testserver"):
+        pass
+
+    assert len(_RecordingSweeper.positional) == 1
+    assert _RecordingSweeper.positional[0][0] is app.state.db
+    assert _RecordingSweeper.positional[0][1] == settings.scans_dir
+    assert _RecordingSweeper.keywords[0] == {
+        "retention_days": settings.console_retention_days,
+        "audit_dir": settings.audit_dir,
+    }
+    assert _RecordingSweeper.events == ["started", "cancelled", "db_closed"]

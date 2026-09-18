@@ -8,8 +8,9 @@
 **保留什么**：`scans` 那一行（历史列表还要看得到摘要、结论计数、成本）、
 `authorizations`、`audit_log`、`${DATA}/audit/*.ndjson` —— 审计永不删。
 
-`retention_days` 与 `scans_dir` 都从**构造参数**进来，刻意不 import `Settings`：
-定时任务的接线（谁多久调一次、天数从哪个配置读）是另一条任务的事。
+`retention_days` / `scans_dir` / `audit_dir` 都从**构造参数**进来，刻意不 import
+`Settings`：判定与执行器要能在没有配置对象的情况下单测。接线在 `main.py` 的 lifespan
+（`CONSOLE_RETENTION_DAYS` → `run_forever`）。
 """
 
 from __future__ import annotations
@@ -26,8 +27,13 @@ from pathlib import Path
 from typing import ClassVar
 
 from app.db import Database
+from app.services import audit
 
 logger = logging.getLogger(__name__)
+
+# 定时清扫的间隔。留存期的分辨率是"天"，所以一天一轮已经比它精细；写成模块常量而不是
+# 新增配置项，与 `reaper.SWEEP_INTERVAL_S` 同一个立场（零新增 env）。
+SWEEP_INTERVAL_S = 86400.0
 
 # 后四个是终态，`starting` / `running` 是活的（`scan_supervisor.SCAN_STATUSES`）。
 TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "stopped", "failed", "interrupted"})
@@ -172,10 +178,15 @@ def _remove_dir(directory: Path) -> None:
 class RetentionSweeper:
     """真正持有状态（库、目录、天数），所以是 class。构造**不碰磁盘也不碰 DB**。"""
 
-    def __init__(self, db: Database, scans_dir: Path, *, retention_days: int) -> None:
+    def __init__(
+        self, db: Database, scans_dir: Path, *, retention_days: int, audit_dir: Path
+    ) -> None:
+        # `audit_dir` 刻意**没有默认值**：一个可选的审计目录等于让"忘了传"变成
+        # "静默不写审计"，而这个模块删的是渗透测试证据。
         self._db = db
         self._scans_dir = scans_dir
         self._retention_days = retention_days
+        self._audit_dir = audit_dir
 
     async def sweep(
         self, *, now: datetime | None = None, dry_run: bool = False
@@ -225,5 +236,55 @@ class RetentionSweeper:
             # 会留下"DB 说没有、磁盘上还占着几百 MB"。
             await asyncio.to_thread(_remove_dir, directory)
             await self._db.run(partial(_delete_detail_rows, scan_id=scan_id))
+            # **先业务改动、再审计**（`audit.record` 的 docstring 定的顺序）。
+            # `actor=None` 是因为这条事件由定时任务发起，没有操作者 —— `AuditEntry.actor`
+            # 的 docstring 正好预留了这一种。`detail` 里只有机器码与数字，没有路径。
+            await audit.record(
+                db=self._db,
+                audit_dir=self._audit_dir,
+                entry=audit.AuditEntry(
+                    event=audit.EVENT_SCAN_PURGED,
+                    actor=None,
+                    detail={
+                        "retention_days": self._retention_days,
+                        "tables": list(PURGED_TABLES),
+                    },
+                    client_ip=None,
+                    user_agent=None,
+                    scan_id=scan_id,
+                ),
+            )
             purged.append(scan_id)
         return RetentionOutcome(purged=tuple(purged), skipped=tuple(skipped), dry_run=False)
+
+    async def run_forever(self, interval: float = SWEEP_INTERVAL_S) -> None:
+        """启动先清一轮，之后每 `interval` 秒再清一轮。`interval` 可注入只为测试。
+
+        `retention_days <= 0` 时**连循环都不进**：这个开关只许有一个落点在这里，
+        `main.py` 里不许再写一遍 `if ... > 0`（两处开关总有一天会不一致）。
+        `plan_retention` 里那个短路是判定层的第二道，两道都留。
+
+        刻意**不加 `wake` Event**（`reaper` 有一个）：留存清理没有"扫描一结束就该清"
+        的语义，那个 Event 是为强杀泄漏准备的。
+        刻意**不捕获 `CancelledError`** —— 吞掉它 lifespan 会永远 await 不完。
+        """
+        if self._retention_days <= 0:
+            logger.info("留存清理未启用", extra={"event": "retention_disabled"})
+            return
+        while True:
+            try:
+                await self.sweep()
+            except OSError as error:
+                # `_remove_dir` 对 `FileNotFoundError` 之外的 `OSError`（例如
+                # `PermissionError`）是重抛的，而一个带异常死掉的后台任务会在停机
+                # `await` 它时把异常重抛进 lifespan 的 `finally`（reaper 那处实测过：
+                # 会连带弄红上百个无关测试）。所以必须在这里接住。
+                #
+                # `RetentionOutcome` 契约里没有 `failed` 字段，所以"单个 scan 失败也
+                # 把整轮跑完"这件事不在这里做（要做得先改契约）：现在的语义就是
+                # **这一轮到此为止，下一轮再来**。
+                logger.warning(
+                    "留存清理失败，等下一轮",
+                    extra={"event": "retention_sweep_failed", "reason": type(error).__name__},
+                )
+            await asyncio.sleep(interval)

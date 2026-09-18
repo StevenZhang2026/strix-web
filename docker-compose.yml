@@ -62,6 +62,14 @@ x-console-env: &console-env
   # 部署机规格可变；改它同时要重算上面四个限额。setup.sh 会把这个值写进 .env。
   CONSOLE_MAX_CONCURRENT_SCANS: "${CONSOLE_MAX_CONCURRENT_SCANS:-1}"
 
+  # ---- 产物留存天数（T28）--------------------------------------------------
+  # **默认 0 = 永不自动删。** 破坏性操作的默认值只能是"关"：扫描产物是渗透测试证据，
+  # 删了不可逆。填 30 才启用（api 启动跑一轮 + 每 24h 一轮）。删的是
+  # ${DATA}/scans/<id>/ 整个目录与 4 张明细表里那次扫描的行；scans 那一行与
+  # audit_log / audit/*.ndjson 永远保留。setup.sh 刻意不写这个变量 —— 缺它时
+  # 这里的 `:-0` 给出的就是正确的"关"。
+  CONSOLE_RETENTION_DAYS: "${CONSOLE_RETENTION_DAYS:-0}"
+
   # ---- N2：企业 CA bundle（PLAN.md §N2，2026-09-08 拍板）------------------
   # 默认关闭。启用方式**只有一条**：操作者在 .env 里填 STRIX_EXTRA_CA_FILE=<宿主
   # PEM 绝对路径>，然后**重跑 ./setup.sh**（由它校验 PEM 并派生 CONSOLE_CA_BUNDLE）。

@@ -90,6 +90,16 @@ def test_budget_ceiling_must_be_positive(tmp_path: Path) -> None:
         Settings(console_data_dir=tmp_path, console_max_budget_ceiling_usd=0)
 
 
+def test_retention_is_off_by_default(tmp_path: Path) -> None:
+    """留存清理删的是渗透测试证据，**默认值只能是"关"**。
+
+    单独一条测试，因为它守的不是"字段存在"而是"没人为了跑通某个环境把 0 改成 30"：
+    `RetentionSweeper.run_forever` 在 `<= 0` 时立刻返回，所以这个 0 就是整个功能的开关，
+    而它是全仓唯一一处能把默认值从"关"改成"开"的地方。
+    """
+    assert Settings(console_data_dir=tmp_path).console_retention_days == 0
+
+
 # =============================================================================
 # 三、进程环境里不许有凭据
 # =============================================================================

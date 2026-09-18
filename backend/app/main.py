@@ -27,6 +27,12 @@
     8. create_task(run_sweeper)        本进程唯一的后台任务。`finally` 里 cancel
                                        **并 await**，否则每次正常停机都会打出
                                        "Task was destroyed but it is pending"
+    9. create_task(run_forever)        沙箱回收（reaper）与留存清理（retention）。
+                                       两者都**无条件**起：留存清理的那个开关
+                                       （`CONSOLE_RETENTION_DAYS`，默认 0 = 不删）
+                                       只有一个落点，在 `run_forever` 自己里面。
+                                       `finally` 里的 cancel+await 必须排在
+                                       `db.close()` **之前** —— 它们都会 `await db.run`
 
 第 2 步排在第 3 步之前是刻意的：如果环境里真有凭据，我们希望在**任何日志代码运行
 之前**就失败。日志系统本身不会打凭据，但"启动过程中新增一行 logger.info(...)"是随时
@@ -99,6 +105,7 @@ from app.services.docker_probe import UnixSocketTransport, read_self_container_r
 from app.services.image_puller import ImagePuller
 from app.services.key_vault import KeyVault, assert_single_worker
 from app.services.reaper import Reaper
+from app.services.retention import RetentionSweeper
 from app.services.scan_secrets import ScanSecretRegistry
 from app.services.scan_supervisor import ScanSupervisor, assert_sandbox_env
 from app.settings import Settings, assert_no_credential_env, load_settings
@@ -456,6 +463,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # GC 掉（标准库明写这一点），而它正是唯一会写终态列的地方。
         scan_tasks: set[asyncio.Task[None]] = set()
         app.state.scan_tasks = scan_tasks
+        # T28。破坏性操作，**默认关**：天数为 0 时 `run_forever` 自己就立刻返回，所以
+        # 这里刻意不写 `if resolved.console_retention_days > 0` —— 开关有两个落点就
+        # 一定会有一天不一致。路径一律用 `Settings` 上已有的 property，不自己拼。
+        retention_sweeper = RetentionSweeper(
+            db,
+            resolved.scans_dir,
+            retention_days=resolved.console_retention_days,
+            audit_dir=resolved.audit_dir,
+        )
+        app.state.retention_sweeper = retention_sweeper
 
         # T7a。本项目的第一个后台任务。凭据的过期是懒判定（取用时判）为主，但没人再来
         # 取用的凭据不会被懒判定碰到，而"凭据在内存里待多久"就是 KeyVault 的安全属性
@@ -464,6 +481,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # T11a。启动的第一轮清扫就在这个任务里 —— 刻意**不在 yield 之前 await 一次**：
         # docker 挂着的时候那次 await 会把"api 起不来"和"docker 有问题"混成一件事。
         reaper_task = asyncio.create_task(reaper.run_forever())
+        # T28。同样是 `create_task` 而不是 `await` 一次：第一轮清理要删的可能是几十个
+        # 目录，`await` 一次就把"第一轮清理很慢"变成了"api 起不来"。
+        retention_task = asyncio.create_task(retention_sweeper.run_forever())
 
         logger.info("启动完成")
         try:
@@ -494,6 +514,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             reaper_task.cancel()
             with suppress(asyncio.CancelledError):
                 await reaper_task
+            # T28。留存清理同理，且**必须排在 `db.close()` 之前** —— 它的每一轮都会
+            # `await db.run(...)`（选行、删明细行、写审计）。
+            retention_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await retention_task
             db.close()
             logger.info("已停止")
 

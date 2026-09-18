@@ -4,30 +4,40 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 本轮（2026-09-18 第二段）：**T14c 已收货**
+### 本轮（2026-09-18 第三段）：**W1（留存清理接线）已收货**
 
 **收货三件事全做完**（§八.3，一条自陈都没采信）：① 官方闸门 `make lint` 全绿、
-`make test` **1072 passed / 0 skipped**（基线 1064，+8）；② **5 处 mutation 全部只红该红的那一条**
-（M3／M4／M5 三处是我自选的，M5 预期 0 红也如预期）；③ 两个产物文件整读。
-逐条结论（含三条落库语义与两处认下的自选决定）在 §派发清单 T14 行，本节不复述。
+`make test` **1079 passed / 0 skipped**（基线 1072，+7）、`docker compose -p strix-console config -q`
+通过；② **5 处 mutation 全部我自选、自己重跑**（不采信子 agent 报的那 7 条）；③ 六个产物文件整读。
+逐条结论在 §派发清单 T28 行，本节不复述。
 
-**当前闸门基线：`make lint` 干净、`make test` 1072 passed / 0 skipped。**
+**⚠️ MX1 抓到本轮唯一的真缺陷**：把 `console_retention_days` 的默认值从 `0` 改成 `30`，
+**全量 1078 条测试无一变红** —— "破坏性操作默认必须关"当时没有任何测试守着（子 agent 的
+F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。已补
+`test_settings.py::test_retention_is_off_by_default`，重跑 MX1 → 只红它一条。
+**这是 T10 的 `assert_sandbox_env`、T7b 的 `params`、T9 的 `_PINNED_ENV` 之后同一形状的第四次。**
+下一棒收货先问这一句：**"这条不变式的靶子是一个字面值吗？如果是，有测试盯着那个字面值本身吗？"**
+（"参数从配置里来"与"配置的默认值是什么"是两条不变式，一条测试钉不住两条。）
 
-**派发形状连续第二次验证成立**：T14c 一条任务 2 个文件／2 条不变式／402 行 → **0 压缩**，
-子 agent 15 次工具调用（前三条是 20／22／37）。见 §派发方法学 第 7 条，别回退。
+**另外四处 mutation**（都只红该红的那一条）：MX2 `create_task(run_forever())` 换成一个立刻结束的
+空任务 → 红 F6；MX3 审计写入短路 → 红 F4；MX4 往 `detail` 里塞一个宿主路径 → 红 F4
+（证明"审计正文里没有路径"真的有承重）；MX5 `cancel+await` 挪到 `db.close()` 之后 → 红 F6。
 
-### 交回、必须带进下一棒（接线任务）的五件
+**当前闸门基线：`make lint` 干净、`make test` 1079 passed / 0 skipped。**
 
-1. **`InvalidScanIdError` 刻意不继承 `ConsoleError`**（`retention.py:47`）—— 因为
-   `test_message_coverage.py` 的 `_backend_http_codes()` 取 `ConsoleError.__subclasses__()`
-   并要求每个码在 `zh-CN.json` 的 `errors` 里有中文文案。**接线任务若要把它暴露成 HTTP 错误，
-   必须同时补文案**，否则那条测试一旦 import 到 retention.py 就变红。
-2. **`RetentionOutcome` 契约里没有 `failed` 字段** → `_remove_dir` 的 `OSError`（如 `PermissionError`）
-   现在会**中断整轮**并向上抛。接线任务若要"单个失败不中断整轮"（`Reaper` 有 `failed`），
-   **要先改契约**，不许在执行器里偷偷吞掉。
-3. **`conftest.insert_scan` 不接受 `status`／`finished_at`**（只写 `queued`、不写 `finished_at`），
-   而留存判定读的正是这两列 → T28a 在自己的测试文件里建了本地 `seed_scan()`。
-   **第 2 个要用它的任务出现时才提取进 `conftest.py`**（§十.3，重复第三次才提取）。
+### 交回、必须带进 W2（`ScanChannel`）的五件
+
+1. **`run_forever` 只接 `OSError`** → `_delete_detail_rows`／`audit.record` 抛 `sqlite3.Error` 时
+   任务仍会带异常死掉，并在停机 `await` 时把异常重抛进 lifespan 的 `finally`（reaper 那处实测过：
+   会连带弄红上百个无关测试）。**收货时刻意没有顺手扩成 `(OSError, sqlite3.Error)`** ——
+   它和下面那条 `failed` 字段是同一个决定的两半（"一个 scan 失败要不要把整轮跑完"），
+   要做就一起做、单独一条任务，不许混进接线的 commit。
+   同理 **`RetentionOutcome` 契约里没有 `failed` 字段**，现在的语义是"这一轮到此为止，下一轮再来"。
+2. **`InvalidScanIdError` 刻意不继承 `ConsoleError`**（`retention.py:53`）—— `test_message_coverage.py`
+   的 `_backend_http_codes()` 取 `ConsoleError.__subclasses__()` 并要求每个码在 `zh-CN.json` 里有
+   中文文案。**谁要把它暴露成 HTTP 错误，必须同时补文案。**
+3. **`conftest.insert_scan` 不接受 `status`／`finished_at`**（只写 `queued`），而留存判定读的正是这
+   两列 → `test_retention.py` 有本地 `seed_scan()`。**第 2 个要用它的任务出现时才提取**（§十.3）。
 4. ⚠️ **`EventMirror(db, scans_dir, scan_id)` 的第二个参数必须传 `settings.scans_dir` 本身**：
    `rel_path` 列的值是 `f"{scans_dir.name}/{scan_id}/media/<sha>.png"`（不能用 `relative_to`，
    理由见 §派发清单 T14 行），传一个别名目录会**静默**写出错的 `rel_path`。**结构上防不住，只能靠这条。**
@@ -37,17 +47,27 @@
 
 ### 本批之后的顺序（别乱序）
 
-1. **一条串行接线任务**：`ScanChannel` tick 循环（含 `EventMirror`）+ `main.py`（`app.state` + 留存定时任务）+
-   `settings.py`（`CONSOLE_RETENTION_DAYS`）+ 审计事件 + `.env.example` + 前端 404 文案。
-   **必须串行** —— 这几样东西全挤在 `main.py` 与 `settings.py` 上。
-   ⚠️ 它要接的都已就位且**都只吃构造参数**：`LogTailer(path, redact, min_level=)`、
-   `RetentionSweeper(db, scans_dir, retention_days=)`、`EventMirror(db, scans_dir, scan_id)`
+原"一条串行接线任务"**已按 §三.2 拆开**（它一条同时压上 `main.py`＋`settings.py`＋`ScanChannel`，
+超 500 行也超 1 条不变式）：**W1 = 留存那一半，已收货**（见上）。剩下的是 W2。
+
+1. **W2（`ScanChannel`）：模板 3，方案已由主会话写好、2026-09-18 待用户放行**，拆三条串行
+   （W2a 纯函数 `services/scan_frames.py` → W2b `services/scan_channel.py` tick 循环 →
+   W2c `ChannelRegistry` + `routes/scans.py`／`main.py` 接线）。方案原文与三个待放行点
+   （① 删掉 `events.snapshot` 帧类型、重同步改逐条 `event.add`，让**镜像↔帧 1:1 同 seq**
+   且回放与直播同一个帧形状；② `done` 帧不带结论，结论只从 `GET /api/scans/{id}` 取；
+   ③ 订阅者队列满就摘掉该订阅者、镜像写失败让异常冒泡杀掉 channel 任务）**放行之后才写进
+   §实时流设计** —— 在那之前它不是权威，别去那一节找。①若放行要改 §实时流设计 的帧类型表。
+   ⚠️ 要接的都只吃构造参数：`LogTailer(path, redact, min_level=)`、`EventMirror(db, scans_dir, scan_id)`
    （`extract_media` 已被它包在里面，接线层**不要再直接调**）。
-   `LogTailer.min_level` **不该与 `LOG_LEVEL` 共用一个值**（给前端的流应更严，默认 `INFO`，
-   且永远不许调到 `DEBUG` —— `CLAUDE.md` 明写 `STRIX_DEBUG` 是泄漏面）；
-   `LogTailer` 的偏移活在实例里 → **一次扫描一个长命实例**，不许每次请求新建。
-2. **T29** 单独跑（契约断言要读整个工作区，有半成品就没意义）
-3. T18（T13 已解锁）可以插在任何位置，它与上面几条无文件重叠
+   `LogTailer.min_level` **不与 `LOG_LEVEL` 共用**（给前端的流应更严，默认 `INFO`，永不 `DEBUG`）；
+   偏移活在实例里 → **一次扫描一个长命实例**，不许每次请求新建。
+   **`strix.log` 在 run 目录里**（`strix/telemetry/logging.py:setup_scan_logging` 写 `{run_dir}/strix.log`，
+   2026-09-18 在镜像里核过）→ tailer 只能等 `RunDiscovery` 抢到 run 目录之后再建，不是扫描 cwd。
+2. **前端"产物已按留存策略清理"的 404 文案：随 T16 做，不在 W1／W2 范围**（2026-09-18 决定）。
+   理由：现在没有任何一条路由会因为产物被清理而 404（媒体／报告读取路由属 T16／T21）。
+   先声明一个没有生产者的机器码＋文案，正是本仓已经烧过四次的"声明了却没有任何一处强制"。
+3. **T29** 单独跑（契约断言要读整个工作区，有半成品就没意义）
+4. T18（T13 已解锁）可以插在任何位置，它与上面几条无文件重叠
 
 ### 长期有效的操作事实（每次开工都用得上）
 
@@ -1372,7 +1392,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T25 | ~~审计 UI~~ 砍掉，**只留 `GET /api/audit.csv` 导出接口**（2026-09-16 用户拍板；`audit_log` 表 + `${DATA}/audit/YYYY-MM.ndjson` 双写 T12c 已落地，日常查询用 `grep`）| T12c | `routes/audit.py` | **1** —— 砍掉的只是页面，**验收 19 的实质不变**（六类事件齐全 + 对 CSV `grep -c "$TEST_KEY"` 为 0）。原话"验收 19 条一字不改"**已作废**：2026-09-17 收货时对出两处事件名与代码不符，用户拍板**只改验收/设计文案、不改代码**（`override.loopback_used` → 查 `authorization.affirmed` 的 detail；`key.forgotten` → `key.dropped`），理由记在验收 19 与 §护栏＋审计 那两段 |
 | T26 | ~~系统诊断页~~ → **并进首页一个可展开区块**（2026-09-16 用户拍板）| T3 T10 | `frontend/src/components/system/ReadyRows.tsx`（扩写）`frontend/messages/zh-CN.json` | **1** —— T3 已返回结构化 JSON、首页 `ReadyRows` 已接真值（`5ddede6`），本行只是给每个失败码配中文修复指引（指引文案进 `zh-CN.json`；**失败码清单以 T3／T10 的实现为权威，不许自己发明码**）。**不新建 `app/diagnostics/`** |
 | T27 | `exporter_docx.py` —— 手写 WordprocessingML，**不引 `python-docx`** | T22 | `services/exporter_docx.py` | 2 |
-| T28 | ~~续跑（重新索要 Key）+ 并发队列~~ **v1 不做**，只留**留存清理任务**（2026-09-16 用户拍板砍范围）| T10 | `services/retention.py` | **2 —— ⚠️ 破坏性操作**（会删用户的扫描产物）。**2026-09-18 拆成 T28a（判定 + 执行器，任务书 `/tmp/T28a-prompt.md`）与接线（`settings.py` 加 `CONSOLE_RETENTION_DAYS`、`main.py` 定时任务、审计事件、`.env.example`、前端 404 文案）两条。**<br>**留存策略已由用户 2026-09-18 拍板（属"已确认决策"，改要先问）**：① **删的范围** = 整个 `${DATA}/scans/<id>/` 目录 + **4 张表**（`scan_events`／`scan_media`／`scan_agents`／`scan_findings`）里该 scan 的行；**保留 `scans` 那一行**（历史列表仍看得到摘要/结论计数/成本）；**保留** `authorizations`／`audit_log`／`${DATA}/audit/*.ndjson`；**表结构不改**（无新列无新迁移），前端拿不到产物时按 404 显示"产物已按留存策略清理"。⚠️ **`report_translations` 也该删，但那张表 `001_init.sql` 里不存在**（T21 的 `002` 才建）→ **T21 落地时必须把它加进清理清单**，否则译文会活过它的原文。② **默认关闭**：`CONSOLE_RETENTION_DAYS` 默认 `0` = 永不自动删，用户在 `.env` 显式写 `30` 才生效（理由：这是渗透测试证据，默认销毁是不可逆的坏默认）。开启后 api 启动跑一次 + 每 24h 一次；每次先 INFO 打印将删清单 → 再删 → 写审计事件。③ 目录里仍有 `tmp/` → **整条跳过**并记 `tmp_dir_present`（说明 supervisor 清理没跑完或 scan 其实还活着）。<br>prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run 打印再删、绝不递归删 `${DATA}` 下其他任何目录；**不许碰 `${DATA}/scans/<id>/tmp`**（那是 `cleanup_scan_tmpdir()` 的地盘，T10 交回，同 T11 那条禁令）；删的是**整个** `scans/<id>/`，且只在扫描已终态之后。<br>**砍掉那两件的连带影响（别丢）**：① **验收 18 整条删除**、**验收 17 末句**（"重启后点继续扫描会预填 provider/model"）删除；② `--resume` 的三条约束（收 **run name** = `strix_runs/` 下目录名，来源 `ScanProcess.run.run_name`；必须**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒；必须显式 `-m <持久化的模式>` 且**无 `-t`**）**原样留在此处**，将来要做直接照抄；③ T10 已落进 `scans.strix_run_name` 的字段**保留、暂不使用**，不许为"砍了续跑"去删列（删列要写迁移，比留一个空列贵）；④ **没有队列** = 超过并发槽位上限直接返回 `too_many_running`（T12c 的槽位闸已经就是这个行为），不排队。<br>**✅ 2026-09-18 T28a 收货（判定 + 执行器；接线仍未做）**：`services/retention.py` **229** 行（超 200 行预算 29 行，全是"为什么"的注释，判定不值得再压）+ `tests/test_retention.py` **282** 行，新增 **28** 条。形状照 `reaper.py`（本仓另一个破坏性操作）：判定是无 IO 纯函数（`plan_retention`／`scan_dir_for`）、动手前把整条计划打进日志（`dry_run` 与否都打）、`dry_run=True` 一个字节都不动、**默认不删**。<br>**路径护栏的承重点是 `resolve()` 之后"父目录恰好是 `scans_dir`"，不是字符串黑名单**：黑名单永远漏一种写法、且抓不到符号链接（`scans/looks-fine` 指向别人的目录时字符串完全干净，有一条专门测试钉它）。前置的 `("/", "\\", "\x00")` 检查只是提前挡掉分隔符与 NUL（**反斜杠在 POSIX 上是合法文件名字符，`resolve()` 抓不到它**；NUL 会让 `os.lstat` 抛 `ValueError`，那不是我们的机器码）。<br>**2 处 mutation**：① 删掉 `retention_days <= 0` 的短路 → 红 2（`retention_days=0`／为负那两格）。**全模块只有这一处短路**（`sweep()` 里刻意没有第二处提前返回，否则这个 mutation 杀不死）；② **`_delete_detail_rows` 顺手把 `scans` 那一行也删了**（**我自选的靶子，不在它清单上**）→ 红 1（`test_sweep_purges_..._but_keeps_the_scan_row`）—— 证明"摘要永不删"真的有测试承重。<br>**先删目录后删 DB 行**是刻意的：目录删不掉就整条不动（明细行还在，下一轮再来）；反过来会留下"DB 说没有、磁盘上还占着几百 MB"。中途崩了也自愈（下一轮 `_remove_dir` 吞掉 `FileNotFoundError` 再删 DB 行）。<br>**交回给接线任务的两件**（详见 §交接）：`InvalidScanIdError` 刻意不继承 `ConsoleError`（要暴露成 HTTP 就必须同时补 `zh-CN.json` 文案）；`RetentionOutcome` 没有 `failed` 字段，`_remove_dir` 的其它 `OSError` 会**中断整轮**，要改行为得先改契约。<br>**`test_purged_tables_is_exactly_the_four_detail_tables` 是给 T21 的定时炸弹**：T21 建 `report_translations` 后必须把它加进 `PURGED_TABLES`，那条测试会在那天变红，正好当提醒。 |
+| T28 | ~~续跑（重新索要 Key）+ 并发队列~~ **v1 不做**，只留**留存清理任务**（2026-09-16 用户拍板砍范围）| T10 | `services/retention.py` | **2 —— ⚠️ 破坏性操作**（会删用户的扫描产物）。**2026-09-18 拆成 T28a（判定 + 执行器，任务书 `/tmp/T28a-prompt.md`）与接线（`settings.py` 加 `CONSOLE_RETENTION_DAYS`、`main.py` 定时任务、审计事件、`.env.example`、前端 404 文案）两条。**<br>**留存策略已由用户 2026-09-18 拍板（属"已确认决策"，改要先问）**：① **删的范围** = 整个 `${DATA}/scans/<id>/` 目录 + **4 张表**（`scan_events`／`scan_media`／`scan_agents`／`scan_findings`）里该 scan 的行；**保留 `scans` 那一行**（历史列表仍看得到摘要/结论计数/成本）；**保留** `authorizations`／`audit_log`／`${DATA}/audit/*.ndjson`；**表结构不改**（无新列无新迁移），前端拿不到产物时按 404 显示"产物已按留存策略清理"。⚠️ **`report_translations` 也该删，但那张表 `001_init.sql` 里不存在**（T21 的 `002` 才建）→ **T21 落地时必须把它加进清理清单**，否则译文会活过它的原文。② **默认关闭**：`CONSOLE_RETENTION_DAYS` 默认 `0` = 永不自动删，用户在 `.env` 显式写 `30` 才生效（理由：这是渗透测试证据，默认销毁是不可逆的坏默认）。开启后 api 启动跑一次 + 每 24h 一次；每次先 INFO 打印将删清单 → 再删 → 写审计事件。③ 目录里仍有 `tmp/` → **整条跳过**并记 `tmp_dir_present`（说明 supervisor 清理没跑完或 scan 其实还活着）。<br>prompt 必须写死：只删 `${DATA}/scans/<自己创建的 scan_id>/`、先 dry-run 打印再删、绝不递归删 `${DATA}` 下其他任何目录；**不许碰 `${DATA}/scans/<id>/tmp`**（那是 `cleanup_scan_tmpdir()` 的地盘，T10 交回，同 T11 那条禁令）；删的是**整个** `scans/<id>/`，且只在扫描已终态之后。<br>**砍掉那两件的连带影响（别丢）**：① **验收 18 整条删除**、**验收 17 末句**（"重启后点继续扫描会预填 provider/model"）删除；② `--resume` 的三条约束（收 **run name** = `strix_runs/` 下目录名，来源 `ScanProcess.run.run_name`；必须**同一个 cwd**，否则 `interface/utils.py:1561` + `cli_args.py:422` 的校验会拒；必须显式 `-m <持久化的模式>` 且**无 `-t`**）**原样留在此处**，将来要做直接照抄；③ T10 已落进 `scans.strix_run_name` 的字段**保留、暂不使用**，不许为"砍了续跑"去删列（删列要写迁移，比留一个空列贵）；④ **没有队列** = 超过并发槽位上限直接返回 `too_many_running`（T12c 的槽位闸已经就是这个行为），不排队。<br>**✅ 2026-09-18 T28a 收货（判定 + 执行器；接线仍未做）**：`services/retention.py` **229** 行（超 200 行预算 29 行，全是"为什么"的注释，判定不值得再压）+ `tests/test_retention.py` **282** 行，新增 **28** 条。形状照 `reaper.py`（本仓另一个破坏性操作）：判定是无 IO 纯函数（`plan_retention`／`scan_dir_for`）、动手前把整条计划打进日志（`dry_run` 与否都打）、`dry_run=True` 一个字节都不动、**默认不删**。<br>**路径护栏的承重点是 `resolve()` 之后"父目录恰好是 `scans_dir`"，不是字符串黑名单**：黑名单永远漏一种写法、且抓不到符号链接（`scans/looks-fine` 指向别人的目录时字符串完全干净，有一条专门测试钉它）。前置的 `("/", "\\", "\x00")` 检查只是提前挡掉分隔符与 NUL（**反斜杠在 POSIX 上是合法文件名字符，`resolve()` 抓不到它**；NUL 会让 `os.lstat` 抛 `ValueError`，那不是我们的机器码）。<br>**2 处 mutation**：① 删掉 `retention_days <= 0` 的短路 → 红 2（`retention_days=0`／为负那两格）。**全模块只有这一处短路**（`sweep()` 里刻意没有第二处提前返回，否则这个 mutation 杀不死）；② **`_delete_detail_rows` 顺手把 `scans` 那一行也删了**（**我自选的靶子，不在它清单上**）→ 红 1（`test_sweep_purges_..._but_keeps_the_scan_row`）—— 证明"摘要永不删"真的有测试承重。<br>**先删目录后删 DB 行**是刻意的：目录删不掉就整条不动（明细行还在，下一轮再来）；反过来会留下"DB 说没有、磁盘上还占着几百 MB"。中途崩了也自愈（下一轮 `_remove_dir` 吞掉 `FileNotFoundError` 再删 DB 行）。<br>**交回给接线任务的两件**（详见 §交接）：`InvalidScanIdError` 刻意不继承 `ConsoleError`（要暴露成 HTTP 就必须同时补 `zh-CN.json` 文案）；`RetentionOutcome` 没有 `failed` 字段，`_remove_dir` 的其它 `OSError` 会**中断整轮**，要改行为得先改契约。<br>**`test_purged_tables_is_exactly_the_four_detail_tables` 是给 T21 的定时炸弹**：T21 建 `report_translations` 后必须把它加进 `PURGED_TABLES`，那条测试会在那天变红，正好当提醒。<br>**✅ 2026-09-18 W1（接线）收货 —— T28 整行完成**：`settings.py`(+6：`console_retention_days: int = Field(default=0, ge=0)`) + `audit.py`(+1：`EVENT_SCAN_PURGED = "scan.purged"`) + `retention.py`(+67：`audit_dir` 必填构造参数、`sweep()` 里每删一个 scan 写一条审计、`run_forever`) + `main.py`(+25：`app.state.retention_sweeper` + `create_task` + `finally` 里 cancel+await **排在 `db.close()` 之前**) + `docker-compose.yml`／`env.example` + `tests/test_retention.py`(+231，新增 6 条 `# F. 接线`) + 主会话补的 `test_settings.py::test_retention_is_off_by_default`。`make test` **1079 passed / 0 skipped**。<br>**开关只有一个落点：`run_forever` 里的 `if self._retention_days <= 0: return`**（`main.py` 里**不许**再写 `if ... > 0`；`plan_retention` 那处是判定层的第二道，两道都留）。`create_task` 而不是 `await` 一次：第一轮要删几十个目录时 `await` 会把"清理很慢"变成"api 起不来"。`run_forever` 里 `except OSError` 是**必须**的 —— 后台任务带异常死掉会在停机 `await` 它时把异常重抛进 lifespan 的 `finally`。<br>**`audit_dir` 刻意是必填关键字参数**（无默认值）：一个可选的审计目录等于让"忘了传"变成"静默不写审计"，而这个模块删的是渗透测试证据。`detail` 只有 `{retention_days, tables}`，**没有路径**（MX4 钉住了这一点）。<br>**⚠️ MX1 的教训（第四次同形状缺陷）**：默认值 `0`→`30` 曾经**全量无一变红**。"参数从 `Settings` 来"（F6）与"那个默认值是 0"是两条不变式。详见 §交接。<br>**子 agent 三处刻意偏离，都认下**：① F1 用 `asyncio.wait_for(..., timeout=5.0)` 包了 `run_forever` —— 裸 `asyncio.run` 在开关被改坏时是**挂死**而不是变红，mutation 就无法收敛；② F6 的 `FakeTransport` 要带一条 `("GET", "/containers/json", const(200, []))`，否则同一个 lifespan 里真实 `Reaper` 的第一轮清扫会以"替身没准备应答"报错、失败信息指向 reaper；③ 测试直接 `from app.services.retention import _remove_dir`（属性访问会踩 ruff SLF001）。<br>**已知不做**：`docs/SECURITY-zh.md` 还没有"哪些数据留多久"一节（T26 补）；前端 404 文案随 T16（见 §交接）。 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索 |
 | T30b | `make verify-e2e`（**27 条**，编号到 28、18 号是空位）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |

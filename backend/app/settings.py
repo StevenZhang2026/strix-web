@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     # 消费者：T6 护栏（budget_exceeds_ceiling）。
     console_max_budget_ceiling_usd: float = Field(default=100.0, gt=0)
 
+    # 扫描产物过期自动删除的天数。**默认 0 = 永不自动删**：产物是渗透测试证据，
+    # 销毁不可逆，而破坏性操作的默认值只能是"关"。
+    # `ge=0` 而不是 `ge=1`，因为 `0` 不是"非法的天数"而是那个开关本身。
+    # 消费者：T28 RetentionSweeper（`run_forever`）。
+    console_retention_days: int = Field(default=0, ge=0)
+
     # Strix 自带 SPA 默认不代理（有邮箱门 + PostHog + 报告外发中继）。
     # 消费者：T3 /api/system/status、POST /api/system/native-viewer。
     console_enable_native_viewer: bool = False
