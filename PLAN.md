@@ -16,20 +16,25 @@
 **这一批的派发方式是成功的**（三条都 ≤300 行、都只碰 2 个文件、都 0 压缩，工具调用 20／22／37）
 —— 拆分与交底规则见 §派发方法学 第 7 条与 `agent-rules.md` §三.2，别回退。
 
-### ⚠️ 待你拍板的阻断项：`scan_events.strix_id` 的类型是错的
+### ~~待拍板的阻断项：`scan_events.strix_id`~~ → **误报，已撤销**（2026-09-18 核实）
 
-`001_init.sql:202` 起的 `scan_events` 表是 `STRICT` 的，其中 `strix_id INTEGER`；
-但 T13 实际产出的 `ProjectedEvent.key` **是上游的字符串**（`strix_bridge/projection.py` 里
-`key=_text(raw.get("id"))`，形如 `"tool_12"`）—— **往那一列写字符串会在运行期直接抛**。
-表是 T2（2026-09-08）建的，T13（2026-09-17）才发现上游 id 是字符串，两边一直没对上过，
-因为**至今没有任何代码往这张表写过一行**。
+上一轮交接把这件事记成"卡着 T14c → T16 → 实时流整条"的阻断项，**那个结论是错的**。
+`services/run_projector.py:22-25` 早就写着 T13 给 T14 定下的落库语义 —— 那段话正是
+**为了防止 DDL 注释把人带偏**才写在模块 docstring 里的：
 
-- 修它要动迁移（新增 `003`，或改 `001` 那一列的类型）→ 按 §四 是**模板 3**，要先出方案给你审。
-- **应对（已做）**：把原 T14 的写库那一半（`event_mirror.py`）拆出来挂起成 **T14c**，
-  本批只派不依赖表结构的两条。`event_media.py` 刻意只吃 `Mapping`、不吃 `ProjectedEvent`，
-  所以 T14c 无论表结构怎么定都能直接复用它。
-- **本批已收完，这就是开工第一件事**（用户 2026-09-18 明确说"等这批收完再说"）。
-  **它卡着 T14c → T16 → 实时流整条**。
+> `scan_events.strix_id INTEGER` 存的是**事件 key 的整数后缀**（`"tool_12"` → `12`），
+> 因为 `kind` 已经存了前缀；解析不出整数就存 NULL。（DDL 注释说"源库里的 id"，而投影层
+> 的 id 是字符串 —— 这是已知的措辞偏差，**不许为它改迁移**。）
+
+**所以：不动迁移、不加 `003`、不是模板 3、没有要拍板的事。** 上一轮正确的观察只有半条
+（"把 `ProjectedEvent.key` 原样写进 `STRICT` 表的 INTEGER 列会抛"），但它的结论是
+"T14c 写库时解析后缀"，不是"改表"。`strix_id` 只是排障线索（重排后就变，不当主键、
+不参与去重 —— 承重的是 `fingerprint NOT NULL`），丢掉字符串前缀没有代价。
+**T14c 不被任何东西卡住，按模板 2 直接派发。**
+
+**教训**：`001_init.sql` 的 DDL 注释与 `run_projector.py` 的 docstring 对同一列说了两件
+不一样的话，而上一轮只读了前者就上报了一个阻断项。**跨模块的事实冲突要把两边都读完再下
+结论**，尤其当其中一边明写着"这是已知的措辞偏差、不许为它改迁移"的时候。
 
 ### 这一批交回、必须带进下一棒的三件
 
@@ -46,7 +51,9 @@
 
 ### 本批之后的顺序（别乱序）
 
-1. **拍板 `scan_events.strix_id`** →（模板 3）**T14c** `EventMirror` 落盘＋写库
+1. **T14c** `EventMirror` 落盘＋写库（**模板 2**，无待决事项 —— 上面那节已撤销）。
+   写库时 `strix_id` = `ProjectedEvent.key` 的整数后缀，解析不出存 NULL。
+   `extract_media()` 刻意只吃 `Mapping`、不吃 `ProjectedEvent`，直接复用。
 2. **一条串行接线任务**：`ScanChannel` tick 循环 + `main.py`（`app.state` + 留存定时任务）+
    `settings.py`（`CONSOLE_RETENTION_DAYS`）+ 审计事件 + `.env.example` + 前端 404 文案。
    **必须串行** —— 这三样东西全挤在 `main.py` 与 `settings.py` 上。
