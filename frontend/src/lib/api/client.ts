@@ -243,11 +243,13 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 // =============================================================================
 // 只包**后端真实存在、且前端此刻真的在用**的端点。不给不存在的接口写包装函数 ——
 // 那会让下游以为它们能用；也不为已经存在但还没有调用点的接口先写一个占位包装。
-// 现在是十一个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
+// 现在是十三个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
 // + 凭据那四个（`/api/providers` 与 `/api/keys` 的增删查，T7c 的凭据表单在用）
-// + `/api/targets/validate` 与 `/api/scan-templates`（T18a 的向导第 1／4 步在用）。
-// `/api/allowlist` 后端已经有了，包装留给它的第一个调用点；
-// `/api/scans`、`/ws/*` 仍然是 404，要等 T9/T13。
+// + `/api/targets/validate` 与 `/api/scan-templates`（向导第 1／4 步在用）
+// + `/api/allowlist`（T18b 第 2 步用它把命中的清单条目的授权编号摆出来）
+// + `POST /api/scans`（T18b 的提交）。
+// `/ws/*` 仍然是 404，要等 T13；`GET /api/scans/{id}` 也还没有，所以提交成功之后
+// **没有任何指向 `/scans/{id}` 的链接**。
 // =============================================================================
 
 /** `GET /api/health`。免鉴权（nginx 与 compose 的 healthcheck 要打它）。 */
@@ -541,4 +543,108 @@ export function fetchScanTemplates(signal?: AbortSignal): Promise<ScanTemplatesR
     "/api/scan-templates",
     signal === undefined ? {} : { signal },
   );
+}
+
+/**
+ * `GET /api/allowlist`。授权清单的当前状态。
+ *
+ * 后端的条目还有 `allow_private` / `allow_loopback` / `max_budget_usd` /
+ * `forbidden_paths`，**这里刻意不声明** —— 本文件第三节那条"不多解析一个字段"：
+ * 多声明的那个迟早会被下游当成契约。第 2 步用得到的只有这六个。
+ */
+export interface AllowlistEntryView {
+  readonly label: string;
+  readonly owner: string;
+  readonly authorization_ref: string;
+  readonly expires: string | null;
+  readonly hosts: readonly string[];
+  readonly cidrs: readonly string[];
+}
+
+/** `config === null` = 清单文件不在或读不出来，那时只能手填授权编号。 */
+export interface AllowlistStateResponse {
+  readonly config: {
+    readonly mode: string;
+    readonly entries: readonly AllowlistEntryView[];
+  } | null;
+  readonly effective_mode: string;
+  readonly file_present: boolean;
+  readonly stale: boolean;
+  readonly file_error: string | null;
+  readonly file_error_line: number | null;
+}
+
+export function fetchAllowlist(signal?: AbortSignal): Promise<AllowlistStateResponse> {
+  return apiFetch<AllowlistStateResponse>("/api/allowlist", signal === undefined ? {} : { signal });
+}
+
+/** 覆盖开关。与 `ValidateTargetsRequest.overrides` 同形，同样刻意只有两个。 */
+export interface ScanOverridesInput {
+  readonly allow_loopback: boolean;
+  readonly allow_private: boolean;
+}
+
+/**
+ * 授权声明。
+ *
+ * `affirmed` 后端要求**恰好 3 个、且互不相同**，取值只能是
+ * `owns_or_authorized` / `not_third_party_production` / `understands_real_attacks`
+ * （码表在 `lib/stores/wizard.ts` 的 `AFFIRMATION_IDS`）。
+ *
+ * `resolved_ips_seen` 是"声明授权时我看到的地址"：key 是 `/api/targets/validate`
+ * 回来的 `normalized.host`，value 是那条目标的 `resolved_ips[].address`。后端起扫描
+ * 前会重新解析一遍按集合比对，不一致即 `dns_changed` —— 所以**没有第 1 步的校验结果
+ * 就构造不出这个字段**，"提交前必须有本会话的校验快照"是结构性要求。
+ */
+export interface ScanAuthorizationInput {
+  readonly operator_name: string;
+  readonly authorization_ref: string;
+  readonly typed_confirmation: string;
+  readonly affirmed: readonly string[];
+  readonly multi_target_affirmed: boolean;
+  readonly resolved_ips_seen: Readonly<Record<string, readonly string[]>>;
+}
+
+/**
+ * `POST /api/scans` 的入参。字段名全是后端真名（`snake_case`），**不许改成 camelCase**。
+ *
+ * `targets` 是**用户原文**，后端自己规范化，并明写"不排序、不去重、不重排"——
+ * 逐字确认串的期望值是 `targets[0]` 规范化后的 host，重排会改变语义。
+ *
+ * `scan_mode` / `reasoning_effort` / `extra_instruction` / `credentials` 四个字段
+ * **刻意不在这个类型里**（本轮不发，缺省会走模板默认值）。后端 `extra="forbid"`
+ * 只禁多余字段、不禁缺省。
+ */
+export interface CreateScanRequest {
+  readonly vault_handle: string;
+  readonly template_id: string;
+  readonly targets: readonly string[];
+  readonly overrides: ScanOverridesInput;
+  readonly max_budget_usd: number;
+  readonly max_turns: number;
+  readonly authorization: ScanAuthorizationInput;
+}
+
+/**
+ * `202`。`status` 恒为 `"starting"`。
+ *
+ * `argv_preview` 里**没有任何凭据**（那就是它叫 preview 的原因）——
+ * Key 只经环境变量进子进程。
+ */
+export interface ScanAcceptedResponse {
+  readonly scan_id: string;
+  readonly status: string;
+  readonly ws: string;
+  readonly argv_preview: readonly string[];
+  readonly budget_usd: number;
+}
+
+/**
+ * `POST /api/scans`。**会真的起一个进程、会真的花钱。**
+ *
+ * 调用点是手写 `async` + `useState`（`components/wizard/SubmitPanel.tsx`），
+ * 刻意**不包** `useMutation` —— 不该被 query client 按自己的节奏重放。
+ */
+export function createScan(request: CreateScanRequest): Promise<ScanAcceptedResponse> {
+  return apiFetch<ScanAcceptedResponse>("/api/scans", { body: request });
 }

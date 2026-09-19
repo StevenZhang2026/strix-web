@@ -27,12 +27,6 @@
   font-weight: 600;
 }
 
-/* 还没上线的步。灰得比 `.rung` 更淡，另加删除线 —— 只靠颜色的区分在
-   打印与高对比模式下会消失。 */
-.pending .rungTitle {
-  text-decoration: line-through;
-}
-
 .number {
   display: inline-block;
   min-width: 1.6em;
@@ -55,20 +49,6 @@
   margin: 0 0 var(--s4);
   font-size: var(--fs-4);
   color: var(--ink);
-}
-
-/* ------------------------------------------------------------------ 未上线的步 */
-.pendingTitle {
-  margin: 0 0 var(--s2);
-  font-size: var(--fs-3);
-  color: var(--ink-2);
-}
-
-.pendingDetail {
-  margin: 0;
-  max-width: var(--measure);
-  font-size: var(--fs-2);
-  color: var(--ink-mute);
 }
 
 /* ------------------------------------------------------------------ 导航 */

@@ -6,6 +6,7 @@ import { t } from "@/lib/messages";
 import { isBudgetTooLow, isTurnsTooLow, useWizardStore } from "@/lib/stores/wizard";
 
 import steps from "./Steps.module.css";
+import { SubmitPanel } from "./SubmitPanel";
 
 /**
  * 第 5 步：费用上限与轮数。
@@ -77,9 +78,9 @@ export function StepBudget() {
         ) : null}
       </div>
 
-      {/* 提交随下一步上线。刻意**不画**一个禁用的提交按钮 —— 一个按不下去的按钮
-          只会让人反复去按它。 */}
-      <p className={steps.hint}>{t("wizard.stepPendingDetail")}</p>
+      {/* 整份工单在这里提交。按钮在还差东西时是禁用的，但**旁边一定有一张"还差
+          这几项"的清单** —— 一个只灰掉、不说原因的按钮才是会被反复去按的那种。 */}
+      <SubmitPanel />
     </div>
   );
 }

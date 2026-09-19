@@ -156,3 +156,9 @@
   color: var(--ink);
   overflow-wrap: anywhere;
 }
+
+/* 机器给的串（host、IP、扫描编号、argv 项）。等宽是为了"逐字确认"这件事本身：
+   逐字比对要求 l 和 1、O 和 0 看起来不一样。多个步骤都要它，所以在共用表里。 */
+.mono {
+  font-family: var(--mono);
+}

@@ -4,7 +4,54 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 本轮（2026-09-18 第三段）：**W1（留存清理接线）已收货**
+### 最新（2026-09-20）：**T18b 已实现并收货，只差人眼验收**
+
+**收货三件事**（§八.3）：① 官方闸门自己跑 —— `make lint` 干净、`make test` **1086 passed /
+0 skipped**（与基线一致：纯前端不加测试）；② **mutation 0 处**（纯前端，2026-09-16 用户拍板）；
+③ **14 个产物文件整读**，读出**三处真缺陷、全部我自己修**：
+- **改目标之后整份声明仍然勾着。** 原实现的三个 setter 只作废 `validation`，三条声明、
+  "以上 N 个均已授权"、逐字确认串都留着。唯一挡住它的是逐字确认，**而那只钉住
+  `targets[0]`** —— 改掉第二行、加一个新 host，那些勾全都还在，用户就为一份他没签过的
+  清单交了一次签字，**而这一屏存在的理由正是这件事**。现在三个 setter 一起清
+  `CLEARED_DECLARATION`（校验快照 + 逐字串 + 三个勾 + 多目标那一条）；`authorizationRef`
+  与 `operatorName` 刻意**不清**（它们是这次委托的属性，不是某一批目标的属性）。
+  **这是子 agent 自己点出来、明确留给我拍板的一处 —— 它的判断是对的。**
+- **202 的回执活在提交面板的本地 state 里** → 翻回第 3 步再回来，成功块没了、提交按钮
+  又亮了。而那个 `scan_id` 是**屏幕上唯一一份**（没有扫描列表、`GET /api/scans/{id}` 不存在，
+  丢了连 `POST /api/scans/{id}/stop` 都调不出来）。已提进 store（`accepted`，只有 202 会写，
+  没有置回 `null` 那一路 —— 一次已发起的扫描收不回来），且**不随目标变化作废**。
+- **`ButtonLink` 渲染 `<a>`，而 `Button.module.css` 的 `.btn` 既没有 `display` 也没有
+  `text-decoration`** → 行内元素吃不住上下 `padding`（与相邻文字重叠）、且全站 `a`
+  是 `text-decoration: underline`（`globals.css:205-209`）→ 一个带下划线的填色按钮。
+  已给 `.btn` 补两行（对 `<button>` 是无害的重复）。**这一处子 agent 自己也报了**，
+  它只是没权限动那个文件 —— 报出来比自己越界改对。
+另**删掉 `common.notReadyYet`**：首页三处入口现在全是真的，全仓库零引用（死文案也是死代码）。
+
+**人眼验收（用户，2026-09-20）：五处全过，零缺陷** —— ① 逐字确认串在输入框**旁边**、不在
+`placeholder` 里；② 单目标时"以上 N 个均已授权"那个框不渲染；③ 空的逐字确认框不骂人；
+④ 成功块里没有任何指向 `/scans/{id}` 的链接；⑤ 首页「开始填写工单」是按钮样式的链接。
+**这是第一次人眼验收一处都没抓到**（T18a 抓到三处）—— 差别在于那三处的教训（控件属性静默
+拦住的东西学不到、字段正交≠文案正交）这一轮在交底任务书里就写成了硬要求。
+
+### 上一轮的派发记录（2026-09-20）
+
+交底任务书 `/tmp/T18b-prompt.md`（模板 3 的实现阶段：方案由主会话写、用户拍板、另起一个子 agent
+只做实现）。**文案 45 键已由主会话写进 `zh-CN.json`**（同时删掉 `wizard.stepPending*` 两个键 ——
+`MessageKey` 由 JSON 推导，所以漏改的引用是编译错误），这一维不在子 agent 的文件列里。
+方案：7 改 + 6 新（含 `ui/ButtonLink.tsx`），估 ~600 行。**用户拍板的三件**：① 命中的白名单条目
+**只展示 + 一键填入，绝不自动预填**（授权依据是一句法律声明，静默替他填等于替他声明；而且"填了之后
+用户改过没有"是屏幕上看不出的隐式状态 —— 与 T18a 换模板重置预算同一个判据）；② 首页入口新增
+`ui/ButtonLink.tsx` 而不是给 `Button` 加 `href`；③ 不拆成两条派发。
+**核心设计**：校验快照必须提进 store —— `authorization.resolved_ips_seen`（host → 声明当时看到的地址，
+后端起扫描前重解析并按集合比对）没有它就构造不出来；且 `setRawTargets`／两个 opt-in setter **在 store
+内部**把快照置 `null`（不靠三个组件各自记得调 `invalidate()`）。
+**收货判据**：`make lint` + `make test` 基线 **1086 passed / 0 skipped**；纯前端 **mutation 0 处**；
+产物文件**整读**；然后 `docker compose -p strix-console build web api && up -d web api` 人眼看一次
+（`web`/`api` 是 `target: runtime`、没挂源码，不重建就看不到改动）。**人眼要专盯**：逐字确认串没进
+`placeholder`、单目标时那个"多目标均已授权"框不渲染、空框不骂人、成功块里没有任何指向 `/scans/{id}`
+的链接。
+
+### 上一轮（2026-09-18 第三段）：**W1（留存清理接线）已收货**
 
 **收货三件事全做完**（§八.3，一条自陈都没采信）：① 官方闸门 `make lint` 全绿、
 `make test` **1079 passed / 0 skipped**（基线 1072，+7）、`docker compose -p strix-console config -q`
@@ -1507,7 +1554,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T17 | 前端实时面板（子 agent 树 / 事件流 / 终端 / 截图 / CostMeter）| T5 T16 | `frontend/src/components/live/*` | **3**（读 T5 的约定，**不再开** frontend-design）|
 | T7c | **凭据表单（LLM Key）—— 前端**：`GET /api/providers` 的目录 → 供应商／形状／模型三选 + `api_base` + 按 `secret_keys` 渲染 N 个 `type=password`（随机 `name`，破自动填充）+ 按 `param_keys` 渲染普通文本框 → `POST /api/keys` → `vault_handle` 进 `useKeysStore`；首页「现在提供凭据」按钮从禁用改成真入口 | T5 T7b | `frontend/src/components/credentials/*` `src/lib/api/client.ts` `src/app/(app)/page.tsx` | **3** —— **2026-09-19 新增的一行，不是从任何行拆出来的**：它是一处**漏派**。T7 是纯后端；T19 的"测试账号收集"是**靶标应用**的账号不是 LLM 凭据；首页那两个按钮里「现在提供凭据」从 T5 起就是禁用的，而它不在任何任务行的文件列里。`CreateScanRequest.vault_handle` 必填 → **不做它，T18 交完仍然一次扫描都发不出去**。文案**已经全写好**（`zh-CN.json` 的 `providers.*` 12 键 + `credentials.*` 7 键，T7b 落的），本行原则上**不新增文案键**。<br>**硬约束**：Key 输入框 `type=password` + **随机 `name`**（泄漏矩阵第 11 行；与登录口令框规则**刻意相反**，理由见 T5b 下面那一行）、POST 后 `finally` 清空 React state、**绝不写日志/埋点**（明文还在作用域里，照 `LoginForm.tsx:78` 那条注释）、`vault_handle` 只经 `useKeysStore.setHandle` 落 `sessionStorage`（`src/lib/stores/keys.ts` 是全项目唯一许可碰它的文件，eslint 封死）|
 | T18a | **五步向导 —— 骨架 + 第 1／4／5 步**：`/scans/new` 路由 + 步进条 + `stores/wizard.ts` + 第 1 步目标（`POST /api/targets/validate` 预览：规范化 URL／punycode／每个 IP 的 `ip_class`／命中的白名单条目／`required_opt_in` 两个勾选）+ 第 4 步模板**最小选择器**（`GET /api/scan-templates`）+ 第 5 步预算与轮数（默认取模板 `default_*`）；**填但不提交** | T5 T12c T7c | `frontend/src/app/(app)/scans/new/page.tsx` `frontend/src/components/wizard/*` `src/lib/stores/wizard.ts` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` `src/app/(app)/page.tsx` | **3** —— 2026-09-19 由 T18 按 §三.2 拆出（整条估 700–900 行）。**文件列比原 T18 那一行宽**，已拍板：`client.ts:241-245` 自己写着"包装留给它们的第一个调用点（T18 的向导）"。**6 模板文案／费用预估／高级面板／测试账号收集全归 T19**，本行只出按码渲染的 radio。`scan_mode`／`reasoning_effort`／`extra_instruction`／`credentials[]` 四个字段 T18 一律不发（`CreateScanRequest` 的默认值刚好覆盖，`extra="forbid"` 只禁多余字段不禁缺省）<br>**2026-09-19 已实现并收货**（交底任务书 `/tmp/T18a-prompt.md`，模板 3 的实现阶段）：十个新文件 + `client.ts` 追加两个包装；官方闸门 `make lint` 干净、`make test` 1086／0 skipped，纯前端 mutation 0 处。**文件列与原计划的两处差别**：`src/app/(app)/page.tsx` 按用户拍板**没动**（首页入口留给 T18b），`zh-CN.json` 的 32 个新键由**主会话**先写（把「文案」这一维从子 agent 的文件列里拿掉）。收货读代码改掉四处、`requirement` 的渲染、以及 T18b 的三件交办都记在 §交接，本行不复述。 |
-| T18b | **五步向导 —— 第 2／3 步 + 提交**：授权依据（`authorization_ref`，命中白名单时从条目预填）+ **三个独立必勾** + **逐字输入 `targets[0].normalized.host`**（期望串灰显**在输入框旁边**、**不进 `placeholder`**）+ 多目标"以上 N 个均已授权" + 第 3 步操作人 + `POST /api/scans` + 全部错误码分支 | T18a | `frontend/src/components/wizard/*` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` | **3** —— **提交成功后就地渲染成功块**（`scan_id`／`status`／生效预算 + 可折叠 `argv_preview`）+ 一句"实时面板随 T17 上线"，**不给任何链接**：`routes/scans.py` 只有 `POST ""` 与 `POST "/{id}/stop"`，**`GET /api/scans/{id}` 不存在**，`/scans/[id]` 页面是 T17 的地盘 —— 判据沿用 `page.tsx:44-49`「点下去 404 的按钮比没有按钮更糟：它把'这一步还没做'变成'这个工具坏了'」。<br>**错误渲染**：`ApiError.code` → `ErrorNotice`；`params.reason` 在时额外去 `targetGuard.reasons.*` 取人话并高亮第 `params.index` 行，不在时退回 `errors.invalid_request`（契约出处 T12a 行）。`blocked_metadata`(403) **不给任何"覆盖"入口** |
+| T18b | **五步向导 —— 第 2／3 步 + 提交**：授权依据（`authorization_ref`，命中白名单时从条目预填）+ **三个独立必勾** + **逐字输入 `targets[0].normalized.host`**（期望串灰显**在输入框旁边**、**不进 `placeholder`**）+ 多目标"以上 N 个均已授权" + 第 3 步操作人 + `POST /api/scans` + 全部错误码分支 | T18a | `frontend/src/components/wizard/*` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` | **3** —— **提交成功后就地渲染成功块**（`scan_id`／`status`／生效预算 + 可折叠 `argv_preview`）+ 一句"实时面板随 T17 上线"，**不给任何链接**：`routes/scans.py` 只有 `POST ""` 与 `POST "/{id}/stop"`，**`GET /api/scans/{id}` 不存在**，`/scans/[id]` 页面是 T17 的地盘 —— 判据沿用 `page.tsx:44-49`「点下去 404 的按钮比没有按钮更糟：它把'这一步还没做'变成'这个工具坏了'」。<br>**错误渲染**：`ApiError.code` → `ErrorNotice`；`params.reason` 在时额外去 `targetGuard.reasons.*` 取人话并高亮第 `params.index` 行，不在时退回 `errors.invalid_request`（契约出处 T12a 行）。`blocked_metadata`(403) **不给任何"覆盖"入口**<br>**2026-09-20 已派发**（交底任务书 `/tmp/T18b-prompt.md`）。**文件列比本行原先写的宽两个**，已拍板：`src/components/ui/ButtonLink.tsx`（新，首页 CTA 要一个 `next/link` 版按钮，复用 `Button.module.css`；**不给 `Button` 加 `href`** —— 一个组件渲染两种元素比两个各自直白的组件难读）与 `src/app/(app)/page.tsx`（T18a 按用户拍板没动首页，入口就欠在这一行）。另加 `GET /api/allowlist` 的包装 `fetchAllowlist()` —— 授权依据要从命中的条目取 `authorization_ref`，而 `TargetValidation.allowlist_entry` 只回条目的 **label**，编号只在 `/api/allowlist` 的正文里。**原计划里"命中白名单时从条目预填"改成"展示条目 + 一键填入"**（用户拍板，理由在 §交接）。方案与收货判据在 §交接，本行不复述。<br>**2026-09-20 已实现并收货**：6 新 + 8 改（+ `zh-CN.json` 45 键由主会话先写）。`make lint` 干净、`make test` **1086／0 skipped**，纯前端 mutation 0 处；整读 14 个文件读出三处真缺陷（声明不随目标作废、回执活在本地 state、`.btn` 在 `<a>` 上失效），全部已修，逐条在 §交接。**人眼验收待做。** |
 | T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3** —— "费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表。读 T5／T18 的约定，**不再开** frontend-design |
 | T20 | 发现 tab | T17 | `frontend/src/components/findings/*` | **3** |
 | T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3** —— 含**新建迁移 = 表结构设计**（`agent-rules.md` §四 明列）；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |

@@ -1,0 +1,75 @@
+/* 只有提交面板用的样式。共用的表单行、动作行、键值对、等宽值在 `Steps.module.css`。
+   只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）。 */
+
+/* 与上面的预算输入之间隔一条发丝线：它是"这一步的末尾"，也是整份工单的末尾。 */
+.panel {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--rule);
+}
+
+.blockers {
+  margin: 0 0 var(--s4);
+  max-width: var(--measure);
+}
+
+.blockerList {
+  margin: var(--s2) 0 0;
+  padding-left: var(--s5);
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+}
+
+.blockerList li {
+  margin-bottom: var(--s1);
+}
+
+/* 去补凭据的链接。与 `credentials/CredentialsPanel.module.css` 的链接同色，
+   不另造一套按钮。 */
+.link {
+  margin-left: var(--s2);
+  color: var(--gate);
+}
+
+.rejection {
+  margin-top: var(--s3);
+  max-width: var(--measure);
+}
+
+/* ------------------------------------------------------------------ 成功块 */
+/* 用 `--stamp` 一组：这一块说的是"这件事已经发生了"，是一枚印记 ——
+   不是闸门（`--gate`，还没越过），也不是严重度（`--sev*`）。 */
+.accepted {
+  margin-top: var(--s5);
+  padding: var(--s4);
+  max-width: var(--measure);
+  background: var(--stamp-soft);
+  border: 1px solid var(--stamp);
+  border-radius: var(--r-box);
+}
+
+.acceptedTitle {
+  margin: 0 0 var(--s3);
+  font-size: var(--fs-4);
+  color: var(--stamp);
+}
+
+.argv {
+  margin: var(--s4) 0;
+}
+
+.argvSummary {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.argvList {
+  margin: var(--s2) 0 0;
+  padding-left: var(--s5);
+  font-size: var(--fs-2);
+  color: var(--ink);
+  /* 长参数换行而不是横向滚动：滚动条里的参数等于没显示。 */
+  overflow-wrap: anywhere;
+}

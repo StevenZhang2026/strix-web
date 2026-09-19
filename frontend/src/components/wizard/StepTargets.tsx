@@ -31,24 +31,18 @@ export function StepTargets() {
   const allowPrivate = useWizardStore((s) => s.allowPrivate);
   const setAllowPrivate = useWizardStore((s) => s.setAllowPrivate);
 
+  const validation = useWizardStore((s) => s.validation);
+  const setValidation = useWizardStore((s) => s.setValidation);
+
   const uid = useId();
 
-  // 结果**只放本地 state**，不进 store：这样离开这一步它就消失了，
-  // 屏幕上不可能留下一份"说的是另一批目标"的结论。
-  const [results, setResults] = useState<readonly TargetValidation[] | null>(null);
+  // `pending` / `failure` 留在本地 state：它们是这一步的**瞬时态**，不是工单内容。
+  // 结论本身进 store —— 第 2 步与提交面板都要消费那份快照（`stores/wizard.ts`
+  // 的 `ValidationSnapshot`）。
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<Error | null>(null);
 
   const targets = parseTargets(rawTargets);
-
-  /**
-   * 输入或勾选变了 → 上一次的结论**作废**。
-   * 留着它就是屏幕上的一句假话：那份结论是用另一批目标、另一组覆盖开关算出来的。
-   */
-  function invalidate(): void {
-    setResults(null);
-    setFailure(null);
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -62,10 +56,16 @@ export function StepTargets() {
         raw: targets,
         overrides: { allow_loopback: allowLoopback, allow_private: allowPrivate },
       });
-      setResults(response.targets);
+      // 快照里的 `targets` 就是刚才**真的发出去的**那一份 —— 提交时发的也是它。
+      setValidation({
+        targets,
+        allowLoopback,
+        allowPrivate,
+        results: response.targets,
+      });
     } catch (cause) {
-      // 失败时把旧结果也清掉，理由同 `invalidate()`。
-      setResults(null);
+      // 失败时把旧结论也清掉：留着它就是屏幕上的一句假话。
+      setValidation(null);
       setFailure(cause instanceof Error ? cause : new Error("validate_failed"));
     } finally {
       setPending(false);
@@ -90,7 +90,9 @@ export function StepTargets() {
           disabled={pending}
           onChange={(event) => {
             setRawTargets(event.target.value);
-            invalidate();
+            // 上一次的**结论**由 store 的 setter 自己作废（`stores/wizard.ts`），
+            // 这里只清这一步自己的失败提示 —— 它讲的是另一批目标的事。
+            setFailure(null);
           }}
         />
         <p className={steps.hint}>{t("wizard.targetsHint")}</p>
@@ -107,7 +109,7 @@ export function StepTargets() {
             disabled={pending}
             onChange={(event) => {
               setAllowLoopback(event.target.checked);
-              invalidate();
+              setFailure(null);
             }}
           />
           <span>{t("targetGuard.optIn.loopback")}</span>
@@ -119,7 +121,7 @@ export function StepTargets() {
             disabled={pending}
             onChange={(event) => {
               setAllowPrivate(event.target.checked);
-              invalidate();
+              setFailure(null);
             }}
           />
           <span>{t("targetGuard.optIn.private")}</span>
@@ -143,11 +145,11 @@ export function StepTargets() {
             <ErrorNotice code="internal_error" />
           )}
         </div>
-      ) : results === null ? (
+      ) : validation === null ? (
         <p className={steps.hint}>{t("wizard.notValidated")}</p>
       ) : (
         <ul className={styles.results}>
-          {results.map((item, index) => (
+          {validation.results.map((item, index) => (
             <li className={styles.result} key={`${index}-${item.raw}`}>
               <TargetResult item={item} />
             </li>

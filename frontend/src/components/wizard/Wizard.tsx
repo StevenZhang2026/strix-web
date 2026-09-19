@@ -4,7 +4,9 @@ import { Button } from "@/components/ui/Button";
 import { t, type MessageKey } from "@/lib/messages";
 import { useWizardStore } from "@/lib/stores/wizard";
 
+import { StepAuthorization } from "./StepAuthorization";
 import { StepBudget } from "./StepBudget";
+import { StepOperator } from "./StepOperator";
 import { StepTargets } from "./StepTargets";
 import { StepTemplate } from "./StepTemplate";
 import styles from "./Wizard.module.css";
@@ -21,13 +23,6 @@ const STEP_TITLES: readonly MessageKey[] = [
   "home.fieldTemplate",
   "home.fieldBudget",
 ];
-
-/**
- * 这一轮还没上线的步（授权依据、操作人，T18b 做）。
- * 它们只渲染占位，且**不拦前进** —— 本轮根本没有提交这个动作，
- * 拦在这里只会让人以为自己填错了什么。真正的闸在 T18b。
- */
-const PENDING_STEPS: readonly number[] = [2, 3];
 
 export function Wizard() {
   const step = useWizardStore((s) => s.step);
@@ -46,16 +41,11 @@ export function Wizard() {
           if (number === step) {
             classes.push(styles.current);
           }
-          if (PENDING_STEPS.includes(number)) {
-            classes.push(styles.pending);
-          }
           return (
             <li
               key={key}
               className={classes.join(" ")}
               aria-current={number === step ? "step" : undefined}
-              // 未上线的步除了灰掉，还要说出"为什么灰" —— 只灰掉会被当成"已完成"。
-              title={PENDING_STEPS.includes(number) ? t("wizard.stepPending") : undefined}
             >
               <span className={styles.number}>{number}</span>
               <span className={styles.rungTitle}>{t(key)}</span>
@@ -83,26 +73,20 @@ export function Wizard() {
   );
 }
 
-/** 分步渲染。第 2／3 步落到占位上。 */
+/** 分步渲染。五步全在，`step` 恒在 1..5，所以 `default` 只是给类型收尾。 */
 function StepBody({ step }: { readonly step: number }) {
   switch (step) {
     case 1:
       return <StepTargets />;
+    case 2:
+      return <StepAuthorization />;
+    case 3:
+      return <StepOperator />;
     case 4:
       return <StepTemplate />;
     case 5:
       return <StepBudget />;
     default:
-      return <StepPending />;
+      return null;
   }
-}
-
-/** 还没上线的那两步。刻意不画一个空表单 —— 空表单看起来像"可以填"。 */
-function StepPending() {
-  return (
-    <>
-      <p className={styles.pendingTitle}>{t("wizard.stepPending")}</p>
-      <p className={styles.pendingDetail}>{t("wizard.stepPendingDetail")}</p>
-    </>
-  );
 }

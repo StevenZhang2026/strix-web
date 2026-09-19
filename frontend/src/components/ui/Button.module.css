@@ -5,6 +5,12 @@
    基态就是填色的闸门按钮：样张里主操作是常态，次要操作才是变体。 */
 
 .btn {
+  /* 这两行只为 `ButtonLink` 而写（它渲染的是 `<a>`）：行内元素吃不住下面那条
+     上下 `padding`（会与相邻文字重叠），而全站 `a` 默认带下划线 ——
+     不加就是一个带下划线的填色按钮。对 `<button>` 是无害的重复：UA 默认就是
+     `inline-block`、也没有下划线。 */
+  display: inline-block;
+  text-decoration: none;
   font: inherit;
   font-size: var(--fs-3);
   font-weight: 600; /* 整站上限。永不用 700。 */

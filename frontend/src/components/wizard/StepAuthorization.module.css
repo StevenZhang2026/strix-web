@@ -1,0 +1,61 @@
+/* 只有第 2 步用的样式。共用的表单行、键值对、等宽值在 `Steps.module.css`。
+   只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）。 */
+
+.declared {
+  margin: 0 0 var(--s5);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin: var(--s2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 一条只读复述。凹陷底色 + 1px 发丝线：它是"给你看的"，不是"给你填的"。 */
+.card {
+  padding: var(--s3);
+  max-width: var(--measure);
+  background: var(--sheet-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-box);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-3);
+  color: var(--ink);
+}
+
+/* 「能不能扫」那一句。与状态点成对出现，不靠颜色单独表达。 */
+.verdict {
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+}
+
+.addresses {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.address {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+}
+
+/* 清单条目的 label。它是条目的名字，不是编号 —— 编号在下面那对键值里。 */
+.entryLabel {
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-3);
+  color: var(--ink);
+}

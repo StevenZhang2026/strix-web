@@ -1,6 +1,6 @@
 import { CredentialsPanel } from "@/components/credentials/CredentialsPanel";
 import { ReadyRows } from "@/components/system/ReadyRows";
-import { Button } from "@/components/ui/Button";
+import { ButtonLink } from "@/components/ui/ButtonLink";
 import { type DocketField } from "@/components/ui/Field";
 import { Panel } from "@/components/ui/Panel";
 import { t } from "@/lib/messages";
@@ -39,20 +39,19 @@ import styles from "./page.module.css";
  * 那三段条款原地保留，位置也没动 —— 它仍然紧挨在按钮上方，让人在按下去之前读到。
  *
  * =============================================================================
- * 本轮它是**骨架**，三处入口是禁用的
+ * 本页三处动态入口现在**全部是真的**
  *
- * 后端到 T5 只有四个路由：`/api/health` 与 `/api/auth/{login,logout,me}`。
- * `/api/scans`、`/api/keys`、`/ws/*` 全是 404。
+ * · 「开始填写工单」→ `/scans/new`（五步向导，T18a/T18b）；
+ * · 「现在提供凭据」→ `/credentials`（T7c，在 `CredentialsPanel` 里）；
+ * · 「本机就绪状态」→ `components/system/ReadyRows.tsx` 打 `/api/system/status`
+ *   （T3 收尾）。三态判定（只有 `true` 才画实心点，`null` 一律「未知」）与
+ *   "为什么先看会话"都在那个文件的 docstring 里，这里不复述。
  *
- * 于是「开始填写工单」（T18 的向导）与「现在提供凭据」（T7 的表单）都点不动。
- * 做成**禁用 + 一句说明**，而不是链到一个不存在的地址 ——
- * 点下去 404 的按钮比没有按钮更糟：它把"这一步还没做"变成"这个工具坏了"。
- * （同一条判据也管着 `SessionExpiredMask` 为什么本轮没有按钮。）
- *
- * 「本机就绪状态」那一栏**已经接上真值**（T3 收尾，2026-09-13）：它现在是
- * `components/system/ReadyRows.tsx` 那一片客户端叶子，打 `/api/system/status`。
- * 三态判定（只有 `true` 才画实心点，`null` 一律「未知」）与"为什么先看会话"
- * 都在那个文件的 docstring 里，这里不复述。两处按钮仍然是禁用的。
+ * 曾经这三处是**禁用 + 一句「这个入口还没接上」**，判据是"点下去 404 的按钮比没有
+ * 按钮更糟 —— 它把'这一步还没做'变成'这个工具坏了'"。那条判据仍然在岗：向导提交
+ * 成功后**没有**指向 `/scans/{id}` 的链接，因为那个页面还不存在
+ * （`components/wizard/SubmitPanel.tsx`）。同一条判据也管着 `SessionExpiredMask`
+ * 为什么没有按钮。
  */
 
 /**
@@ -138,13 +137,8 @@ export default function HomePage() {
           </section>
 
           <div className={styles.actions}>
-            <Button disabled ariaDescribedBy="start-not-ready">
-              {t("home.start")}
-            </Button>
+            <ButtonLink href="/scans/new">{t("home.start")}</ButtonLink>
             <span className={styles.hint}>{t("home.startHint")}</span>
-            <span className={styles.hint} id="start-not-ready">
-              {t("common.notReadyYet")}
-            </span>
           </div>
         </div>
       </article>
