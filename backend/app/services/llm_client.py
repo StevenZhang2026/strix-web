@@ -247,6 +247,41 @@ class VerifyOutcome:
 Verifier = Callable[[CredentialSet], Awaitable[VerifyOutcome]]
 
 
+# 归因码 ← 异常正文里的固定子串。**这是白名单，不是解析器**：只认实测见过的几种失败，
+# 其余一律落到类名。顺序无所谓（五条互斥），但**表必须是有限的** —— 见下面那个函数。
+_FAILURE_PATTERNS: tuple[tuple[str, str], ...] = (
+    # 区域多一个空格/换行就是这条。litellm 本地就拒，请求根本没发出去（实测 9 毫秒）。
+    ("Invalid AWS region format", "bad_region_format"),
+    # 密文末尾带换行 → httpx 当成 header 注入。同样是本地拒。
+    ("Forbidden control character", "control_char"),
+    # 模型名少了 litellm 的供应商前缀（`deepseek/` 之类）。2026-09-19 用户实撞过。
+    ("LLM Provider NOT provided", "missing_model_prefix"),
+    ("Invalid API Key format", "bad_key_format"),
+    # 连不上：DNS、被防火墙掐、api_base 写错都会落这里。
+    ("Cannot connect to host", "endpoint_unreachable"),
+)
+
+
+def classify_failure(exc: BaseException) -> str:
+    """一个验活异常 → 一个能记进日志的归因码。**纯函数，无 IO。**
+
+    为什么需要它：`verify()` 按契约一个字都不外带，于是"为什么没验过"连**我们自己**
+    都查不到 —— 2026-09-19 排两次真实失败时只能在容器里拿假 token 做对照实验才定位到
+    原因。这个函数把"能安全说出口的那部分"补回来。
+
+    **不变式：返回值只可能是 `_FAILURE_PATTERNS` 里的码，或 `unclassified:<类名>`。**
+    `str(exc)` 在这里只被**读**、绝不被**转发** —— litellm 的错误正文会把整段请求参数
+    回显出来，凭据就在里面（模块 docstring 第四节）。所以出口是有限集合 + 静态类名，
+    不许任何一条路径把正文的字符搬进返回值，截断版也不行。
+    """
+    message = str(exc)
+    for pattern, code in _FAILURE_PATTERNS:
+        if pattern in message:
+            return code
+    # 类名带前缀，是为了让日志里一眼看出"这条没被归类"，而不是多了一个陌生的码。
+    return f"unclassified:{type(exc).__name__}"
+
+
 async def verify(credentials: CredentialSet) -> VerifyOutcome:
     """发一次 1-token 请求，只回"成了/没成"与耗时。
 
@@ -285,14 +320,17 @@ async def verify(credentials: CredentialSet) -> VerifyOutcome:
             timeout=VERIFY_TIMEOUT_SECONDS,
             **completion_kwargs,
         )
-    except Exception:
+    except Exception as exc:
         # 捕获面故意开到最宽（`Exception`），有两条理由：
         #   ① 验活的语义就是"任何失败都只是没验过" —— 没有一种失败需要区别对待；
         #   ② litellm 会把底层 botocore/httpx/ssl 的异常原样抛出来，异常类是它的实现
         #      细节而不是契约，列举一串类名只会在下一次升级时漏掉一个，那时 500 会
         #      代替 400 出现在用户面前。
         # **exc 一个字都不许带出去**，也不许 `logger.exception` —— traceback 的每一帧
-        # 都带着上面那些 kwargs，其中就有凭据本身。
+        # 都带着上面那些 kwargs，其中就有凭据本身。日志里只多一个 `failure_kind`：
+        # `classify_failure()` 的出口是有限集合，正文与 traceback 一个字都不经过它。
+        # 响应契约不变 —— `VerifyOutcome` 仍然只有 `ok` 与 `latency_ms`，这个码**只进
+        # 日志**（要不要也回给前端当提示，是另一个决定，没做）。
         outcome = VerifyOutcome(ok=False, latency_ms=_elapsed_ms(started))
         logger.info(
             "凭据验活未通过",
@@ -300,6 +338,7 @@ async def verify(credentials: CredentialSet) -> VerifyOutcome:
                 "provider": credentials.provider,
                 "auth_shape": credentials.auth_shape,
                 "latency_ms": outcome.latency_ms,
+                "failure_kind": classify_failure(exc),
             },
         )
         return outcome

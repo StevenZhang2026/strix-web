@@ -67,7 +67,43 @@ F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。
    理由：现在没有任何一条路由会因为产物被清理而 404（媒体／报告读取路由属 T16／T21）。
    先声明一个没有生产者的机器码＋文案，正是本仓已经烧过四次的"声明了却没有任何一处强制"。
 3. **T29** 单独跑（契约断言要读整个工作区，有半成品就没意义）
-4. T18（T13 已解锁）可以插在任何位置，它与上面几条无文件重叠
+4. **前端这一串可以插在任何位置**（与 W2／T29 无文件重叠），2026-09-19 拍板的顺序是
+   **T7c（凭据表单）→ T18a（向导骨架＋目标步＋模板占位＋预算步）→ T18b（授权步＋操作人＋提交）**。
+   T7c 排最前的理由：`CreateScanRequest.vault_handle` 必填，而**全仓没有任何取 handle 的 UI**
+   （首页「现在提供凭据」至今禁用），没它向导第 5 步永远发不出去。三条同目录／同 store，**必须串行**。
+   **T7c 已实现完（2026-09-19，交底任务书 `/tmp/T7c-prompt.md` 427 行）：官方闸门 `make lint`＋`make test`
+   全绿（1079 passed / 0 skipped），纯前端 mutation 0 处，六个新文件已整读。`--workers 1` 的内存 vault
+   到这一步才第一次有前端生产者。**⚠️ 只差最后一环：**人眼过四态**（起 `web` 要**重建镜像**，它是
+   `target: runtime` 的生产镜像、没挂源码：`docker compose -p strix-console build web` 再 `up -d web`）。
+   收货读代码改掉的三处（子 agent 自陈全绿，这三处闸门抓不到）：① `/credentials` 页壳原先无条件渲染
+   `credentials.none`（"**还没有提供凭据**…"）并把 `Panel` 标题设成"现在提供凭据" —— 对已登记的人是
+   **屏幕上的假话**，现在那句话只在未登记分支里，页壳只剩标题；② `resetInputs()` 不清 `failure`，换供应商后
+   上一家的 `ErrorNotice` 还挂着；③ 提交按钮文案改用新键 `credentials.register`="登记并验活"（按下去会真的
+   拿 Key 发一次请求，动作名要说出这件事；"现在提供凭据"留给首页那个链接）。文案键共新增 3 个，都在
+   `credentials.*` 下（自由文本子树，`test_message_coverage` 不管）。
+   拍板的六件事：① `/credentials` **独立路由页**（服务端外壳 + 客户端叶子），侧栏面板只留状态 + 一个
+   文字链接（`Button` 是 `<button>` 没有 `href`，不为它造第二份按钮样式）；② 模型名是**自由文本框**，
+   `models` 只作为"可以抄的值"（`providers.modelsEmpty` 那句话已经定了这件事）；③ `verify` 恒 `true`
+   不给开关；④ 「立即忘记凭据」顺序写死 **先 `DELETE /api/keys/{h}` 再 `forget()`**，后端 404 也算成功；
+   ⑤ 刷新用 `GET /api/keys/{handle}` 恢复显示，**404 就清本地 handle**（后端重启过，内存 vault 空了）；
+   ⑥ **密文绝不进 react-query 缓存** → 提交走手写 `async`+`useState`（照 `LoginForm`），只有两个 GET 用
+   `useQuery`。**顺手发现并交给它修的一个真 bug**：`apiFetch` 结尾无条件 `await response.json()`，
+   碰上 `DELETE /api/keys/{h}` 的 **204 空正文会抛 `SyntaxError`** —— 它是全前端第一个 204 消费者。
+   **人眼验收当场撞到两次真实验活失败，两条都已归因（2026-09-19）：**
+   · `deepseek`／`single`，11 毫秒 → **模型名少了 litellm 的供应商前缀**（`LLM Provider NOT provided`，
+     请求根本没发出去）。根因是**我们自己的提示文案**没说要带前缀 → 已改写 `providers.modelHint`
+     与 `providers.modelsEmpty`（明写 `deepseek/deepseek-chat`、`openai/gpt-4o`）；用户补上前缀后
+     **这一家已验活通过**。
+   · `bedrock`／`bedrock_bearer`，30 毫秒 → **未确认**。已排除三件：TLS（容器里看签发者是**真 Amazon**，
+     没被解密）、`invoke/` 路由（后端补的，日志里 `model=invoke/us.anthropic.claude-opus-5`）、
+     `api_key` kwarg 被忽略（假 token 换回 AWS 的**真 HTTP 响应**、922 毫秒）。最匹配的是**区域格式**
+     （区域多一个空格 → litellm 本地 9 毫秒就拒）→ 前端已给所有密文与参数加 `.trim()`。
+     **排障手法值得留着**：在 `api` 容器里用**假 token** 做对照矩阵，真凭据一次都不必出现。
+   **由此加的后端小改（llm_client.py，已完成）**：`classify_failure()` —— 5 条白名单子串 → 归因码，
+   不命中回 `unclassified:<异常类名>`；只多一个日志字段 `failure_kind`，**`VerifyOutcome` 契约不变**
+   （仍只有 `ok`/`latency_ms`）。不变式是「出口 = 有限集合 ∪ 静态类名，`str(exc)` 只读不转发」，
+   新 `backend/tests/test_llm_client.py` 7 条用例 + 1 处 mutation（改兜底为回正文 → 只有该红的 2 条红）。
+   **没做**：把这个码作为 `params.hint` 回给前端让文案直接说"区域格式不对" —— 等用户单独拍板。
 
 ### 长期有效的操作事实（每次开工都用得上）
 
@@ -876,7 +912,11 @@ host 小写 + IDNA 编码（让 `例子.中国` 变 punycode，同形字攻击�
 allow_private/allow_loopback/max_budget_usd/forbidden_paths`。最长后缀优先，显式主机胜过通配。
 未命中 → `409 not_in_allowlist` + 一键"添加到授权清单"。
 
-**强制授权声明**（向导第 4 步，不可跳过、不可预填）：
+**强制授权声明**（向导**第 2 步**，不可跳过、不可预填。**2026-09-19 用户拍板**：步序以首页已实现的
+`DOCKET_FIELDS`（`frontend/src/app/(app)/page.tsx:66-76`：目标 → 授权依据 → 操作人 → 场景模板 → 费用上限）
+为准 —— 那里明写"首页的五步 = 工单的五个字段 = 向导的五步"是一条不变量，改向导就要一并改首页。
+本行原写"第 4 步"**作废**，下面那五条子要求一条不动。操作人姓名单独成第 3 步，但它与 `authorization_ref`
+同属 `ScanAuthorizationInput` 一个请求对象）：
 1. 展示**规范化后**的目标与解析出的 IP（punycode 与 split-horizon 因此可见）
 2. **三个独立必勾**复选框：拥有或已获书面授权 / 非他人生产系统或已知情同意 / 理解会真实发起攻击性请求
 3. **逐字输入**注册域名（或字面 IP）；规范化后比对；**期望字符串灰显在输入框旁边而不是 placeholder 里**
@@ -1382,7 +1422,9 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T15b | 重同步测试（吃 T15a 的夹具）| T15a | `tests/test_projector_resync.py` | 2 |
 | T16 | WS + SSE 路由、重连回放 | T14 | `routes/stream.py` | 2 |
 | T17 | 前端实时面板（子 agent 树 / 事件流 / 终端 / 截图 / CostMeter）| T5 T16 | `frontend/src/components/live/*` | **3**（读 T5 的约定，**不再开** frontend-design）|
-| T18 | 五步向导（授权步：三勾选 + 逐字输入，期望串显示在框**旁边**）| T5 T12c | `frontend/src/components/wizard/*` | **3** |
+| T7c | **凭据表单（LLM Key）—— 前端**：`GET /api/providers` 的目录 → 供应商／形状／模型三选 + `api_base` + 按 `secret_keys` 渲染 N 个 `type=password`（随机 `name`，破自动填充）+ 按 `param_keys` 渲染普通文本框 → `POST /api/keys` → `vault_handle` 进 `useKeysStore`；首页「现在提供凭据」按钮从禁用改成真入口 | T5 T7b | `frontend/src/components/credentials/*` `src/lib/api/client.ts` `src/app/(app)/page.tsx` | **3** —— **2026-09-19 新增的一行，不是从任何行拆出来的**：它是一处**漏派**。T7 是纯后端；T19 的"测试账号收集"是**靶标应用**的账号不是 LLM 凭据；首页那两个按钮里「现在提供凭据」从 T5 起就是禁用的，而它不在任何任务行的文件列里。`CreateScanRequest.vault_handle` 必填 → **不做它，T18 交完仍然一次扫描都发不出去**。文案**已经全写好**（`zh-CN.json` 的 `providers.*` 12 键 + `credentials.*` 7 键，T7b 落的），本行原则上**不新增文案键**。<br>**硬约束**：Key 输入框 `type=password` + **随机 `name`**（泄漏矩阵第 11 行；与登录口令框规则**刻意相反**，理由见 T5b 下面那一行）、POST 后 `finally` 清空 React state、**绝不写日志/埋点**（明文还在作用域里，照 `LoginForm.tsx:78` 那条注释）、`vault_handle` 只经 `useKeysStore.setHandle` 落 `sessionStorage`（`src/lib/stores/keys.ts` 是全项目唯一许可碰它的文件，eslint 封死）|
+| T18a | **五步向导 —— 骨架 + 第 1／4／5 步**：`/scans/new` 路由 + 步进条 + `stores/wizard.ts` + 第 1 步目标（`POST /api/targets/validate` 预览：规范化 URL／punycode／每个 IP 的 `ip_class`／命中的白名单条目／`required_opt_in` 两个勾选）+ 第 4 步模板**最小选择器**（`GET /api/scan-templates`）+ 第 5 步预算与轮数（默认取模板 `default_*`）；**填但不提交** | T5 T12c T7c | `frontend/src/app/(app)/scans/new/page.tsx` `frontend/src/components/wizard/*` `src/lib/stores/wizard.ts` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` `src/app/(app)/page.tsx` | **3** —— 2026-09-19 由 T18 按 §三.2 拆出（整条估 700–900 行）。**文件列比原 T18 那一行宽**，已拍板：`client.ts:241-245` 自己写着"包装留给它们的第一个调用点（T18 的向导）"。**6 模板文案／费用预估／高级面板／测试账号收集全归 T19**，本行只出按码渲染的 radio。`scan_mode`／`reasoning_effort`／`extra_instruction`／`credentials[]` 四个字段 T18 一律不发（`CreateScanRequest` 的默认值刚好覆盖，`extra="forbid"` 只禁多余字段不禁缺省）|
+| T18b | **五步向导 —— 第 2／3 步 + 提交**：授权依据（`authorization_ref`，命中白名单时从条目预填）+ **三个独立必勾** + **逐字输入 `targets[0].normalized.host`**（期望串灰显**在输入框旁边**、**不进 `placeholder`**）+ 多目标"以上 N 个均已授权" + 第 3 步操作人 + `POST /api/scans` + 全部错误码分支 | T18a | `frontend/src/components/wizard/*` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` | **3** —— **提交成功后就地渲染成功块**（`scan_id`／`status`／生效预算 + 可折叠 `argv_preview`）+ 一句"实时面板随 T17 上线"，**不给任何链接**：`routes/scans.py` 只有 `POST ""` 与 `POST "/{id}/stop"`，**`GET /api/scans/{id}` 不存在**，`/scans/[id]` 页面是 T17 的地盘 —— 判据沿用 `page.tsx:44-49`「点下去 404 的按钮比没有按钮更糟：它把'这一步还没做'变成'这个工具坏了'」。<br>**错误渲染**：`ApiError.code` → `ErrorNotice`；`params.reason` 在时额外去 `targetGuard.reasons.*` 取人话并高亮第 `params.index` 行，不在时退回 `errors.invalid_request`（契约出处 T12a 行）。`blocked_metadata`(403) **不给任何"覆盖"入口** |
 | T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3** —— "费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表。读 T5／T18 的约定，**不再开** frontend-design |
 | T20 | 发现 tab | T17 | `frontend/src/components/findings/*` | **3** |
 | T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3** —— 含**新建迁移 = 表结构设计**（`agent-rules.md` §四 明列）；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |
