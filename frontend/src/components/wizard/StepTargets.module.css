@@ -1,0 +1,85 @@
+/* 第 1 步独有的部分：校验结论列表。表单行在 `Steps.module.css`。
+   只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）。 */
+
+.results {
+  margin: var(--s4) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+/* 一条目标一张卡：多目标时"哪句话说的是哪个目标"必须一眼分得开。 */
+.result {
+  padding: var(--s3);
+  max-width: var(--measure);
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-3);
+  color: var(--ink);
+}
+
+/* 「现在就能扫 / 现在还不能扫」。刻意不给它语义色：颜色已经在点上，这里要的是
+   一句在黑白打印下也读得到的话。比原文小一号 —— 它是结论，不是标题。 */
+.verdict {
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+}
+
+/* 原文、URL、IP：等宽 + 任意处换行。多一个空格、少一个点都要看得见。 */
+.raw {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.block {
+  margin-top: var(--s3);
+}
+
+.addresses,
+.plainList {
+  margin: var(--s1) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+}
+
+.address {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s3);
+  padding: var(--s1) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* 需要被读到而不是被扫过去的一句（punycode、规范化失败原因、DNS 失败原因）。
+   不用语义色 —— 三组语义色都名副其实地被占着了（`--gate` 钱、`--stamp` 盖章、
+   `--sev*` 严重度），这里靠底色与左侧竖线做重量。 */
+.notable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  margin: var(--s3) 0 0;
+  padding: var(--s2) var(--s3);
+  background: var(--sheet-sunk);
+  border-left: 2px solid var(--rule-2);
+  font-size: var(--fs-2);
+  color: var(--ink);
+}
+
+.unicodeHost {
+  font-family: var(--mono);
+  font-size: var(--fs-3);
+  overflow-wrap: anywhere;
+}

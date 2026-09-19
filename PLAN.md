@@ -23,7 +23,7 @@ F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。
 空任务 → 红 F6；MX3 审计写入短路 → 红 F4；MX4 往 `detail` 里塞一个宿主路径 → 红 F4
 （证明"审计正文里没有路径"真的有承重）；MX5 `cancel+await` 挪到 `db.close()` 之后 → 红 F6。
 
-**当前闸门基线：`make lint` 干净、`make test` 1079 passed / 0 skipped。**
+**当前闸门基线：`make lint` 干净、`make test` 1086 passed / 0 skipped**（1079 + `test_llm_client.py` 的 7 条）。
 
 ### 交回、必须带进 W2（`ScanChannel`）的五件
 
@@ -103,13 +103,90 @@ F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。
      被忽略（假 token 换回 AWS 的**真 HTTP 响应**、922 毫秒）。旁证：区域多一个空格 → litellm 本地
      9 毫秒就拒（与 30 毫秒同量级，请求都没发出去）。
      **排障手法值得留着**：在 `api` 容器里用**假 token** 做对照矩阵，真凭据一次都不必出现。
-     **但下次不必再做了** —— `api` 已是新镜像，`failure_kind` 是活的：
+     **但下次不必再做了** —— T18a 收货时已 `build api` 把 `classify_failure` 装进镜像（原先那次重建
+     发生在写它**之前**，这行一度写错），`failure_kind` 现在是活的：
      `docker compose -p strix-console logs api | grep failure_kind` 直接给码。
    **由此加的后端小改（llm_client.py，已完成）**：`classify_failure()` —— 5 条白名单子串 → 归因码，
    不命中回 `unclassified:<异常类名>`；只多一个日志字段 `failure_kind`，**`VerifyOutcome` 契约不变**
    （仍只有 `ok`/`latency_ms`）。不变式是「出口 = 有限集合 ∪ 静态类名，`str(exc)` 只读不转发」，
    新 `backend/tests/test_llm_client.py` 7 条用例 + 1 处 mutation（改兜底为回正文 → 只有该红的 2 条红）。
    **没做**：把这个码作为 `params.hint` 回给前端让文案直接说"区域格式不对" —— 等用户单独拍板。
+   **T18a 已派发（2026-09-19，模板 3 的实现阶段，交底任务书 `/tmp/T18a-prompt.md`）。方案由主会话写、
+   用户「按推荐」逐条批准四件事**：① 首页「开始填写工单」**这一轮不开**，留给 T18b（验收靠直接敲
+   `https://127.0.0.1/scans/new`）→ `src/app/(app)/page.tsx` 因此**从文件列里去掉了**；② 预算下限 **$2**，
+   低于它就地提示且禁用「下一步」；③ 多目标 = **一个 textarea，每行一个**；④ **换模板重置**预算与轮数为
+   新模板默认值（不加"用户改过没有"的标记位）。其余方案要点：步进条按首页 `DOCKET_FIELDS` 顺序写死，
+   第 2／3 步是"随下一步上线"的占位且**不拦前进**；步号在 store **不进 URL**；`stores/wizard.ts` **纯内存**
+   （不 persist、不碰 sessionStorage），**只声明第 1／4／5 步用到的字段**；第 1 步**手动按钮触发校验、
+   不做防抖自动校验**（服务端每次都做真实 `getaddrinfo`）；`blocked_metadata`／`split_horizon` **不给覆盖入口**；
+   `recommended` 只作文字标记（不造新语义色）；**UI 不宣称任何预算上限数字**（`CONSOLE_MAX_BUDGET_CEILING_USD`
+   没有任何路由暴露，超限由 T18b 的 `budget_exceeds_ceiling` 告知）；`client.ts` 只加 `validateTargets()`
+   ＋`fetchScanTemplates()`，**不加 `createScan`**。
+   **文案由主会话先写完了（32 键：`wizard.*` 26 + `templates.*` 6，`zh-CN.json` 当前未提交）** ——
+   这是刻意把"文案"这一维从子 agent 的文件列里拿掉（§九.5）。
+   **T18a 已收货（2026-09-19）**：官方闸门 `make lint` 干净、`make test` **1086 passed / 0 skipped**（纯前端，
+   不变）；mutation 0 处（前端无测试）；**十个产物文件整读**（含四个 CSS module）；子 agent 26 次调用、
+   无压缩，预算达标。它自陈的 13 条偏离逐条看过，**四件拍板全部落对**。
+   **读代码改掉的四处**（闸门与它的自陈都抓不到）：
+   ① **第 5 步的空输入框被说成"太低了"** —— 一进这一步（还没选模板时预算/轮数都是空串）就亮两句
+   "费用上限太低了…钱花了，结论没有"，指着一个空框。判定函数保持把空串算作不合格（T18b 的提交闸要），
+   但**屏幕上只在非空时才说"太低"**。这是"屏幕上的假话"同形状的第二次（T7c 是 `credentials.none`）。
+   ② **`requirement` 没有任何消费者** → `targetGuard.requirements.*` 五个键悬空，而
+   `routes/targets.py:176-182` 加这个字段就是为了这里。已渲染，并**替掉重复的 `wizard.optInMissing`**
+   （两句话意思一样；那个键已从 JSON 删掉）。关键收益是 `allowlist_file_only`：那种目标的 `code` 是通用的
+   `not_in_allowlist`，只有 `requirement` 说得出"界面上没有这个开关，只能改清单文件"。
+   ③ **硬编码等宽字体栈三处** → `var(--mono)`。**这是我交底的漏**：任务书 §5.3 的 token 清单漏了
+   `--font`/`--mono`，它按"不许造新 token"的规矩只能写字面量 —— 下次抄 token 表照根 `CLAUDE.md` 全抄。
+   ④ `wizard.templateDefaults` "默认上限" + 数字**没有货币单位** → 改成"默认上限（美元）"。
+   **后端契约已由主会话逐字核对**（子 agent 按规矩没读 `backend/`）：`ValidateTargetsRequest`／
+   `TargetValidation`／`NormalizedTargetView`／`ResolvedAddressView`／信封字段**一字不差**，路由确实是
+   `POST /api/targets/validate` 与 `GET /api/scan-templates`。另**核了一条不变式**：`ok=false` 不可能三个
+   解释字段全空 —— `_error_code_for()` 只对 `loopback`/`private` 回 `None`，而那两种必有 `required_opt_in`，
+   所以"警告灯亮着却不说为什么"在结构上不会出现。
+   **子 agent 提出、我拍板的一处**：第 5 步是末步、没有"下一步"按钮，所以"低于下限禁用下一步"无处可禁；
+   闸以纯函数 `isBudgetTooLow()`／`isTurnsTooLow()`（在 `stores/wizard.ts`，含空串与 NaN）留给 T18b 的提交
+   按钮消费 —— **不写一条永远走不到的 `disabled`**。
+   **T18b 必须接着做的三件**：① 提交前把 `budgetUsd`／`maxTurns` 从字符串 `Number()` 成数字（store 存的是
+   输入框原文，因为 `Number("")` 是 0 会把"没填"显示成"填了 0"）；② 提交按钮 `disabled` 消费上面那两个纯
+   函数；③ 校验结果只在 `StepTargets` 的本地 state 里（离开这一步就消失，结构上防"说着另一批目标的结论"），
+   **T18b 需要 `targets[0].normalized.host` 做逐字确认串 → 要么在同一步里拿，要么显式把那一个值提进 store**。
+   **人眼验收（用户，2026-09-19）**：第 4 步选模板后第 5 步默认值**跟着变，✅**；另外**抓到两处，都已修**
+   （闸门抓不到，`web` 已重建）：
+   ⑤ **`requirement` 在目标已放行时还在说"需要你勾选…"** —— 两个框都勾上、`ok=true` 了，那句祈使句还挂着。
+   **根因是我上面第 ② 处的修复本身**：`requirement` 与 `ok` 正交（`routes/targets.py:177-178`：已满足条件的
+   目标 `ok=true` 而 `requirement` 仍非空，说的是"它**为什么**能过"），而 `targetGuard.requirements.*` 五句
+   全是"你需要做 X"的祈使句。现在 **`ok` 为真时一个字都不说**。教训：**字段正交 ≠ 文案正交** ——
+   把一个后端字段接上一句现成文案之前，先问"这句话在这个字段的每一种取值组合下都是真的吗"。
+   ⑥ **预算框填不进 1 → 下限提示永远读不到**：`min={2}` 在控件层就把值夹住了（箭头到不了、输入判
+   `:invalid`），而我们那句"费用上限太低了…"才是要让人读到的东西。**两个输入框的 `min` 都已去掉**，
+   下限只在 `isBudgetTooLow()`／`isTurnsTooLow()` 里。判据：**控件属性静默拦住的东西，用户学不到为什么。**
+   ⑦ **⑤ 那一刀切得过头了**（同一轮人眼继续看出来的）：公网目标 `12.0.0.1` 是**绿点 +「没有命中授权清单里的
+   任何条目」，没有任何一句说明"那为什么还能扫"** —— 唯一说得出口的那句正是 `requirements.none`
+   （"公网目标，当前是提示模式，可以直接扫。"），它是五句里唯一的**陈述句**，被 ⑤ 一起压掉了。
+   规则改成 `tellRequirement = requirement !== null && (!ok || requirement === "none")`：
+   `ok=false` 必说；`ok=true` 且命中清单条目 → 不说（"命中授权清单"那一行已经说了它为什么能过）；
+   `ok=true` 且 `none` → 必说。**比字面量 `"none"` 是刻意的** —— "哪一句是陈述句"只存在于文案里，
+   没有别的地方读得出来。**这一处的教训比 ⑤ 本身重要：一次"统一压掉"的修复要把枚举的每一个取值都过一遍，
+   否则就是用一条新的沉默换掉一句假话。**
+   ⑧ **占位那一屏（第 2 步）说的"随下一步上线"撞上了按钮「下一步」**：同一屏底下就有一个深色的
+   「下一步」按钮，于是"授权声明…随下一步上线"读起来像"按那个按钮就出来了"。改成"还没做，会在
+   后面一批改动里上线"。判据：**文案里不许出现与同屏控件同名的词** —— 这一句还同时出现在第 5 步底部，
+   两处都是同一个 `wizard.stepPendingDetail`。同一轮顺手补掉 ⑥ 的另一半：那句"费用上限太低了"
+   **没说下限是多少**（`turnsTooLow` 反而说了"至少填 1"），填 1 的人读完仍然不知道该填什么 →
+   改成"费用上限至少填 2 美元…"，并在 `MIN_BUDGET_USD` 上注明"改这个数要同时改那句文案"
+   （`t()` 刻意没有占位符）。判据：**一句"不合格"必须带着"合格是多少"，否则它只是拒绝，不是提示。**
+   ⑨ **「能不能扫」这一位原先只由一个色块表达**（人眼看 `dns_not_found` 那一屏时发现）：不存在的域名
+   那张卡上只有一个橙色方块 + 「这个名字解析不出来，检查有没有打错。」，**没有一句话说"所以它现在
+   过不了"**。判它错的不是审美，是 `StatusDot` 自己的 docstring —— 它 `aria-hidden`，并写明"这个点
+   旁边一定有一句成句的中文说明它是什么状态，出现只有点、没有文字的用法就是那处用法错了"，而这里
+   点旁边是**目标原文**，不是状态。修法：`.head` 里补一句 `wizard.verdictOk`／`verdictBlocked`
+   （"现在就能扫"／"现在还不能扫"，对齐 `ok` 字段自己的 docstring「现在就能扫吗」），不给语义色 ——
+   颜色已经在点上，这一句要的是黑白打印下也读得到。判据：**组件自己声明的前置条件，接它的人要当契约核一遍**
+   （与 ⑤⑦ 同源：字段／组件的约定都写在它们自己的 docstring 里，跳过它就等于自己发明一套）。
+   第 1 步已过人眼的形态：缺勾选、公网提示、**解析失败**（`dns_not_found`）。**规范化被拒**
+   （`RejectionReason`，例如 `user:pass@host`）那一支还没人看过 —— 它走的是 `reason` 而不是
+   `resolution_error`，同一处渲染、不同字段。
+   首页入口按拍板仍禁用（只能敲 URL）。
 
 ### 长期有效的操作事实（每次开工都用得上）
 
@@ -1429,7 +1506,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T16 | WS + SSE 路由、重连回放 | T14 | `routes/stream.py` | 2 |
 | T17 | 前端实时面板（子 agent 树 / 事件流 / 终端 / 截图 / CostMeter）| T5 T16 | `frontend/src/components/live/*` | **3**（读 T5 的约定，**不再开** frontend-design）|
 | T7c | **凭据表单（LLM Key）—— 前端**：`GET /api/providers` 的目录 → 供应商／形状／模型三选 + `api_base` + 按 `secret_keys` 渲染 N 个 `type=password`（随机 `name`，破自动填充）+ 按 `param_keys` 渲染普通文本框 → `POST /api/keys` → `vault_handle` 进 `useKeysStore`；首页「现在提供凭据」按钮从禁用改成真入口 | T5 T7b | `frontend/src/components/credentials/*` `src/lib/api/client.ts` `src/app/(app)/page.tsx` | **3** —— **2026-09-19 新增的一行，不是从任何行拆出来的**：它是一处**漏派**。T7 是纯后端；T19 的"测试账号收集"是**靶标应用**的账号不是 LLM 凭据；首页那两个按钮里「现在提供凭据」从 T5 起就是禁用的，而它不在任何任务行的文件列里。`CreateScanRequest.vault_handle` 必填 → **不做它，T18 交完仍然一次扫描都发不出去**。文案**已经全写好**（`zh-CN.json` 的 `providers.*` 12 键 + `credentials.*` 7 键，T7b 落的），本行原则上**不新增文案键**。<br>**硬约束**：Key 输入框 `type=password` + **随机 `name`**（泄漏矩阵第 11 行；与登录口令框规则**刻意相反**，理由见 T5b 下面那一行）、POST 后 `finally` 清空 React state、**绝不写日志/埋点**（明文还在作用域里，照 `LoginForm.tsx:78` 那条注释）、`vault_handle` 只经 `useKeysStore.setHandle` 落 `sessionStorage`（`src/lib/stores/keys.ts` 是全项目唯一许可碰它的文件，eslint 封死）|
-| T18a | **五步向导 —— 骨架 + 第 1／4／5 步**：`/scans/new` 路由 + 步进条 + `stores/wizard.ts` + 第 1 步目标（`POST /api/targets/validate` 预览：规范化 URL／punycode／每个 IP 的 `ip_class`／命中的白名单条目／`required_opt_in` 两个勾选）+ 第 4 步模板**最小选择器**（`GET /api/scan-templates`）+ 第 5 步预算与轮数（默认取模板 `default_*`）；**填但不提交** | T5 T12c T7c | `frontend/src/app/(app)/scans/new/page.tsx` `frontend/src/components/wizard/*` `src/lib/stores/wizard.ts` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` `src/app/(app)/page.tsx` | **3** —— 2026-09-19 由 T18 按 §三.2 拆出（整条估 700–900 行）。**文件列比原 T18 那一行宽**，已拍板：`client.ts:241-245` 自己写着"包装留给它们的第一个调用点（T18 的向导）"。**6 模板文案／费用预估／高级面板／测试账号收集全归 T19**，本行只出按码渲染的 radio。`scan_mode`／`reasoning_effort`／`extra_instruction`／`credentials[]` 四个字段 T18 一律不发（`CreateScanRequest` 的默认值刚好覆盖，`extra="forbid"` 只禁多余字段不禁缺省）|
+| T18a | **五步向导 —— 骨架 + 第 1／4／5 步**：`/scans/new` 路由 + 步进条 + `stores/wizard.ts` + 第 1 步目标（`POST /api/targets/validate` 预览：规范化 URL／punycode／每个 IP 的 `ip_class`／命中的白名单条目／`required_opt_in` 两个勾选）+ 第 4 步模板**最小选择器**（`GET /api/scan-templates`）+ 第 5 步预算与轮数（默认取模板 `default_*`）；**填但不提交** | T5 T12c T7c | `frontend/src/app/(app)/scans/new/page.tsx` `frontend/src/components/wizard/*` `src/lib/stores/wizard.ts` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` `src/app/(app)/page.tsx` | **3** —— 2026-09-19 由 T18 按 §三.2 拆出（整条估 700–900 行）。**文件列比原 T18 那一行宽**，已拍板：`client.ts:241-245` 自己写着"包装留给它们的第一个调用点（T18 的向导）"。**6 模板文案／费用预估／高级面板／测试账号收集全归 T19**，本行只出按码渲染的 radio。`scan_mode`／`reasoning_effort`／`extra_instruction`／`credentials[]` 四个字段 T18 一律不发（`CreateScanRequest` 的默认值刚好覆盖，`extra="forbid"` 只禁多余字段不禁缺省）<br>**2026-09-19 已实现并收货**（交底任务书 `/tmp/T18a-prompt.md`，模板 3 的实现阶段）：十个新文件 + `client.ts` 追加两个包装；官方闸门 `make lint` 干净、`make test` 1086／0 skipped，纯前端 mutation 0 处。**文件列与原计划的两处差别**：`src/app/(app)/page.tsx` 按用户拍板**没动**（首页入口留给 T18b），`zh-CN.json` 的 32 个新键由**主会话**先写（把「文案」这一维从子 agent 的文件列里拿掉）。收货读代码改掉四处、`requirement` 的渲染、以及 T18b 的三件交办都记在 §交接，本行不复述。 |
 | T18b | **五步向导 —— 第 2／3 步 + 提交**：授权依据（`authorization_ref`，命中白名单时从条目预填）+ **三个独立必勾** + **逐字输入 `targets[0].normalized.host`**（期望串灰显**在输入框旁边**、**不进 `placeholder`**）+ 多目标"以上 N 个均已授权" + 第 3 步操作人 + `POST /api/scans` + 全部错误码分支 | T18a | `frontend/src/components/wizard/*` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` | **3** —— **提交成功后就地渲染成功块**（`scan_id`／`status`／生效预算 + 可折叠 `argv_preview`）+ 一句"实时面板随 T17 上线"，**不给任何链接**：`routes/scans.py` 只有 `POST ""` 与 `POST "/{id}/stop"`，**`GET /api/scans/{id}` 不存在**，`/scans/[id]` 页面是 T17 的地盘 —— 判据沿用 `page.tsx:44-49`「点下去 404 的按钮比没有按钮更糟：它把'这一步还没做'变成'这个工具坏了'」。<br>**错误渲染**：`ApiError.code` → `ErrorNotice`；`params.reason` 在时额外去 `targetGuard.reasons.*` 取人话并高亮第 `params.index` 行，不在时退回 `errors.invalid_request`（契约出处 T12a 行）。`blocked_metadata`(403) **不给任何"覆盖"入口** |
 | T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3** —— "费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表。读 T5／T18 的约定，**不再开** frontend-design |
 | T20 | 发现 tab | T17 | `frontend/src/components/findings/*` | **3** |

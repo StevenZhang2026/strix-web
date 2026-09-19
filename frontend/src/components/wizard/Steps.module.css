@@ -1,0 +1,158 @@
+/* 第 1／4／5 步共用的表单行。类名与 `credentials/CredentialForm.module.css` 一致
+   （`.row/.label/.input/.hint`）—— 三步的表单行长得一样，不放三份。
+   只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）。 */
+
+/* 一行 = 标签在上、控件在下、说明再下。**不做左右两列**：提示都是整句中文，
+   挤在右列会把行长压到十几个字。 */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  margin-bottom: var(--s5);
+}
+
+.label {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  max-width: var(--measure);
+  padding: var(--s2) var(--s3);
+  font: inherit;
+  font-size: var(--fs-3);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-act);
+}
+
+/* 多目标输入。等宽字体 + 不可横向拉伸：URL 逐行对齐才看得出有没有多一个空格。 */
+.textarea {
+  min-height: 7em;
+  resize: vertical;
+  font-family: var(--mono);
+}
+
+.input:disabled,
+.textarea:disabled {
+  background: var(--sheet-sunk);
+  color: var(--ink-mute);
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+  max-width: var(--measure);
+}
+
+/* 需要用户当场纠正的一句话（预算低于下限、轮数低于 1）。
+   用 `--gate`：这条说的正是"钱会怎么花"，与语义色的用途同轴，不串到
+   `--stamp`（已盖章）或 `--sev*`（发现严重度）上。 */
+.warn {
+  margin: 0;
+  max-width: var(--measure);
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--gate);
+}
+
+/* ------------------------------------------------------------------ 勾选与单选 */
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0 0 var(--s5);
+  padding: 0;
+  border: 0;
+}
+
+.check {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+  color: var(--ink);
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0 0 var(--s4);
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s2);
+  align-items: start;
+  padding: var(--s3);
+  max-width: var(--measure);
+  background: var(--sheet-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-act);
+}
+
+.choiceTitle {
+  display: block;
+  font-size: var(--fs-3);
+  color: var(--ink);
+}
+
+.choiceMeta {
+  display: block;
+  margin-top: var(--s1);
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 「推荐」只是一个文字标记：**不给它造新语义色**，三组语义色都名副其实地被占着了。 */
+.badge {
+  margin-left: var(--s2);
+  padding: 0 var(--s1);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  color: var(--ink-2);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+}
+
+/* ------------------------------------------------------------------ 动作与错误 */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.failure {
+  margin-top: var(--s4);
+}
+
+/* ------------------------------------------------------------------ 键值对 */
+.pairs {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s1) var(--s3);
+  margin: 0;
+}
+
+.pairKey {
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+.pairValue {
+  margin: 0;
+  font-size: var(--fs-2);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}

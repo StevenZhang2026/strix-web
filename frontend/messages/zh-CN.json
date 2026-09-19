@@ -77,6 +77,49 @@
     "recentEmpty": "还没有扫描记录。填完一份工单就会出现在这里。"
   },
 
+  "wizard": {
+    "heading": "填写授权工单",
+    "lede": "五步填完就能发起扫描。每一步都可以回头改，草稿只在这个页面里 —— 刷新就没了。",
+    "stepPending": "这一步还没上线",
+    "stepPendingDetail": "授权声明、操作人这两步和提交按钮还没做，会在后面一批改动里上线。现在可以先把目标、测试范围和费用上限填好，看看校验结果对不对。",
+    "targetsHint": "每行一个。网址、域名或字面 IP 都行；没写 http:// 的按 https:// 处理。",
+    "validate": "校验目标",
+    "validating": "正在校验",
+    "validateHint": "校验会在这台机器上把每个目标真的解析一遍（DNS 查询），所以要你按一下，不是边打字边查。",
+    "notValidated": "这些目标还没校验过。",
+    "verdictOk": "现在就能扫",
+    "verdictBlocked": "现在还不能扫",
+    "normalizedLabel": "规范化后",
+    "punycodeNote": "这个域名含非 ASCII 字符，已转成 punycode。请确认它就是你要测的那个域名 —— 看起来一样的域名可以是两个不同的域名。",
+    "resolvedLabel": "解析到的地址",
+    "allowlistLabel": "命中授权清单",
+    "allowlistMissing": "没有命中授权清单里的任何条目。",
+    "optInHeading": "需要你确认的事",
+    "modes": {
+      "quick": "快速",
+      "standard": "标准",
+      "deep": "深入"
+    },
+    "templateRecommended": "推荐",
+    "templateDefaults": "默认上限（美元）",
+    "templateTurns": "默认轮数",
+    "templateResetNote": "换模板会把下一步的费用上限和轮数重置成新模板的默认值。",
+    "budgetHint": "单位是美元，花的是你自己的模型凭据。",
+    "budgetTooLow": "费用上限至少填 2 美元。一次模型调用就可能花掉两三毛钱，上限比这还低等于只跑一轮 —— 钱花了，结论没有。",
+    "turnsLabel": "轮数上限",
+    "turnsHint": "一轮 = agent 的一次思考加一次工具调用。到达轮数上限也会停。",
+    "turnsTooLow": "轮数至少填 1。"
+  },
+
+  "templates": {
+    "quick_triage": "快速体检",
+    "full_review": "全面体检",
+    "deep_audit": "深度审计",
+    "auth_and_access": "只测登录与权限",
+    "api_surface": "API 接口测试",
+    "pre_release_recheck": "上线前复检"
+  },
+
   "credentials": {
     "panelTitle": "模型凭据",
     "providerLabel": "供应商",

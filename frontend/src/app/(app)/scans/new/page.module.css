@@ -1,0 +1,18 @@
+/* 发起扫描页的外壳。只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）。 */
+
+.page {
+  padding: var(--s6) 0;
+}
+
+.pageTitle {
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-5);
+  color: var(--ink);
+}
+
+.lede {
+  margin: 0 0 var(--s6);
+  max-width: var(--measure);
+  font-size: var(--fs-3);
+  color: var(--ink-2);
+}

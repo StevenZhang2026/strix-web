@@ -1,0 +1,82 @@
+/* 向导外框：步进条 + 当前步的容器 + 导航。
+   只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）—— 层次靠 1px 发丝线
+   与底色明度差。 */
+
+/* 步进条。横排、可换行；不做连线箭头 —— 那会在窄屏上第一个断掉。 */
+.rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin: 0 0 var(--s5);
+  padding: 0 0 var(--s3);
+  border-bottom: 1px solid var(--rule);
+  list-style: none;
+}
+
+.rung {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+/* 当前步：唯一一个用满墨色的 —— 一眼能数到"我在第几步"。 */
+.current {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 还没上线的步。灰得比 `.rung` 更淡，另加删除线 —— 只靠颜色的区分在
+   打印与高对比模式下会消失。 */
+.pending .rungTitle {
+  text-decoration: line-through;
+}
+
+.number {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 var(--s1);
+  text-align: center;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-box);
+  font-variant-numeric: tabular-nums;
+}
+
+.current .number {
+  border-color: var(--ink-2);
+}
+
+.body {
+  padding: 0;
+}
+
+.stepTitle {
+  margin: 0 0 var(--s4);
+  font-size: var(--fs-4);
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------------ 未上线的步 */
+.pendingTitle {
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-3);
+  color: var(--ink-2);
+}
+
+.pendingDetail {
+  margin: 0;
+  max-width: var(--measure);
+  font-size: var(--fs-2);
+  color: var(--ink-mute);
+}
+
+/* ------------------------------------------------------------------ 导航 */
+.nav {
+  display: flex;
+  gap: var(--s3);
+  align-items: center;
+  margin-top: var(--s6);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--rule);
+}

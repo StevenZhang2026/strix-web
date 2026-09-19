@@ -243,10 +243,11 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 // =============================================================================
 // 只包**后端真实存在、且前端此刻真的在用**的端点。不给不存在的接口写包装函数 ——
 // 那会让下游以为它们能用；也不为已经存在但还没有调用点的接口先写一个占位包装。
-// 现在是九个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
-// + 凭据那四个（`/api/providers` 与 `/api/keys` 的增删查，T7c 的凭据表单在用）。
-// `/api/targets`、`/api/allowlist` 后端已经有了，包装留给它们的第一个
-// 调用点（T18 的向导）；`/api/scans`、`/ws/*` 仍然是 404，要等 T9/T13。
+// 现在是十一个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
+// + 凭据那四个（`/api/providers` 与 `/api/keys` 的增删查，T7c 的凭据表单在用）
+// + `/api/targets/validate` 与 `/api/scan-templates`（T18a 的向导第 1／4 步在用）。
+// `/api/allowlist` 后端已经有了，包装留给它的第一个调用点；
+// `/api/scans`、`/ws/*` 仍然是 404，要等 T9/T13。
 // =============================================================================
 
 /** `GET /api/health`。免鉴权（nginx 与 compose 的 healthcheck 要打它）。 */
@@ -437,4 +438,107 @@ export function fetchKeyState(handle: string, signal?: AbortSignal): Promise<Key
  */
 export function dropKey(handle: string): Promise<void> {
   return apiFetch<void>(`/api/keys/${encodeURIComponent(handle)}`, { method: "DELETE" });
+}
+
+/**
+ * `POST /api/targets/validate` 的入参。
+ *
+ * `overrides` 里只有这两个开关，**刻意没有第三个**：`blocked_metadata` 与
+ * `split_horizon` 在后端是永久硬拦、不可覆盖的（CLAUDE.md §安全不变式），
+ * 给它们留一个字段就等于在契约上暗示"有办法绕过"。
+ */
+export interface ValidateTargetsRequest {
+  /** 用户输入的原文，每行一条，已 `trim()` 且去掉空行。至少 1 条。 */
+  readonly raw: readonly string[];
+  readonly overrides: {
+    readonly allow_loopback: boolean;
+    readonly allow_private: boolean;
+  };
+}
+
+/** 规范化结果。字段名全是后端真名（`snake_case`），**不许改成 camelCase**。 */
+export interface TargetNormalized {
+  readonly url: string;
+  readonly scheme: string;
+  /** punycode 之后的 host（ASCII）—— 真正被请求的那个名字。 */
+  readonly host: string;
+  /** 给人看的 host。与 `host` 不同时说明发生了 punycode 转换。 */
+  readonly host_unicode: string;
+  readonly port: number | null;
+  readonly path: string;
+  readonly is_ip: boolean;
+  readonly punycode_applied: boolean;
+}
+
+/** 一个解析到的地址。`rule` 是后端命中的分类规则，原文展示。 */
+export interface ResolvedIp {
+  readonly address: string;
+  /** 4 或 6。 */
+  readonly version: number;
+  readonly ip_class: string;
+  readonly rule: string;
+  readonly embedded_ipv4: string | null;
+}
+
+/** 一条目标的校验结论。字段与后端 `TargetValidation` 逐字一致。 */
+export interface TargetValidation {
+  readonly raw: string;
+  readonly ok: boolean;
+  readonly normalized: TargetNormalized | null;
+  readonly kind: string | null;
+  readonly resolved_ips: readonly ResolvedIp[];
+  readonly ip_class: string | null;
+  readonly allowlist_entry: string | null;
+  readonly requirement: string | null;
+  readonly overridable: boolean;
+  /** 非空 = 还缺勾选。元素取 `targetGuard.optIn.<值>`。 */
+  readonly required_opt_in: readonly string[];
+  /** 被护栏拒时的机器码，交给 `<ErrorNotice code={code} />`。 */
+  readonly code: string | null;
+  readonly reason: string | null;
+  readonly resolution_error: string | null;
+  readonly note_code: string | null;
+}
+
+export interface ValidateTargetsResponse {
+  readonly targets: readonly TargetValidation[];
+}
+
+/**
+ * `POST /api/targets/validate`。**会做真实 `getaddrinfo`**，所以调用点是一个
+ * 明确的按钮，不是输入防抖 —— 见 `components/wizard/StepTargets.tsx`。
+ */
+export function validateTargets(
+  request: ValidateTargetsRequest,
+  signal?: AbortSignal,
+): Promise<ValidateTargetsResponse> {
+  return apiFetch<ValidateTargetsResponse>("/api/targets/validate", {
+    body: request,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * `GET /api/scan-templates`。六个模板的目录，后端常量。
+ *
+ * 默认预算与轮数**只能**从这里来：前端硬编码那张表就会在改后端常量时静默漂移。
+ */
+export interface ScanTemplateView {
+  readonly template_id: string;
+  /** `"quick" | "standard" | "deep"`，取 `wizard.modes.<值>`。 */
+  readonly scan_mode: string;
+  readonly default_budget_usd: number;
+  readonly default_max_turns: number;
+  readonly recommended: boolean;
+}
+
+export interface ScanTemplatesResponse {
+  readonly templates: readonly ScanTemplateView[];
+}
+
+export function fetchScanTemplates(signal?: AbortSignal): Promise<ScanTemplatesResponse> {
+  return apiFetch<ScanTemplatesResponse>(
+    "/api/scan-templates",
+    signal === undefined ? {} : { signal },
+  );
 }
