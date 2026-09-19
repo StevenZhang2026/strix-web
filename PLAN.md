@@ -73,8 +73,10 @@ F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。
    （首页「现在提供凭据」至今禁用），没它向导第 5 步永远发不出去。三条同目录／同 store，**必须串行**。
    **T7c 已实现完（2026-09-19，交底任务书 `/tmp/T7c-prompt.md` 427 行）：官方闸门 `make lint`＋`make test`
    全绿（1079 passed / 0 skipped），纯前端 mutation 0 处，六个新文件已整读。`--workers 1` 的内存 vault
-   到这一步才第一次有前端生产者。**⚠️ 只差最后一环：**人眼过四态**（起 `web` 要**重建镜像**，它是
-   `target: runtime` 的生产镜像、没挂源码：`docker compose -p strix-console build web` 再 `up -d web`）。
+   到这一步才第一次有前端生产者。**`web`／`api` 已重建并起来，两家供应商都已在真界面上验活通过
+   （2026-09-19）**；`web` 与 `api` 都是 `target: runtime`、**没挂源码**，改完必须
+   `docker compose -p strix-console build web api` 再 `up -d web api`，否则跑的还是旧镜像
+   （重启 `api` 会清空内存 vault → 已登记的凭据要重填一次，这是预期行为不是 bug）。
    收货读代码改掉的三处（子 agent 自陈全绿，这三处闸门抓不到）：① `/credentials` 页壳原先无条件渲染
    `credentials.none`（"**还没有提供凭据**…"）并把 `Panel` 标题设成"现在提供凭据" —— 对已登记的人是
    **屏幕上的假话**，现在那句话只在未登记分支里，页壳只剩标题；② `resetInputs()` 不清 `failure`，换供应商后
@@ -94,11 +96,15 @@ F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。
      请求根本没发出去）。根因是**我们自己的提示文案**没说要带前缀 → 已改写 `providers.modelHint`
      与 `providers.modelsEmpty`（明写 `deepseek/deepseek-chat`、`openai/gpt-4o`）；用户补上前缀后
      **这一家已验活通过**。
-   · `bedrock`／`bedrock_bearer`，30 毫秒 → **未确认**。已排除三件：TLS（容器里看签发者是**真 Amazon**，
-     没被解密）、`invoke/` 路由（后端补的，日志里 `model=invoke/us.anthropic.claude-opus-5`）、
-     `api_key` kwarg 被忽略（假 token 换回 AWS 的**真 HTTP 响应**、922 毫秒）。最匹配的是**区域格式**
-     （区域多一个空格 → litellm 本地 9 毫秒就拒）→ 前端已给所有密文与参数加 `.trim()`。
+   · `bedrock`／`bedrock_bearer`，30 毫秒 → **归因是首尾空白（最可能在区域框），已由修复验证、但不是
+     直接证据**：重建镜像（`.trim()` 在场）之后同一个人再填一次就通过了。剩下的不确定只有一件 ——
+     没法排除他同时也重打了内容。已排除的三件：TLS（容器里看签发者是**真 Amazon**，没被解密）、
+     `invoke/` 路由（后端补的，日志里 `model=invoke/us.anthropic.claude-opus-5`）、`api_key` kwarg
+     被忽略（假 token 换回 AWS 的**真 HTTP 响应**、922 毫秒）。旁证：区域多一个空格 → litellm 本地
+     9 毫秒就拒（与 30 毫秒同量级，请求都没发出去）。
      **排障手法值得留着**：在 `api` 容器里用**假 token** 做对照矩阵，真凭据一次都不必出现。
+     **但下次不必再做了** —— `api` 已是新镜像，`failure_kind` 是活的：
+     `docker compose -p strix-console logs api | grep failure_kind` 直接给码。
    **由此加的后端小改（llm_client.py，已完成）**：`classify_failure()` —— 5 条白名单子串 → 归因码，
    不命中回 `unclassified:<异常类名>`；只多一个日志字段 `failure_kind`，**`VerifyOutcome` 契约不变**
    （仍只有 `ok`/`latency_ms`）。不变式是「出口 = 有限集合 ∪ 静态类名，`str(exc)` 只读不转发」，
