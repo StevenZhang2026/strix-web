@@ -79,8 +79,11 @@
 
   "credentials": {
     "panelTitle": "模型凭据",
+    "providerLabel": "供应商",
+    "shapeLabel": "凭据形状",
     "none": "还没有提供凭据。凭据只存在于内存中，后端一重启就要重新提供 —— 这是「绝不落盘」的直接代价。",
     "provide": "现在提供凭据",
+    "register": "登记并验活",
     "forget": "立即忘记凭据",
     "maskedLabel": "已登记",
     "verifying": "正在验活",
@@ -459,8 +462,8 @@
       "AWS_REGION_NAME": "例如 us-east-1。区域必填 —— 即便用 bearer token，也要靠它拼出接入地址。"
     },
     "modelLabel": "模型名",
-    "modelHint": "带 bedrock/ 前缀不用自己写，我们按凭据形状补。",
-    "modelsEmpty": "这一家我们没有实测过的模型名可以给你抄，照它的文档填。",
+    "modelHint": "只有 Bedrock 的前缀不用自己写（我们按凭据形状补 bedrock/ 或 bedrock/invoke/）。其余几家必须带供应商前缀，例如 deepseek/deepseek-chat、openai/gpt-4o —— 少了前缀，请求根本发不出去。",
+    "modelsEmpty": "这一家我们没有实测过的模型名可以给你抄。照它的文档填，并在前面补上供应商前缀。",
     "apiBaseLabel": "自定义接入地址",
     "apiBaseHint": "留空即用官方地址。只有自建网关才需要填。",
     "verifyingLabel": "正在用这组凭据发一次最小请求…"
@@ -484,7 +487,7 @@
     "ceiling_usd": "本机允许的最大值",
     "provider": "模型服务",
     "auth_shape": "凭据形状",
-    "latency_ms": "耗时",
+    "latency_ms": "耗时（毫秒）",
     "key_name": "多余的一项",
     "limit": "同时允许的扫描数",
     "running_scan_id": "正在跑的扫描",

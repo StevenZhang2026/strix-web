@@ -230,6 +230,12 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     throw new ApiError(response.status, code, traceId, params);
   }
 
+  // `204 No Content` 没有正文，`response.json()` 会抛 `SyntaxError`。
+  // 第一个 204 是 `DELETE /api/keys/{handle}`，调用方把 `T` 写成 `void`。
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   // 这里是整个前端**唯一**信任后端形状的地方。见文件顶部第三节（不引 zod 的理由）。
   return (await response.json()) as T;
 }
@@ -237,8 +243,9 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 // =============================================================================
 // 只包**后端真实存在、且前端此刻真的在用**的端点。不给不存在的接口写包装函数 ——
 // 那会让下游以为它们能用；也不为已经存在但还没有调用点的接口先写一个占位包装。
-// 现在是五个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）。
-// `/api/keys`、`/api/targets`、`/api/allowlist` 后端已经有了，包装留给它们的第一个
+// 现在是九个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
+// + 凭据那四个（`/api/providers` 与 `/api/keys` 的增删查，T7c 的凭据表单在用）。
+// `/api/targets`、`/api/allowlist` 后端已经有了，包装留给它们的第一个
 // 调用点（T18 的向导）；`/api/scans`、`/ws/*` 仍然是 404，要等 T9/T13。
 // =============================================================================
 
@@ -338,4 +345,96 @@ export function fetchSystemStatus(signal?: AbortSignal): Promise<SystemStatusSum
     "/api/system/status",
     signal === undefined ? {} : { signal },
   );
+}
+
+/**
+ * `GET /api/providers`。供应商 × 凭据形状的目录，进程内常量、无 IO、恒 200。
+ *
+ * `secret_keys` 与 `param_keys` **分开**给：前者渲染成 `type=password`（凭据），
+ * 后者渲染成普通文本框（区域）。合成一个列表就没法区分了
+ * （`backend/app/routes/providers.py` 的原话）。
+ */
+export interface ShapeView {
+  readonly auth_shape: string;
+  readonly secret_keys: readonly string[];
+  readonly param_keys: readonly string[];
+}
+
+export interface ProviderView {
+  readonly provider: string;
+  readonly shapes: readonly ShapeView[];
+  /** 实测过的模型名。可能是空的 —— 那时前端只提示"照它的文档填"。 */
+  readonly models: readonly string[];
+  readonly api_base_allowed: boolean;
+}
+
+export interface ProvidersResponse {
+  readonly providers: readonly ProviderView[];
+}
+
+export function fetchProviders(signal?: AbortSignal): Promise<ProvidersResponse> {
+  return apiFetch<ProvidersResponse>("/api/providers", signal === undefined ? {} : { signal });
+}
+
+/**
+ * `POST /api/keys` 的入参。**这是全前端唯一一处明文密钥出现在数据结构里的地方**，
+ * 而且只在一次 `await` 的生命周期内：调用方在 `finally` 里清掉自己的 state，
+ * 这个对象随之不可达。刻意**不给它加 react-query 的 mutation 包装** ——
+ * 那会把带密文的 variables 交给 query client 持有一段不确定的时间。
+ */
+export interface RegisterKeyRequest {
+  readonly provider: string;
+  readonly auth_shape: string;
+  /** 模型名。后端按形状补前缀。 */
+  readonly strix_llm: string;
+  /** 留空就发 `null`，不发空串。 */
+  readonly api_base: string | null;
+  /** 键必须恰好是所选形状的 `secret_keys`。 */
+  readonly secrets: Readonly<Record<string, string>>;
+  /** 键必须恰好是所选形状的 `param_keys`。 */
+  readonly params: Readonly<Record<string, string>>;
+  /**
+   * 类型写死 `true`：不验活的 handle 只会把"凭据填错了"推迟到扫描启动那一刻，
+   * 那时用户已经签过授权工单了。不给这件事留一个开关。
+   */
+  readonly verify: true;
+}
+
+/** `201`。**没有任何字段能推回明文** —— `labels` 是后端算好的掩码。 */
+export interface KeyRegisteredResponse {
+  readonly vault_handle: string;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly verified: boolean;
+  readonly verify_latency_ms: number | null;
+}
+
+export function registerKey(request: RegisterKeyRequest): Promise<KeyRegisteredResponse> {
+  return apiFetch<KeyRegisteredResponse>("/api/keys", { body: request });
+}
+
+/** `GET /api/keys/{handle}`。刷新页面后用它恢复"当前用的是哪个凭据"。 */
+export interface KeyStateResponse {
+  readonly provider: string;
+  readonly auth_shape: string;
+  readonly strix_llm: string;
+  readonly api_base: string | null;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly params: Readonly<Record<string, string>>;
+}
+
+export function fetchKeyState(handle: string, signal?: AbortSignal): Promise<KeyStateResponse> {
+  return apiFetch<KeyStateResponse>(
+    `/api/keys/${encodeURIComponent(handle)}`,
+    signal === undefined ? {} : { signal },
+  );
+}
+
+/**
+ * `DELETE /api/keys/{handle}` → **204 无正文**，所以返回 `Promise<void>`。
+ *
+ * 调用顺序是写死的：**先请后端清，成功后才 `useKeysStore().forget()`**。
+ * 反了的话后端失败时本地已经没有 handle 可重试。`404` 也算成功（handle 早就不在了）。
+ */
+export function dropKey(handle: string): Promise<void> {
+  return apiFetch<void>(`/api/keys/${encodeURIComponent(handle)}`, { method: "DELETE" });
 }

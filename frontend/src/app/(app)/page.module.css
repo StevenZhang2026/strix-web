@@ -202,17 +202,6 @@
   max-width: 26em;
 }
 
-.credentialsNote {
-  font-size: var(--fs-3);
-  color: var(--ink-mute);
-  max-width: 26em;
-  margin-bottom: var(--s3);
-}
-
-/* 侧栏面板里的按钮下面也要能放一句说明。 */
-.panelActions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s2);
-}
+/* `.credentialsNote` / `.panelActions` 随 T7c 删掉了：那一片已经整块换成
+   `components/credentials/CredentialsPanel.tsx`，样式跟着搬进它自己的
+   module.css（值没有改）。`grep -n` 确认过全仓无其它引用。 */

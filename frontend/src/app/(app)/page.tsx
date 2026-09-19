@@ -1,8 +1,8 @@
+import { CredentialsPanel } from "@/components/credentials/CredentialsPanel";
 import { ReadyRows } from "@/components/system/ReadyRows";
 import { Button } from "@/components/ui/Button";
 import { type DocketField } from "@/components/ui/Field";
 import { Panel } from "@/components/ui/Panel";
-import { StatusDot } from "@/components/ui/StatusDot";
 import { t } from "@/lib/messages";
 
 import styles from "./page.module.css";
@@ -157,20 +157,9 @@ export default function HomePage() {
         </Panel>
 
         <Panel title={t("credentials.panelTitle")}>
-          {/* 「凭据随时会没」写在明面上。这句话是产品陈述，不是错误提示 ——
-              方块点（`warn`）表示"需要你处理"，而不是"出了故障"。 */}
-          <p className={styles.credentialsNote}>
-            <StatusDot tone="warn" />
-            {t("credentials.none")}
-          </p>
-          <div className={styles.panelActions}>
-            <Button variant="ghost" disabled ariaDescribedBy="credentials-not-ready">
-              {t("credentials.provide")}
-            </Button>
-            <span className={styles.hint} id="credentials-not-ready">
-              {t("common.notReadyYet")}
-            </span>
-          </div>
+          {/* 同上：面板与标题留在服务端，只有那几行值是客户端的
+              （`components/credentials/CredentialsPanel.tsx`）。 */}
+          <CredentialsPanel />
         </Panel>
 
         <Panel title={t("home.recentTitle")}>
