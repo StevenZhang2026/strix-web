@@ -4,23 +4,38 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-20 第三段）：**W2a 已收货，下一棒是 W2b**
+### 最新（2026-09-21 第一段）：**W2b 已收货，下一棒是 W2c**
 
-W2a（`services/scan_frames.py`，纯函数）已实现 + 收货四件事做完，逐条在 §派发清单 W2a 行，本节不复述。
-**当前闸门基线：`make lint` 干净、`make test` 1106 passed / 0 skipped。**
+W2a／W2b 都已实现 + 收货四件事做完，逐条在 §派发清单 对应行，本节不复述。
+**当前闸门基线：`make lint` 干净、`make test` 1116 passed / 0 skipped。**
 
-**W2a 交回、W2b 必须照着接的实际 API**（收货时整读两个产物文件核实过，与 §W2 方案 一致）：
-`plan_frames(previous: FrameState, projection, snapshot, log_lines) -> (tuple[FrameSpec, ...], FrameState)`；
-`FrameSpec(type, payload, event=None)`，**`event` 非 None 的帧 `payload` 恒为 `None`** ——
-W2b 必须在 `await mirror.append(...)` 之后用 `event_payload(mirrored.event)` 现算（这条现在两条路径
-都有测试盯着）；`FrameState.empty()` 起手，四个维度的签名由 `plan_frames` 返回的新状态带下去；
-`envelope_for(*, type, payload, epoch, seq, ts)`（`ts` 无默认值，W2b 传 `ws_envelope.now_ts()`）；
-`done_spec()` 只给 `FrameSpec(type="done", payload={})`，由 `finish()` 追加。
-帧顺序 notice → agents → 事件 → vuln → summary → report → log **是测试钉住的**，别在 W2b 里重排。
+**W2b 交回、W2c 必须照着接的实际 API**（收货时整读两个产物文件核实过）：
+
+```python
+ScanChannel(*, scan_id: str, cwd: Path, profile: StrixProfile, mirror: EventMirror,
+            redact: Callable[[str], str], sleep=asyncio.sleep)
+    def subscribe(self) -> Subscriber          # Subscriber(queue: asyncio.Queue[Envelope|None], dropped: bool)
+    def unsubscribe(self, subscriber) -> None
+    async def run_forever(self) -> None        # W2c 用 create_task 起它
+    async def finish(self) -> None             # 幂等；最后一次 tick + 唯一一个 done + 停循环
+```
+
+W2c 接线的四条硬约束：① **`EventMirror` 由 W2c 建**，第二参必须是 `settings.scans_dir` **本身**
+（别名目录会静默写错 `rel_path`）；② `cwd` 传 `LaunchPlan.cwd`（channel 自己 `discover_run`，
+**不看子进程**）；③ `redact` 传 `app.state.redactor.redact`；④ 关停顺序是
+**`await channel.finish()` → 再 cancel／await `run_forever` 那个任务**（`finish()` 只让循环停，
+不负责 cancel；`run_forever` 的 `finally` 才关订阅者）。
+队列满会把订阅者摘掉并置 `dropped=True`、塞一个 `None` 哨兵 → **T16 的 WS 路由必须按 `dropped`
+分支**（被摘要让客户端带 `resume_from` 重连，正常结束什么都不做）。
 
 ⚠️ **教训（2026-09-18 那份 W2 方案没落盘就丢了）：模板 3 的方案原文必须当场写进本文件** ——
-`/tmp` 活不过一次清理，`agent-rules.md` §四 只说了"方案由主会话写"。**交底任务书同理**：W2b 的任务书
+`/tmp` 活不过一次清理，`agent-rules.md` §四 只说了"方案由主会话写"。**交底任务书同理**：W2c 的任务书
 写完就把路径记进 §W2 方案，并假定它随时会没。
+
+⚠️ **W2b 带出的一条待裁决（不阻塞 W2c）**：stat 门刻意**不含** `strix.log`，所以**扫描卡在某一步
+只刷日志**的那段时间，日志帧要等四个被监视文件里任一个再动一次才随下一轮发出（最长 ≈2s 退避 +
+下一次文件变动）。四文件是 §实时流设计 钉死的，没擅自改成五个。**T16 做日志面板时会看到这个滞后**，
+要不要把 `strix.log` 也纳入 stat 门（代价：日志一直在长 → 门几乎永不生效，退避形同废止）留给那时定。
 
 ### W2 方案（2026-09-20 用户放行，四点全按推荐；**这一节就是权威**）
 
@@ -87,6 +102,24 @@ stat 门的四个文件名走 `StrixProfile`（`run_record_name` 已有，缺的
 + 六个签名 + 帧顺序 + 两个判据 → 子 agent **一个别的源码文件都没读、8 次调用、0 次压缩**）。
 **快闸门实测 1.45s**（`docker run --rm -v app:ro -v tests:ro strix-console/api-test:0.1.0 pytest
 tests/test_scan_frames.py -q`）→ §十.5 第一层的 TDD 前提成立；**W2b 是 async + 假时钟，快闸门要重测**。
+
+**W2b 已派发（2026-09-20）。交底产物（假定随时会没，`/tmp` 活不过一次清理）**：任务书
+`/tmp/W2b-prompt.md`（298 行）+ 附录 `/tmp/W2b-appendix-{1,2,3,4}.md`（1778 行，逐字原文
+A1–A14：`scan_frames` `ws_envelope` `run_projector` `read_run_dir` `EventMirror` `LogTailer`
+`run_discovery` `StrixProfile` `image_puller`＋`routes/system.py` `Settings` `conftest` 全部夹具
+async 测试范本 pytest／ruff 配置）。**附录改成拆 4 个文件是被迫的**：一个摘录 agent 攒到最后一次性
+`Write`，在那一次响应里被 API `server_error` 打断 → 15 分钟、120k token、**0 字节落盘**。
+教训：**派摘录活必须要求分批落盘**（写完一节确认一节），别让产物只活在它的上下文里。
+**快闸门已重测**：只读挂载 + 已建好的 `api-test:0.1.0`，`pytest tests/test_scan_frames.py
+tests/test_image_puller.py -q -p no:warnings` = **1.47s / 42 passed**（含 `image_puller` 那种
+后台循环用例）→ async 形状照样在秒级，按文件过滤的 `ruff check`／`format --check` 也已验证可用。
+**摘录带回的两条事实（W2b 任务书已按它们订正）**：① **本仓刻意没装 `pytest-asyncio`**，async 场景
+在同步测试函数里 `asyncio.run(...)` 跑（`test_image_puller.py:15` 有理由），`conftest` 已有 `FakeClock`；
+② ⚠️ **`backend/tests/fixtures/run_dirs/` 这个目录不存在** —— 现成路子是 `conftest` 的
+`make_run_dir`／`make_agents_json`／`make_agents_db`。**`CLAUDE.md` §测试与日志 那句"用
+`fixtures/run_dirs/` 夹具"是错的，待改成 `conftest.make_run_dir`**（单独一次，不混进 W2b 的 commit）。
+③ `StrixProfile` 现只有 `runs_dir_name`／`run_record_name`，stat 门要的另外三个（`.state/agents.json`
+`.state/agents.db` `vulnerabilities.json`）确实都还是隐式约定，`agents.db` 只在测试辅助函数里以字面量出现。
 
 **派发预算（§九.6）**：调用 ≤ 40 次、峰值 < 120k、**0 次压缩**、首次写代码不晚于第 10 次调用。
 
@@ -1595,7 +1628,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3** —— **T14／T15／T16／T21／T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界 |
 | T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 —— **2026-09-18 按 §三.2 拆成三条**：**T14a** = 纯函数 `services/event_media.py`（抽 data URL、算 `sha256`、改写成 `/api/scans/{id}/media/<sha256>.png`，**不写库不落盘**，任务书 `/tmp/T14a-prompt.md`）；**T14b** = `services/log_tailer.py`（任务书 `/tmp/T14b-prompt.md`）；**T14c**（未派）= `services/event_mirror.py` 落盘＋写 `scan_events`／`scan_media`，**被 `scan_events.strix_id` 的表结构缺陷卡住，见 §交接**。`ScanChannel` 与 `main.py` 接线归到 T14a/b/T28a 之后的那条串行接线任务。<br>**✅ 2026-09-18 T14a 收货（主会话三件事全做，一条自陈都没采信）**：`services/event_media.py` **151** 行 + `tests/test_event_media.py` **223** 行，新增 **28** 条用例。**2 处 mutation 只红该红的**：递归改成只看顶层 → 红 9（4 个嵌套形状 + 双图 + `non_png` 4）；`sha256` 改成对 base64 原文取 → 红 18（恰好是"有 PNG 被成功抽出"那 18 条，`undecodable` 6 与 `non_png` 4 不红）。<br>**整读之后认下的三处**：① **空／只有空白／只有 padding 的 base64 判 `undecodable_base64`、不产 0 字节图**（任务书没规定，子 agent 自己定的，我认可 —— 否则 T14c 会往 `media/e3b0c442….png` 写一个空文件）；② **正则的 base64 续行只认换行、不认一般空白** —— 收进一般空白**已实测出 bug**：`"a <urlA> b <urlB> c"` 里第一个匹配会吃掉 `= b data`（`b`／`data` 全在 base64 字母表内），于是两张图一张都抽不出来还误报 `undecodable_base64`。理由已写进 `_DATA_URL_RE` 上方，**别去"简化"它**；③ ⚠️ **"序列化后零命中 `data:image`"只对全 PNG 且 base64 合法的 payload 成立** —— `data:image/jpeg;base64,…` 这个字面串本身就含 `data:image`，而契约要求非 PNG **原样保留**。**不许把它当全局后置条件**，否则会照字面"修"出一个把 jpeg 也删掉的实现。<br>**已知不做（都不是缺陷）**：`media_url()` 不提取（只一个调用点；测试里刻意写死那个形状、**不从生产代码 import**，否则改坏 URL 测试会跟着一起改 —— 等 T14c 的 `GET /api/scans/{id}/media/{sha}.png` 出现是第 3 个用处再提取）；递归无深度上限（payload 来自 Strix 自己 `json.dump`，受 json 递归限制约束；要兜 `RecursionError` 就兜在 T14c 的调用点）；单事件抽出的总字节数无上限（护栏放在写库那一半，只有它知道磁盘配额）；只下钻 `Mapping`／`list`（JSON 反序列化产不出 tuple／set）。<br>**✅ 2026-09-18 T14b 收货**：`services/log_tailer.py` **155** 行 + `tests/test_log_tailer.py` **266** 行，新增 **23** 条。**脱敏的落法是「整行原文先过一次 `redact`、再解析」**，这是设计要求不是实现细节：反过来（先解析、只脱几个字段）就要求我们枚举"哪些字段可能含凭据"，而 `strix.log` 里连 logger 名和 `agent_id` 都是 Strix 那边填的字符串。`[REDACTED]` 不含空格，所以整行替换不打乱格式。<br>**2 处 mutation**：① 改成"先解析、只脱 `msg`" → 红 **6**（`in_logger_name`／`in_agent_id`／`in_scan_id` × 两种凭据）。⚠️ **`in_unparsed_line` 那两个用例对这个 mutation 没有区分力** —— 未解析行的整行原文本来就进了 `msg`，所以"只脱 msg"照样把它脱干净了（子 agent 报告里列举的"红 8"是错的，实测 6；它文字里的 6 是对的）；② **`rfind(b"\n")` → `find`**（**我自选的靶子，不在它清单上**）→ 红 4（`append_returns_only_the_new_lines`、`shrunken_file_is_re_read_from_zero`、`min_level[debug]`／`[info]`）。<br>**已知不做**：`__init__` 对非法 `min_level` 抛 `ValueError`（3 行，防"配置拼错导致整条流静默为空"）**刻意没有专门测试** —— 一条编程错误不值一格；偏移不持久化（接线约束见 §交接）。<br>**✅ 2026-09-18 T14c 收货（三件事全做）**：`services/event_mirror.py` **180** 行 + `tests/test_event_mirror.py` **222** 行，新增 **8** 条（`make test` 1072 passed / 0 skipped）。**5 处 mutation 全部只红该红的那一条**：M1 把落盘挪到事务之后 → 红 `test_no_rows_when_image_landing_fails`；M2 `ON CONFLICT DO NOTHING` → `DO UPDATE` → 红 `test_known_sha_is_not_re_accounted`；**M3／M4／M5 是我自选的** —— M3 `fingerprint` 改成对**改写后**的 payload 重算 → 红 1（正路那条）；M4 `rsplit("_", 1)` → `split("_", 1)` → 红 1，⚠️ **这个靶子好使的原因是 `int("1_7") == 17`** —— Python 的数字下划线字面量会让"取第一个 `_` 之后"**静默算出一个合法整数**而不是抛；M5 去掉「临时文件 + 原子 rename」→ **红 0，如预期**。<br>**三条落库语义（交底时我拍板，这里是权威）**：① `data_json` 是三键信封 `{"key", "upstream_version", "data"}`，`version=1` 指的就是这个信封 —— `upstream_version` 按 T13 约定不占列，而直接混进 payload 会和工具自己的键撞名；`key`（`"tool_12"`）必须存得下来，因为 `kind` 存的是上游 `type` 字段（`strix_bridge/projection.py:98`），**不保证**是 key 的前缀，`f"{kind}_{strix_id}"` 复原不出来。② **镜像不按 `fingerprint` 去重，1 帧 1 行**：重同步会在 epoch+1 下整份重推、镜像照样重写一遍 —— 否则 `replay(epoch=E)` 拿不出完整快照，`resume_from` 就失去意义；DDL 注释里"用 fingerprint 判断这条我已经有了"说的是内存里的 `ProjectionState`，**不是这张表**。③ **先文件、后行**：孤儿 `<sha>.png` 是接受的不对称（内容地址化、留存清理删目录时带走），反过来会留下**指向不存在文件的行**。<br>**整读之后认下的两处**：① **落盘走 `<sha>.part` + `replace()` 原子 rename**（任务书只说了"文件已存在就跳过写"，没说怎么保证"存在的那个是完整的"）—— 半截文件会让 `exists()` 永久跳过重写、`bytes` 列与实际字节数永不一致。**M5 实测它没有任何测试兜着**（注入"写一半"太别扭），理由只写在代码注释里，**别去"简化"成 `target.write_bytes`**；② `rel_path` 拼 `f"{scans_dir.name}/..."` 而不用 `relative_to`（`scan_dir_for` 会 `resolve()`，macOS 上 `tmp_path` 的 `/var → /private/var` 符号链接会让它抛 `ValueError`）—— 代价是**依赖"`scans_dir` 就是 `${DATA}/scans`"这个约定**，见 §交接。<br>**已知不做**：`strix_id_of` 不挡"超出 int64 的巨大后缀"（会在 `conn.execute` 抛 `OverflowError`，与 `event_media` 那种"一条坏事件不许搞崩整轮"的处理不一致 —— 但 strix 的事件 id 是自增计数器，产不出这种 key）；一条事件里**两张不同图**、以及 `agent_id`／`ts` 为 `None` 都没有专门用例（`for` 循环 4 行、两列本来就 nullable）；没有 `replay()`／读取接口／`GET media/<sha>.png` 路由 —— 那是接线任务与 T16 的事。 |
 | W2a | **`ScanChannel` 的纯函数一半**：`services/scan_frames.py` —— `plan_frames(previous, projection, snapshot, log_lines) -> (tuple[FrameSpec, ...], 新状态)` + `envelope_for(spec, *, epoch, seq, ts)`。**无 IO、不发号**（发号要与 `await mirror.append` 交错，属 W2b）。事件帧 payload = 镜像行的纯函数（`{key, kind, agent_id, ts, upstream_version, data}`，与 `EventMirror` 三键信封同源）；非事件维度自带「上次推了什么」的签名，内容没变不重推 | T13 T14a T14b T14c | `services/scan_frames.py` `tests/test_scan_frames.py` | **2** ✅ 2026-09-20 —— 方案在 §W2 方案（2026-09-20 放行）。**不变式：帧↔镜像行 1:1 同 seq、epoch 变则 seq 归零、同一内容不重推**。交付 185 + 317 行／18 用例，**子 agent 8 次调用、0 压缩**（预算 ≤40，`agent-rules.md` §九.6 的形状又一次成立）。收货：闸门 1086 → **1104 passed / 0 skipped**；**6 处 mutation**（3 处照清单：重同步改成一帧带全部事件红 2、三个签名短路成每轮都推红 5、去重键去掉指纹退路红 2；3 处我自选：summary 的比较串线到 `agents_fingerprint` 红 4、`vuln_keys` 不带上一轮红 2）。**自选的 MX5「事件帧直接带 payload」红 0 —— 本轮唯一真缺陷**：`FrameSpec` 的契约「`event` 非 None ⟺ `payload` 为 None」只在 resync 那条路径被断言过，`added`／`updated` 常规路径上没有任何测试盯着，而破坏它正是设计里写明要防的那个 bug（WS 帧带 base64、与回放不一致）→ 补 `test_event_frames_never_carry_a_payload`。**判据 ④（字面值）另抓一处**：`envelope.v == PROTOCOL_VERSION` 钉不住"这个常量是几"，全仓没有任何测试盯 `PROTOCOL_VERSION == 1` → 补进 `tests/test_ws_envelope.py`（它的归属地）。两条各只红自己一条，终态 **1106 passed / 0 skipped** |
-| W2b | **tick 循环**：`services/scan_channel.py` —— stat 门（四文件 `(mtime,size)`）→ `read_run_dir`（`to_thread`）→ `project()` → `Sequencer.next(epoch)` → 要镜像的先 `await EventMirror.append` **再用返回的 `MirroredEvent.event` 建帧**（顺序反了 WS 帧里会带 base64、且与回放不一致）→ 扇出；自适应 250ms → ×2 退避到 2s 上限；`finish()` 做最后一次 tick + `done` + 停循环 | W2a | `services/scan_channel.py` `app/strix_profile.py`（补三个文件名常量）`tests/test_scan_channel.py` | **2** —— **不变式：慢订阅者被摘掉且不拖住循环；镜像写失败不被吞**（异常冒泡杀掉 channel 任务） |
+| W2b | **tick 循环**：`services/scan_channel.py` —— stat 门（四文件 `(mtime,size)`）→ `read_run_dir`（`to_thread`）→ `project()` → `Sequencer.next(epoch)` → 要镜像的先 `await EventMirror.append` **再用返回的 `MirroredEvent.event` 建帧**（顺序反了 WS 帧里会带 base64、且与回放不一致）→ 扇出；自适应 250ms → ×2 退避到 2s 上限；`finish()` 做最后一次 tick + `done` + 停循环 | W2a | `services/scan_channel.py` `app/strix_profile.py`（补三个文件名常量）`tests/test_scan_channel.py` | **2** ✅ 2026-09-21 —— **不变式：慢订阅者被摘掉且不拖住循环；镜像写失败不被吞**（异常冒泡杀掉 channel 任务）。交付 282 + 393 行／8 用例，**子 agent 24 次调用、0 压缩、第 8 次就动手，但峰值 143k 超了 120k 门**（§九.6①）—— 归因不是任务太大而是**附录整包给多了**：A11 要了 `conftest` 全部 fixture（669 行那节的大头），实现其实只用到 `make_run_dir` 一个。下次摘录只摘**点名用到的那几个** fixture。收货：闸门 `make lint` 干净、`make test` **1116 passed / 0 skipped**（基线 1106，+9 channel +1 profile）；**6 处 mutation**（2 照清单：`dropped` 置位删掉红 t1、`append` 包进 `try/except OSError: return` 红 t2；4 处自选：`Sequencer(epoch=-1)`→`Sequencer()` 红 t5、状态提交挪到 emit 之前红 t2、`_fanout` 去掉 `list()` 拷贝、`while not self._finished`→`while True`）。**自选的后两处各抓一处「没人盯」**：① **MX5 去掉 `list()` 拷贝 0 红** —— 被摘的订阅者在第 0 位，边迭代边 `remove` 会让紧跟其后的健康订阅者**只漏掉"摘掉动作发生的那一帧"**，而 t1 原来只数 `summary` 出现 2 次，恰好不含那一帧（`agents`）→ 把断言改成整串 `["agents","summary","summary"]`。② **MX6 把 `while not self._finished` 换成 `while True` 也 0 红** —— 没有任何测试盯着"`finish()` 之后循环会停"；顺着它读代码抓到**本轮唯一真缺陷**：`_finished` 的**判据在锁外、置位在锁内**，`finish()` 握着锁做最后一次 tick 时循环可能已通过 `while` 检查并在锁上排队 → 拿到锁后再发一整轮帧，**落在 `done` 之后** → 判据挪进锁内 `if self._finished: break`，补 `test_the_loop_stops_after_finish_and_never_ticks_again`（手工占锁冒充那个交错，不依赖 `to_thread` 调度，无 flake）。**判据 ④（字面值）**：`BASE/MAX_INTERVAL_S` 被退避序列里的 `0.5`／`1.0` 间接钉住、第一帧 `seq == 0` 被 t5 钉住（MX3 证实）、三个新 profile 值有专测 —— 只有 `SUBSCRIBER_QUEUE_SIZE=256` 没钉，刻意不补（调优旋钮，不是不变式）。另：`strix.log` 的文件名子 agent 放在模块常量里并上报请裁决 → **收货时收进 `StrixProfile.log_file_name`**（它同样随上游版本变，归属地是那张对照表；但**刻意不进 stat 门** —— 日志几乎一直在长，盯它等于让门永不生效）|
 | W2c | **接线**：`ChannelRegistry`（按 scan_id 起停、停机全关）+ `routes/scans.py` 在 `_run_to_completion` 里起、在 `process.wait()` 返回后 `await channel.finish()` + `main.py` lifespan 关停。**channel 自己不看进程**（单一权威，别两处各判一次「跑完了没」）| W2b | `services/scan_channel.py`（registry）`routes/scans.py` `main.py` `tests/test_routes_scans.py` | **2** —— **不变式：扫描终态或停机后 channel 一定被关掉、不泄漏任务** |
 | W3 | **四张表落库**：`scan_agents` upsert、`scan_findings` 首见即插（含 `input_hash`）、`scans` 的 `cost_usd`／`count_*`／`agent_count`／`event_count`／`current_epoch`／`phase` | W2c | `services/scan_persist.py`（新）`tests/test_scan_persist.py` | **2** —— **2026-09-20 新增的一行，是一处漏派**（与 T7c 同形状）：验收第 14 组那条「`severity_counts` 与 `scan_findings` 行数一致」要求这几张表有行，而在此之前**没有任何一行任务拥有它们的写入**。刻意不折进 W2b（§三.2：超 500 行也超 1 条不变式）；实时 cost 走 `summary` 帧、不依赖本行 |
 | T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自** —— 要真凭据、真扫描，派发规则第 3 条禁止把 Key 给子 agent，**结构上不可派发** |

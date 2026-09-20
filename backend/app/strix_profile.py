@@ -35,6 +35,14 @@ class StrixProfile:
     version: str
     runs_dir_name: str
     run_record_name: str
+    # 轮询的 stat 门盯的另外三个文件（相对 run 目录的 POSIX 路径，`run_dir / "a/b"` 直接可用）。
+    # 在这里而不是在循环里写字面量：升级 Strix 时"哪几个文件要重验"必须一处看全。
+    agents_record_rel_path: str
+    agents_db_rel_path: str
+    vulnerabilities_rel_path: str
+    # 日志文件名。它**不在** stat 门里（日志几乎一直在长，盯它等于让门永不生效），但同样是
+    # 一个会随上游版本变的名字 —— 所以归属地是这张表，不是某个模块的常量。
+    log_file_name: str
     run_statuses: frozenset[str]
     exit_code_ok: int
     exit_code_failed: int
@@ -85,6 +93,13 @@ _P_1_6_2 = StrixProfile(
     version="1.6.2",
     runs_dir_name="strix_runs",  # core/paths.py:8 RUNS_DIR_NAME
     run_record_name="run.json",  # core/paths.py:10 RUN_RECORD_FILENAME
+    # `.state/` 这一层来自 core/paths.py 的 STATE_DIR_NAME；`agents.db` 是 openai-agents
+    # 的 SQLiteSession 库（interface/tui/history.py:39 读它），`agents.json` 是 agent 图
+    # （live_view.py:103-106 hydrate 它）。三者都不是只追加的，所以只能靠 stat 盯变化。
+    agents_record_rel_path=".state/agents.json",
+    agents_db_rel_path=".state/agents.db",
+    vulnerabilities_rel_path="vulnerabilities.json",
+    log_file_name="strix.log",  # telemetry/logging.py 的 FileHandler 写在 run 目录根下
     # `core/agents.py:25` 的 7 个，**外加 `interrupted`** —— 后者不在那个枚举里，是
     # `interface/cli.py:135` 的信号处理器经 `report_state.cleanup(status="interrupted")`
     # 单独写进 `run.json` 的，而且 `report/state.py:643` 那个 if 保证它不会再被

@@ -23,6 +23,19 @@ def test_profile_1_6_2_literals() -> None:
     assert profile.exit_code_vulnerabilities_found == 2
 
 
+def test_profile_1_6_2_watched_rel_paths() -> None:
+    """stat 门盯的三个文件名。**"字段存在"与"它的值是什么"是两条不同的事** ——
+    上面那条测的是前者，这条钉住后者：升级时 `.state/` 这一层或者文件名一变，
+    轮询会静默地一直看不到变化（整轮跳过），而不是响亮地失败。
+    """
+    profile = profile_for("1.6.2")
+    assert profile.agents_record_rel_path == ".state/agents.json"
+    assert profile.agents_db_rel_path == ".state/agents.db"
+    assert profile.vulnerabilities_rel_path == "vulnerabilities.json"
+    # `log_file_name` 不在 stat 门里，但同样会随上游版本变，所以值也要钉住。
+    assert profile.log_file_name == "strix.log"
+
+
 def test_run_statuses_include_interrupted() -> None:
     """`interrupted` 不在上游的状态枚举里，是信号处理器单独写进 `run.json` 的。
 
