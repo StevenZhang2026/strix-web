@@ -9,7 +9,15 @@ T11b 收货 mutation：让 `Sequencer.next` 换 epoch 也只是 `+1` —— 补�
 
 from __future__ import annotations
 
-from app.ws_envelope import Sequencer
+from app.ws_envelope import PROTOCOL_VERSION, Sequencer
+
+
+def test_protocol_version_is_pinned() -> None:
+    """改这个数字就是改协议：前端按 `v` 决定怎么解析一帧，所以它只能是一次刻意的改动。
+
+    `test_scan_frames.py` 只断言了"信封里的 `v` 取自这个常量"，钉不住"这个常量是几"。
+    """
+    assert PROTOCOL_VERSION == 1
 
 
 def test_seq_restarts_at_zero_when_the_epoch_changes() -> None:
