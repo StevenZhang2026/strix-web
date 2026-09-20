@@ -4,52 +4,90 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-20）：**T18b 已实现并收货，只差人眼验收**
+### 最新（2026-09-20 第二段）：**W2 方案已放行，W2a 待派发**
 
-**收货三件事**（§八.3）：① 官方闸门自己跑 —— `make lint` 干净、`make test` **1086 passed /
-0 skipped**（与基线一致：纯前端不加测试）；② **mutation 0 处**（纯前端，2026-09-16 用户拍板）；
-③ **14 个产物文件整读**，读出**三处真缺陷、全部我自己修**：
-- **改目标之后整份声明仍然勾着。** 原实现的三个 setter 只作废 `validation`，三条声明、
-  "以上 N 个均已授权"、逐字确认串都留着。唯一挡住它的是逐字确认，**而那只钉住
-  `targets[0]`** —— 改掉第二行、加一个新 host，那些勾全都还在，用户就为一份他没签过的
-  清单交了一次签字，**而这一屏存在的理由正是这件事**。现在三个 setter 一起清
-  `CLEARED_DECLARATION`（校验快照 + 逐字串 + 三个勾 + 多目标那一条）；`authorizationRef`
-  与 `operatorName` 刻意**不清**（它们是这次委托的属性，不是某一批目标的属性）。
-  **这是子 agent 自己点出来、明确留给我拍板的一处 —— 它的判断是对的。**
-- **202 的回执活在提交面板的本地 state 里** → 翻回第 3 步再回来，成功块没了、提交按钮
-  又亮了。而那个 `scan_id` 是**屏幕上唯一一份**（没有扫描列表、`GET /api/scans/{id}` 不存在，
-  丢了连 `POST /api/scans/{id}/stop` 都调不出来）。已提进 store（`accepted`，只有 202 会写，
-  没有置回 `null` 那一路 —— 一次已发起的扫描收不回来），且**不随目标变化作废**。
-- **`ButtonLink` 渲染 `<a>`，而 `Button.module.css` 的 `.btn` 既没有 `display` 也没有
-  `text-decoration`** → 行内元素吃不住上下 `padding`（与相邻文字重叠）、且全站 `a`
-  是 `text-decoration: underline`（`globals.css:205-209`）→ 一个带下划线的填色按钮。
-  已给 `.btn` 补两行（对 `<button>` 是无害的重复）。**这一处子 agent 自己也报了**，
-  它只是没权限动那个文件 —— 报出来比自己越界改对。
-另**删掉 `common.notReadyYet`**：首页三处入口现在全是真的，全仓库零引用（死文案也是死代码）。
+T18b 已完结（实现 + 收货三件事 + **人眼验收零缺陷** + commit `68337a1`），逐条在 §派发清单 T18b 行，
+本节不复述。**当前闸门基线：`make lint` 干净、`make test` 1086 passed / 0 skipped。**
 
-**人眼验收（用户，2026-09-20）：五处全过，零缺陷** —— ① 逐字确认串在输入框**旁边**、不在
-`placeholder` 里；② 单目标时"以上 N 个均已授权"那个框不渲染；③ 空的逐字确认框不骂人；
-④ 成功块里没有任何指向 `/scans/{id}` 的链接；⑤ 首页「开始填写工单」是按钮样式的链接。
-**这是第一次人眼验收一处都没抓到**（T18a 抓到三处）—— 差别在于那三处的教训（控件属性静默
-拦住的东西学不到、字段正交≠文案正交）这一轮在交底任务书里就写成了硬要求。
+⚠️ **2026-09-18 写的那份 W2 方案原文没落盘就丢了**（`/tmp` 已被清空，`PLAN.md` 当时只留了三个待放行点
+的一句话摘要）→ 2026-09-20 重写并经用户放行，全文在下一节。**教训：模板 3 的方案原文必须当场写进本
+文件**（`agent-rules.md` §四 只说了"方案由主会话写"，没说它会活过一次 `/clear`）。
 
-### 上一轮的派发记录（2026-09-20）
+### W2 方案（2026-09-20 用户放行，四点全按推荐；**这一节就是权威**）
 
-交底任务书 `/tmp/T18b-prompt.md`（模板 3 的实现阶段：方案由主会话写、用户拍板、另起一个子 agent
-只做实现）。**文案 45 键已由主会话写进 `zh-CN.json`**（同时删掉 `wizard.stepPending*` 两个键 ——
-`MessageKey` 由 JSON 推导，所以漏改的引用是编译错误），这一维不在子 agent 的文件列里。
-方案：7 改 + 6 新（含 `ui/ButtonLink.tsx`），估 ~600 行。**用户拍板的三件**：① 命中的白名单条目
-**只展示 + 一键填入，绝不自动预填**（授权依据是一句法律声明，静默替他填等于替他声明；而且"填了之后
-用户改过没有"是屏幕上看不出的隐式状态 —— 与 T18a 换模板重置预算同一个判据）；② 首页入口新增
-`ui/ButtonLink.tsx` 而不是给 `Button` 加 `href`；③ 不拆成两条派发。
-**核心设计**：校验快照必须提进 store —— `authorization.resolved_ips_seen`（host → 声明当时看到的地址，
-后端起扫描前重解析并按集合比对）没有它就构造不出来；且 `setRawTargets`／两个 opt-in setter **在 store
-内部**把快照置 `null`（不靠三个组件各自记得调 `invalidate()`）。
-**收货判据**：`make lint` + `make test` 基线 **1086 passed / 0 skipped**；纯前端 **mutation 0 处**；
-产物文件**整读**；然后 `docker compose -p strix-console build web api && up -d web api` 人眼看一次
-（`web`/`api` 是 `target: runtime`、没挂源码，不重建就看不到改动）。**人眼要专盯**：逐字确认串没进
-`placeholder`、单目标时那个"多目标均已授权"框不渲染、空框不骂人、成功块里没有任何指向 `/scans/{id}`
-的链接。
+**目标**：`ScanChannel` —— 一个扫描一个轮询器、N 个 WS 订阅者，把 run 目录的变化变成 §实时流设计
+那套帧，并同步写进 `EventMirror`（T16 回放的真源）。
+
+**四条已拍板的语义**（前三条是 2026-09-18 记下的待放行点，第四条是重写时发现原记录没覆盖的范围问题）：
+
+1. **删掉 `events.snapshot` 帧类型。** 重同步 = `_epoch += 1` 后在新 epoch 下**逐条 `event.add`**，
+   一帧一个 seq、与镜像行 **1:1 同 seq** → 回放与直播是同一个帧形状（T16 直接从 `scan_events` 重放，
+   前端只有一套解析）。**连带接受的代价**：非事件帧（`summary`／`log`／`notice`／`agents`…）也从同一个
+   计数器取 seq，所以**从镜像回放会有 seq 空洞** → `seq` 只用于排序与 `resume_from` 游标，
+   **前端不许把空洞当丢帧**；"作废本地状态"全靠 `epoch`（`ws_envelope.py:3-8` 的规则不变）。
+2. **`done` 帧不带结论。** 状态／归因／漏洞数只从 `GET /api/scans/{id}`（T16/T17）取 —— 结论的唯一
+   出处是 `_run_to_completion` 写的那一行 `scans`，归因活在 `ScanOutcome` 里；channel 自己再推一次
+   等于造第二个可能互相矛盾的判决，而 CLAUDE.md 禁止只凭退出码报"未发现漏洞"。
+   在那个端点上线前，`done` 就是一个纯信号。
+3. **背压与失败：摘订阅者、杀 channel。** 订阅者队列满 → 关掉那条 WS（客户端带 `resume_from` 重连），
+   **绝不阻塞轮询循环**；`EventMirror.append` 抛异常 → **让它冒泡杀掉 channel 任务**，不静默丢帧
+   （只追加的真源出洞比断流更糟；扫描本身与 `scans` 终态不受影响，由 `_run_to_completion` 兜）。
+   这与 W1 交回的第 1 件（`run_forever` 只接 `OSError`）是同一类决定，**这里刻意不开"记日志继续"的口子**。
+4. **`scan_agents`／`scan_findings`／`scans` 的计数与 `cost_usd`／`current_epoch` 落库不算在 W2 里** ——
+   单独一条 **W3**（已进派发清单）。理由：W2b 已经有 stat 门 + 投影 + 镜像 + 扇出 + 收尾，再压四张表必然
+   超 500 行也超 1 条不变式。W2 交完的垂直切片是完整的（帧 → 镜像；实时 cost 走 `summary` 帧）。
+   **W3 必须现在就在清单里**：验收第 1702 行要求"`severity_counts` 与 `scan_findings` 行数一致"，
+   而在此之前**没有任何一行任务拥有这几张表的写入** —— 和 T7c 那次漏派同一个形状。
+
+**拆三条串行**（每条一个交付物 + 一条能独立变红的不变式，`agent-rules.md` §三.1）：
+
+- **W2a** `services/scan_frames.py`（纯函数，无 IO）：
+  `plan_frames(previous, projection, snapshot, log_lines) -> (tuple[FrameSpec, ...], 新状态)`
+  + `envelope_for(spec, *, epoch, seq, ts) -> Envelope`。`FrameSpec` 带 `type` + `payload`
+  + 可选的 `event: ProjectedEvent`（只有它要进镜像）。**seq 不在这里发**（发号要和 `await append`
+  交错，见 W2b）。事件帧的 payload 形状 = **镜像行的纯函数**（`{key, kind, agent_id, ts,
+  upstream_version, data}`，与 `EventMirror` 的三键信封同源）—— T16 回放要靠这一条。
+  非事件维度（`agents`／`vuln.add`／`summary`／`report`）自带"上次推的是什么"的签名，内容没变不重推。
+  **不变式：帧与镜像行 1:1 同 seq、epoch 变则 seq 归零、同一内容不重推。** 估 ~200 + ~300 测试。
+- **W2b** `services/scan_channel.py`：stat 门（四个文件的 `(mtime,size)` 全没变就整轮跳过）→
+  `read_run_dir`（同步 IO，走 `asyncio.to_thread`）→ `project()` → 按 spec 顺序
+  `Sequencer.next(epoch)` → 需要镜像的先 `await mirror.append(...)` **再用返回的 `MirroredEvent.event`
+  建帧**（它的 `data` 已把内联 PNG 换成 media URL，顺序反了 WS 帧里就会带 base64、且与回放不一致）→
+  扇出给订阅者。自适应轮询 250ms、空闲 ×2 退避到 2s 上限。
+  **不变式：慢订阅者被摘掉且不拖住循环；镜像写失败不被吞。** 估 ~250 + ~300 测试。
+- **W2c** `ChannelRegistry` + `routes/scans.py` 起停 + `main.py` lifespan 关停。
+  **不变式：扫描终态或停机后 channel 一定被关掉、不泄漏任务。** 估 ~150 + ~200 测试。
+
+**「谁判定跑完了」按单一权威定**：**channel 自己不看进程**。W2c 在 `process.wait()` 返回后调
+`await channel.finish()`（最后一次 tick → `done` → 停循环），不让两处各判一次"跑完了没"。
+
+**W2 不含 WS 路由**（`/ws/scans/{id}` 是 T16 `routes/stream.py` 的地盘）：W2 只产帧 + 落镜像。
+订阅接口照 `/ws/system` 的先例（`routes/system.py:148-192`）设计，但 `ImagePuller` 那套
+「一个 `current_frame` + `wait_for_change(seen)`」**不能照抄** —— 进度是幂等快照，事件是不可重建的序列，
+所以这里必须是**每订阅者一个 `asyncio.Queue`**。
+
+**接线约束（来自下面"交回的五件"，交底任务书里必须原样带上）**：`EventMirror(db, settings.scans_dir,
+scan_id)` 第二参必须是 `settings.scans_dir` **本身**（别名目录会静默写错 `rel_path`）；`LogTailer`
+偏移活在实例里 → **一次扫描一个长命实例**，`min_level` 默认 `INFO`、**不与 `LOG_LEVEL` 共用**；
+`strix.log` 在 run 目录里 → tailer 只能等 `RunDiscovery` 抢到 run 目录之后再建，不是扫描 cwd。
+stat 门的四个文件名走 `StrixProfile`（`run_record_name` 已有，缺的三个在 W2b 补进去），
+**不在循环里硬编码** —— 升级时要能一处改完。
+
+**W2a 的交底任务书已写好：`/tmp/W2a-prompt.md`**（附录里贴了 `ProjectedEvent`／`ProjectionResult`／
+`Envelope`／`Sequencer`／`MirroredEvent`／`LogLine` 的全部原文 + 三键信封的理由，所以它不该去读
+那六个文件）。`FrameSpec`／`FrameState`／`plan_frames`／`event_payload`／`envelope_for`／`done_spec`
+六个签名在任务书 §3 写死了，帧顺序与两个判据（vuln 去重键退路、三个签名一律用 `fingerprint_of`）也写死了。
+**快闸门已实测 1.45s**（`docker run --rm -v app:ro -v tests:ro strix-console/api-test:0.1.0 pytest
+tests/test_scan_frames.py -q`）→ §十.5 第一层的 TDD 前提成立。
+
+**派发预算（§九.6，照 T14a／T14b 那个已验证的形状：2 文件／~500 行 → 0 压缩、20–37 次调用）**：
+调用 ≤ 40 次、峰值 < 120k、**0 次压缩**、首次写代码不晚于第 10 次调用。超了就当场重拆并记在 W2a 行。
+
+**收货判据（主会话自己做，一条自陈都不采信）**：① 官方闸门 `make lint` + `make test`，
+基线 1086 passed / **0 skipped**；② **mutation 3 处**（＝W2a 行列的三条不变式）：重同步改成"一帧带
+全部事件"、三个签名判断短路成"每轮都推"、vuln 去重键去掉指纹退路 —— 各自确认**只有该红的那几条红**；
+③ 两个产物文件**整读**；④ 先问 W1 交回的那一句：**"这条不变式的靶子是一个字面值吗？如果是，有测试
+盯着那个字面值本身吗？"**（`PAYLOAD_VERSION`／`PROTOCOL_VERSION`／帧 `type` 字符串都是字面值）。
 
 ### 上一轮（2026-09-18 第三段）：**W1（留存清理接线）已收货**
 
@@ -97,19 +135,10 @@ F6 钉住的是"这个值来自 `Settings`"，钉不住**那个值是几**）。
 原"一条串行接线任务"**已按 §三.2 拆开**（它一条同时压上 `main.py`＋`settings.py`＋`ScanChannel`，
 超 500 行也超 1 条不变式）：**W1 = 留存那一半，已收货**（见上）。剩下的是 W2。
 
-1. **W2（`ScanChannel`）：模板 3，方案已由主会话写好、2026-09-18 待用户放行**，拆三条串行
-   （W2a 纯函数 `services/scan_frames.py` → W2b `services/scan_channel.py` tick 循环 →
-   W2c `ChannelRegistry` + `routes/scans.py`／`main.py` 接线）。方案原文与三个待放行点
-   （① 删掉 `events.snapshot` 帧类型、重同步改逐条 `event.add`，让**镜像↔帧 1:1 同 seq**
-   且回放与直播同一个帧形状；② `done` 帧不带结论，结论只从 `GET /api/scans/{id}` 取；
-   ③ 订阅者队列满就摘掉该订阅者、镜像写失败让异常冒泡杀掉 channel 任务）**放行之后才写进
-   §实时流设计** —— 在那之前它不是权威，别去那一节找。①若放行要改 §实时流设计 的帧类型表。
+1. **W2（`ScanChannel`）：方案 2026-09-20 已放行，全文在 §W2 方案**（帧形状／`done`／背压三条已落进
+   §实时流设计，那一节现在与它一致）。**W2a → W2b → W2c 串行**，之后接 **W3**（四张表落库）。
    ⚠️ 要接的都只吃构造参数：`LogTailer(path, redact, min_level=)`、`EventMirror(db, scans_dir, scan_id)`
    （`extract_media` 已被它包在里面，接线层**不要再直接调**）。
-   `LogTailer.min_level` **不与 `LOG_LEVEL` 共用**（给前端的流应更严，默认 `INFO`，永不 `DEBUG`）；
-   偏移活在实例里 → **一次扫描一个长命实例**，不许每次请求新建。
-   **`strix.log` 在 run 目录里**（`strix/telemetry/logging.py:setup_scan_logging` 写 `{run_dir}/strix.log`，
-   2026-09-18 在镜像里核过）→ tailer 只能等 `RunDiscovery` 抢到 run 目录之后再建，不是扫描 cwd。
 2. **前端"产物已按留存策略清理"的 404 文案：随 T16 做，不在 W1／W2 范围**（2026-09-18 决定）。
    理由：现在没有任何一条路由会因为产物被清理而 404（媒体／报告读取路由属 T16／T21）。
    先声明一个没有生产者的机器码＋文案，正是本仓已经烧过四次的"声明了却没有任何一处强制"。
@@ -932,7 +961,7 @@ Strix/
 
 **差分与重同步**（应对 `agents.db` 重写）：维护 `_sent{event_key→fingerprint}`、`_order[]`、`_epoch`。
 判据**按顺序、命中即停**：`shrank`（变短）/ `prefix_unstable`（同位置的 key 被换掉）任一成立 →
-`_epoch += 1` 并整体 `events.snapshot`；`version` **递增**（如 `data.status` `running→completed/failed`）
+`_epoch += 1` 并在新 epoch 下逐条重发 `event.add`（`events.snapshot` 已删，见本节末）；`version` **递增**（如 `data.status` `running→completed/failed`）
 是**正常更新**，发 `event.update`、**不动 epoch**。
 
 **截图淘汰与上下文压缩是两件事**（2026-09-17 T13 读源码核实；本节原文把它们当成了一件）：
@@ -976,11 +1005,21 @@ _DATEFMT = "%Y-%m-%d %H:%M:%S"
 —— 复用 `tui/backend/projection.py::sanitize_terminal_text` 去 ANSI/控制字符。
 
 **WS 信封**：`{v, epoch, seq, type, ts, payload}`，`type ∈ phase|agents|event.add|event.update|
-events.snapshot|vuln.add|summary|log|report|report.progress|notice|error|done`。
+vuln.add|summary|log|report|report.progress|notice|error|done`。
 `notice` 的 payload 带机器码（`screenshot_elided` / `context_compacted` / `stream_resynced`，T13 定义），
 中文文案在 `zh-CN.json`。原先那个 `compaction_notice` 类型名把"码"写进了"类型"，加第二种通知就得加
 第二个类型 —— 而 T13 一上来就有三种。
 客户端 `{"type":"hello","resume_from":{epoch,seq}}`，epoch 匹配则从镜像回放，否则给新 epoch 的全量快照。
+
+**`events.snapshot` 已删（W2 方案，2026-09-20 用户放行）**：重同步就是"新 epoch 下把每一条事件当
+`event.add` 再发一遍"，**一帧一行一个 seq**。这样回放（从 `scan_events` 读）与直播是同一个帧形状，
+前端只有一套解析。连带两条：**① `seq` 只用于排序与 `resume_from` 游标，不是丢帧探测器** —— 非事件帧
+（`summary`／`log`／`notice`／`agents`…）与事件帧共用一个计数器，而只有事件帧进镜像，所以回放必然有
+空洞；"作废本地状态"全靠 `epoch`。**② `done` 帧不带结论**：状态／归因／漏洞数只从 `GET /api/scans/{id}`
+取（唯一出处是 `_run_to_completion` 写的那行 `scans`，归因活在 `ScanOutcome` 里；channel 再推一份就是
+第二个可能互相矛盾的判决，而 CLAUDE.md 禁止只凭退出码报"未发现漏洞"）。
+**背压**：订阅者各自一个队列，满了就摘掉那个订阅者（让它带 `resume_from` 重连），**绝不阻塞轮询循环**；
+`EventMirror` 写失败**让异常冒泡杀掉 channel 任务**，不静默丢帧 —— 只追加的真源出洞比断流更糟。
 
 ---
 
@@ -1548,13 +1587,17 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T12c | `POST /api/scans`：并发槽位 + `ScanSupervisor.start()` 调用方 + 状态与 `ScanOutcome` 落库 + 审计 + 停止端点 | T12a T12b | `routes/scans.py` `main.py` `tests/test_routes_scans.py` | **3**（2026-09-16 由 T12 拆出；方案由主会话写，`agent-rules.md` §四 模板 3）—— **三条 2026-09-16 用户拍板**：① **并发槽位 = 1**，且**槽位数参数化进 `.env`、默认 1**，不许写成结构性单例（沙箱四个限额是按本机 VM `11 核 / 7.75 GB` 算出来的，两个并发扫描互相饿死；"一进程一次扫描"约束的是 strix 库、不是我们，>1 技术可行只是这台机器扛不住）；② **`ScanProcess.stop(force=True)` 留**，做成"再点一次立即强杀"（T10 已写好，删了 T26 诊断页就没有兜底手段）；③ **`interrupted_by_restart` 保持一码两因、只改文案**，v1 不拆第二个码（将来要拆，判据是 `stopped_by == "shutdown"` 而非 `run_status`）。<br>**T10 交回的其余三件**：① **把 supervisor 接进路由** —— `app.state.supervisor` 已在 lifespan 里建好、停机 `shutdown()` 已接，本行要做的是 `start()` 的调用方、并发闸、以及 `ScanProcess.wait()` 回来后**把 `ScanOutcome` 的 8 个字段落进 `scans` 行 + 写审计**（T10 只算出它，刻意不落库）；② `starting`／`running` 两个状态值 T10 永不返回，**它们的写入点在这里**；③ `scans.strix_run_name` 由 `RunDiscovery` 抢到后放在 `ScanProcess.run`，**落库也在这里**。<br>**把 T12a 的「码 + `params`」透出成 HTTP status**（422／403／409，映射判据在 T12a 行），本行**不新增错误码**。<br>**T12a／T12b 派发时交回本行的四件（2026-09-16）**：① `scan_admission.audit_for()` 与 `ScanSecretRegistry.register()`／`forget()` 三个函数在那两行交付时**都没有生产调用方**，接线全在这里 —— 按收货清单第一条，**每一处接线都要有一条会因为删掉那次调用而变红的测试**；② 多目标的"以上 N 个均已授权"**没有存储列**（`affirmations_json` 被 CHECK 钉死 = 3），本行要拍：v1 只由前端强制、还是挤进 `overrides_json`；③ 逐字确认串的期望值是**第一个目标的 host**，请求模型的 `targets[]` 顺序因此是有语义的，不许在路由层排序或去重后重排；④ `resolutions` 缺键与"`allowed` 为假而两个原因都空"在 T12a 里都是 `ValueError`（→500），本行调它之前必须自己先把每个主机名解析一遍并填齐 mapping<br>**✅ 2026-09-16 收货（主会话自己做的三件，§八.3；含修复，修完全部复验）**：交付物 `routes/scans.py` 854 行 + `routes/_context.py` 50 行（取 `app.state` 的三个小函数，从 `routes/allowlist.py`／`keys.py` 抽出来共用）+ `tests/test_routes_scans.py` **23 个用例** + `test_audit.py` 补 1 条（双写真的落两处）+ `services/audit.py` 拆成 `prepare()`／`insert(conn, prepared)`／`mirror(prepared)`（**ndjson 镜像只在事务提交之后写**）+ `main.py` 启动步 6b 与停机 drain + `errors.py`／`zh-CN.json`。上面方案阶段那六件、三件旧拍板、T10／T12a／T12b 交回的七件**逐条核过、全部落地**（多目标那件选了"挤进 `overrides_json` 的 `multi_target_affirmed` 且后端强制"）。<br>**① 官方闸门**：`make lint` 全绿（ruff check／format 60 个文件、eslint、tsc），`make test` **804 passed / 0 skipped**（基线 780，**+24**）。<br>**② mutation 11 处，全部被杀且血溅范围逐条精确 —— 但交付时有 3 处是全绿的**：**M4b**（`finally` 里只删 `vault.release`、`forget` 留着）、**M7**（删起进程失败时的 `_mark_failed_to_start`）、**M8**（删事务提交后的 `audit.mirror`）。收货补的三条接线测试：`test_credentials_are_forgotten_when_the_scan_ends` 改成注入 `FakeClock` 的 vault，扫描跑完后**推进 idle TTL 再断言 `get(handle) is None`** —— `get()` 不反映 `ref_count`，"`release()` 真的发生过"唯一可观测的后果就是空闲 TTL 重新起算；新增 `test_a_failure_to_spawn_marks_the_row_failed`，用上了交付时**没有调用方**的 `FakeSupervisor.start_error` 钩子（`pytest.raises(OSError)` 拿得到原异常：Starlette 的 `ServerErrorMiddleware` 出完 500 正文还会重抛）；`test_launch_writes_authorization_scan_and_audit` 补 ndjson 镜像断言（两条事件名按序 + `scan_id` 一致）。另补的 M9／M10 也各红一条。<br>**③ 读代码修了四件**：(a) `test_status_walks_starting_running_terminal` 拿"终态状态"当审计写入信号，而 `mark_finished` 先提交、`audit.record` 后走 —— **实测 13 次里红 2 次**，还让 M1 的血溅范围虚报成 3 条；改成先等 `audit_log` 里出现 `scan.finished` 行，改后**连跑 6 次全绿**、M1 收敛成该红的那 2 条。**竞态在测试侧也是缺陷，交付报告里的"全绿"只代表那一次**；(b) 拍板 ③ "只改文案"那件**漏做了**：`zh-CN.json` 的 `interrupted_by_restart` 补上"控制台重启，或者它的进程被强制终止（docker kill、掐电、机器重启）"，一码两因这件事现在文案里也说了；(c) 槽位数只读 `Settings`，**没进 `docker-compose.yml` 也没进 `.env`** —— "参数化"只做了一半（用户拍板"compose 补一行 + `setup.sh` 写进 `.env`"）：`x-console-env` 加 `CONSOLE_MAX_CONCURRENT_SCANS: "${CONSOLE_MAX_CONCURRENT_SCANS:-1}"`，`setup.sh` 加 C18b（纯数字 + ≥1 校验，取值优先级照 `CONSOLE_WEB_PORT`：env > 已有 `.env` > 默认 1）并写进生成的 `.env`；`docker compose -p strix-console config -q` 通过、渲染出 `"1"`，`bash -n setup.sh` 通过；(d) `allowlist_snapshot` 只存了逐目标结论，而 `001_init.sql:64` 要的是"当时该条目的完整快照"（用户拍板"存完整条目"）：按 `decision.entry_label` 反查存整条 `model_dump(mode="json")` —— 反查是**一次 dict 取值、不是第二份匹配逻辑**（`AllowlistConfig._labels_are_unique` 保证标签唯一）。这一处踩了一次：`_store(request).current` 返回的是 `AllowlistSnapshot` **不是** `AllowlistConfig`，第一版改完 11 条红。<br>**两处结构性收紧（读代码时决定的，不在交付里）**：① `try:` 上移到 `acquire()` 之后第一行，把 `TestCredential` 构造与 `scan_secrets.register()` 也圈进去 —— 否则这两行任一抛异常，那份凭据的 `ref_count` 就一直挂着直到 24h 硬 TTL；② `launched = True` 下移到 `create_task(_run_to_completion(...))` 紧前一行，也就是所有权交接的那一刻 —— 早置一行就意味着某次抛异常时 `finally` 会去 `forget()` 一个**正在跑**的扫描的口令，那是泄漏面而不是清理。<br>**一处提取（§十.3 的"第三次"）**：`FakeClock` 从 `test_key_vault.py`／`test_auth.py` 两份副本提到 `tests/conftest.py`，本行新测试是第三个用户。<br>**方法学结论（同一件事第四次被实测）**：闸门全绿 + 清单上六条 mutation 全对，仍然漏了**三处"接线一条测试都没有"** + 一处会让 CI 随机变红的竞态。抓到它们的唯一手段是**自己补设计 mutation**（M4b／M7／M8 都不在清单上），而 M4b 还给出了一条新判据：M4 删 `forget+release` 会红、只删 `release` 就不红 —— **粗粒度 mutation 会把细粒度的空白掩掉，以后按"每一次调用"设计 mutation，不是按"每个 `finally` 块"**。<br>**验收脚本本身的坑（已记进 `pitfalls` 触发条件 35 一带）**：测试镜像的 addopts 里已有 `-q`，再传一个就成 `-qq`，pytest **不再打那行汇总计数** —— 之前每次 mutation 都报"没拿到汇总行"就是这个原因，循环里必须同时打退出码与计数行。<br>**派发预算复算（2026-09-16，`scripts/agent_budget.sh`）**：这一条任务**填满了三个上下文窗口、压缩 4 次**（交底 1／实现 1／收货 2），而子 agent 只占总花费的三成 —— **粒度不是问题，交底与收货的方式是**（它要 16 个模块的签名才能动手，按层再拆每一半仍要那 16 个）。三条已落成规则：交底不许整读源码（§九.1）、收货整读产物别拼 `sed` 片段（§八.3）、单文件别用几十次小 Edit 堆（§十.6）；根因与量具见 `pitfalls` 条 41 |
 | T13 | `RunProjector`：epoch + 三信号重同步 + elision 识别（**全项目最难的一块**）| T10 | `services/run_projector.py` `strix_bridge/{projection,paths,catalogue}.py` | **3** —— **T14／T15／T16／T21／T29 五个任务挂在它后面**，且它定义 `strix_bridge/` 的 import 边界 |
 | T14 | `EventMirror`（截图首见即落地 `media/`）+ `LogTailer`（脱敏在推流前）+ `ScanChannel` | T13 | `services/{event_mirror,log_tailer,channel}.py` | 2 —— **2026-09-18 按 §三.2 拆成三条**：**T14a** = 纯函数 `services/event_media.py`（抽 data URL、算 `sha256`、改写成 `/api/scans/{id}/media/<sha256>.png`，**不写库不落盘**，任务书 `/tmp/T14a-prompt.md`）；**T14b** = `services/log_tailer.py`（任务书 `/tmp/T14b-prompt.md`）；**T14c**（未派）= `services/event_mirror.py` 落盘＋写 `scan_events`／`scan_media`，**被 `scan_events.strix_id` 的表结构缺陷卡住，见 §交接**。`ScanChannel` 与 `main.py` 接线归到 T14a/b/T28a 之后的那条串行接线任务。<br>**✅ 2026-09-18 T14a 收货（主会话三件事全做，一条自陈都没采信）**：`services/event_media.py` **151** 行 + `tests/test_event_media.py` **223** 行，新增 **28** 条用例。**2 处 mutation 只红该红的**：递归改成只看顶层 → 红 9（4 个嵌套形状 + 双图 + `non_png` 4）；`sha256` 改成对 base64 原文取 → 红 18（恰好是"有 PNG 被成功抽出"那 18 条，`undecodable` 6 与 `non_png` 4 不红）。<br>**整读之后认下的三处**：① **空／只有空白／只有 padding 的 base64 判 `undecodable_base64`、不产 0 字节图**（任务书没规定，子 agent 自己定的，我认可 —— 否则 T14c 会往 `media/e3b0c442….png` 写一个空文件）；② **正则的 base64 续行只认换行、不认一般空白** —— 收进一般空白**已实测出 bug**：`"a <urlA> b <urlB> c"` 里第一个匹配会吃掉 `= b data`（`b`／`data` 全在 base64 字母表内），于是两张图一张都抽不出来还误报 `undecodable_base64`。理由已写进 `_DATA_URL_RE` 上方，**别去"简化"它**；③ ⚠️ **"序列化后零命中 `data:image`"只对全 PNG 且 base64 合法的 payload 成立** —— `data:image/jpeg;base64,…` 这个字面串本身就含 `data:image`，而契约要求非 PNG **原样保留**。**不许把它当全局后置条件**，否则会照字面"修"出一个把 jpeg 也删掉的实现。<br>**已知不做（都不是缺陷）**：`media_url()` 不提取（只一个调用点；测试里刻意写死那个形状、**不从生产代码 import**，否则改坏 URL 测试会跟着一起改 —— 等 T14c 的 `GET /api/scans/{id}/media/{sha}.png` 出现是第 3 个用处再提取）；递归无深度上限（payload 来自 Strix 自己 `json.dump`，受 json 递归限制约束；要兜 `RecursionError` 就兜在 T14c 的调用点）；单事件抽出的总字节数无上限（护栏放在写库那一半，只有它知道磁盘配额）；只下钻 `Mapping`／`list`（JSON 反序列化产不出 tuple／set）。<br>**✅ 2026-09-18 T14b 收货**：`services/log_tailer.py` **155** 行 + `tests/test_log_tailer.py` **266** 行，新增 **23** 条。**脱敏的落法是「整行原文先过一次 `redact`、再解析」**，这是设计要求不是实现细节：反过来（先解析、只脱几个字段）就要求我们枚举"哪些字段可能含凭据"，而 `strix.log` 里连 logger 名和 `agent_id` 都是 Strix 那边填的字符串。`[REDACTED]` 不含空格，所以整行替换不打乱格式。<br>**2 处 mutation**：① 改成"先解析、只脱 `msg`" → 红 **6**（`in_logger_name`／`in_agent_id`／`in_scan_id` × 两种凭据）。⚠️ **`in_unparsed_line` 那两个用例对这个 mutation 没有区分力** —— 未解析行的整行原文本来就进了 `msg`，所以"只脱 msg"照样把它脱干净了（子 agent 报告里列举的"红 8"是错的，实测 6；它文字里的 6 是对的）；② **`rfind(b"\n")` → `find`**（**我自选的靶子，不在它清单上**）→ 红 4（`append_returns_only_the_new_lines`、`shrunken_file_is_re_read_from_zero`、`min_level[debug]`／`[info]`）。<br>**已知不做**：`__init__` 对非法 `min_level` 抛 `ValueError`（3 行，防"配置拼错导致整条流静默为空"）**刻意没有专门测试** —— 一条编程错误不值一格；偏移不持久化（接线约束见 §交接）。<br>**✅ 2026-09-18 T14c 收货（三件事全做）**：`services/event_mirror.py` **180** 行 + `tests/test_event_mirror.py` **222** 行，新增 **8** 条（`make test` 1072 passed / 0 skipped）。**5 处 mutation 全部只红该红的那一条**：M1 把落盘挪到事务之后 → 红 `test_no_rows_when_image_landing_fails`；M2 `ON CONFLICT DO NOTHING` → `DO UPDATE` → 红 `test_known_sha_is_not_re_accounted`；**M3／M4／M5 是我自选的** —— M3 `fingerprint` 改成对**改写后**的 payload 重算 → 红 1（正路那条）；M4 `rsplit("_", 1)` → `split("_", 1)` → 红 1，⚠️ **这个靶子好使的原因是 `int("1_7") == 17`** —— Python 的数字下划线字面量会让"取第一个 `_` 之后"**静默算出一个合法整数**而不是抛；M5 去掉「临时文件 + 原子 rename」→ **红 0，如预期**。<br>**三条落库语义（交底时我拍板，这里是权威）**：① `data_json` 是三键信封 `{"key", "upstream_version", "data"}`，`version=1` 指的就是这个信封 —— `upstream_version` 按 T13 约定不占列，而直接混进 payload 会和工具自己的键撞名；`key`（`"tool_12"`）必须存得下来，因为 `kind` 存的是上游 `type` 字段（`strix_bridge/projection.py:98`），**不保证**是 key 的前缀，`f"{kind}_{strix_id}"` 复原不出来。② **镜像不按 `fingerprint` 去重，1 帧 1 行**：重同步会在 epoch+1 下整份重推、镜像照样重写一遍 —— 否则 `replay(epoch=E)` 拿不出完整快照，`resume_from` 就失去意义；DDL 注释里"用 fingerprint 判断这条我已经有了"说的是内存里的 `ProjectionState`，**不是这张表**。③ **先文件、后行**：孤儿 `<sha>.png` 是接受的不对称（内容地址化、留存清理删目录时带走），反过来会留下**指向不存在文件的行**。<br>**整读之后认下的两处**：① **落盘走 `<sha>.part` + `replace()` 原子 rename**（任务书只说了"文件已存在就跳过写"，没说怎么保证"存在的那个是完整的"）—— 半截文件会让 `exists()` 永久跳过重写、`bytes` 列与实际字节数永不一致。**M5 实测它没有任何测试兜着**（注入"写一半"太别扭），理由只写在代码注释里，**别去"简化"成 `target.write_bytes`**；② `rel_path` 拼 `f"{scans_dir.name}/..."` 而不用 `relative_to`（`scan_dir_for` 会 `resolve()`，macOS 上 `tmp_path` 的 `/var → /private/var` 符号链接会让它抛 `ValueError`）—— 代价是**依赖"`scans_dir` 就是 `${DATA}/scans`"这个约定**，见 §交接。<br>**已知不做**：`strix_id_of` 不挡"超出 int64 的巨大后缀"（会在 `conn.execute` 抛 `OverflowError`，与 `event_media` 那种"一条坏事件不许搞崩整轮"的处理不一致 —— 但 strix 的事件 id 是自增计数器，产不出这种 key）；一条事件里**两张不同图**、以及 `agent_id`／`ts` 为 `None` 都没有专门用例（`for` 循环 4 行、两列本来就 nullable）；没有 `replay()`／读取接口／`GET media/<sha>.png` 路由 —— 那是接线任务与 T16 的事。 |
+| W2a | **`ScanChannel` 的纯函数一半**：`services/scan_frames.py` —— `plan_frames(previous, projection, snapshot, log_lines) -> (tuple[FrameSpec, ...], 新状态)` + `envelope_for(spec, *, epoch, seq, ts)`。**无 IO、不发号**（发号要与 `await mirror.append` 交错，属 W2b）。事件帧 payload = 镜像行的纯函数（`{key, kind, agent_id, ts, upstream_version, data}`，与 `EventMirror` 三键信封同源）；非事件维度自带「上次推了什么」的签名，内容没变不重推 | T13 T14a T14b T14c | `services/scan_frames.py` `tests/test_scan_frames.py` | **2** —— 方案在 §W2 方案（2026-09-20 放行）。**不变式：帧↔镜像行 1:1 同 seq、epoch 变则 seq 归零、同一内容不重推** |
+| W2b | **tick 循环**：`services/scan_channel.py` —— stat 门（四文件 `(mtime,size)`）→ `read_run_dir`（`to_thread`）→ `project()` → `Sequencer.next(epoch)` → 要镜像的先 `await EventMirror.append` **再用返回的 `MirroredEvent.event` 建帧**（顺序反了 WS 帧里会带 base64、且与回放不一致）→ 扇出；自适应 250ms → ×2 退避到 2s 上限；`finish()` 做最后一次 tick + `done` + 停循环 | W2a | `services/scan_channel.py` `app/strix_profile.py`（补三个文件名常量）`tests/test_scan_channel.py` | **2** —— **不变式：慢订阅者被摘掉且不拖住循环；镜像写失败不被吞**（异常冒泡杀掉 channel 任务） |
+| W2c | **接线**：`ChannelRegistry`（按 scan_id 起停、停机全关）+ `routes/scans.py` 在 `_run_to_completion` 里起、在 `process.wait()` 返回后 `await channel.finish()` + `main.py` lifespan 关停。**channel 自己不看进程**（单一权威，别两处各判一次「跑完了没」）| W2b | `services/scan_channel.py`（registry）`routes/scans.py` `main.py` `tests/test_routes_scans.py` | **2** —— **不变式：扫描终态或停机后 channel 一定被关掉、不泄漏任务** |
+| W3 | **四张表落库**：`scan_agents` upsert、`scan_findings` 首见即插（含 `input_hash`）、`scans` 的 `cost_usd`／`count_*`／`agent_count`／`event_count`／`current_epoch`／`phase` | W2c | `services/scan_persist.py`（新）`tests/test_scan_persist.py` | **2** —— **2026-09-20 新增的一行，是一处漏派**（与 T7c 同形状）：验收第 14 组那条「`severity_counts` 与 `scan_findings` 行数一致」要求这几张表有行，而在此之前**没有任何一行任务拥有它们的写入**。刻意不折进 W2b（§三.2：超 500 行也超 1 条不变式）；实时 cost 走 `summary` 帧、不依赖本行 |
 | T15a | **采集压缩夹具**：真跑一次扫描，`STRIX_CONTEXT_BUFFER_TOKENS=1` + `STRIX_MAX_CONTEXT_IMAGES=1` 强制触发压缩与图片淘汰；产物脱敏后入库 | T13 | `tests/fixtures/run_dirs/` | **自** —— 要真凭据、真扫描，派发规则第 3 条禁止把 Key 给子 agent，**结构上不可派发** |
 | T15b | 重同步测试（吃 T15a 的夹具）| T15a | `tests/test_projector_resync.py` | 2 |
 | T16 | WS + SSE 路由、重连回放 | T14 | `routes/stream.py` | 2 |
 | T17 | 前端实时面板（子 agent 树 / 事件流 / 终端 / 截图 / CostMeter）| T5 T16 | `frontend/src/components/live/*` | **3**（读 T5 的约定，**不再开** frontend-design）|
 | T7c | **凭据表单（LLM Key）—— 前端**：`GET /api/providers` 的目录 → 供应商／形状／模型三选 + `api_base` + 按 `secret_keys` 渲染 N 个 `type=password`（随机 `name`，破自动填充）+ 按 `param_keys` 渲染普通文本框 → `POST /api/keys` → `vault_handle` 进 `useKeysStore`；首页「现在提供凭据」按钮从禁用改成真入口 | T5 T7b | `frontend/src/components/credentials/*` `src/lib/api/client.ts` `src/app/(app)/page.tsx` | **3** —— **2026-09-19 新增的一行，不是从任何行拆出来的**：它是一处**漏派**。T7 是纯后端；T19 的"测试账号收集"是**靶标应用**的账号不是 LLM 凭据；首页那两个按钮里「现在提供凭据」从 T5 起就是禁用的，而它不在任何任务行的文件列里。`CreateScanRequest.vault_handle` 必填 → **不做它，T18 交完仍然一次扫描都发不出去**。文案**已经全写好**（`zh-CN.json` 的 `providers.*` 12 键 + `credentials.*` 7 键，T7b 落的），本行原则上**不新增文案键**。<br>**硬约束**：Key 输入框 `type=password` + **随机 `name`**（泄漏矩阵第 11 行；与登录口令框规则**刻意相反**，理由见 T5b 下面那一行）、POST 后 `finally` 清空 React state、**绝不写日志/埋点**（明文还在作用域里，照 `LoginForm.tsx:78` 那条注释）、`vault_handle` 只经 `useKeysStore.setHandle` 落 `sessionStorage`（`src/lib/stores/keys.ts` 是全项目唯一许可碰它的文件，eslint 封死）|
 | T18a | **五步向导 —— 骨架 + 第 1／4／5 步**：`/scans/new` 路由 + 步进条 + `stores/wizard.ts` + 第 1 步目标（`POST /api/targets/validate` 预览：规范化 URL／punycode／每个 IP 的 `ip_class`／命中的白名单条目／`required_opt_in` 两个勾选）+ 第 4 步模板**最小选择器**（`GET /api/scan-templates`）+ 第 5 步预算与轮数（默认取模板 `default_*`）；**填但不提交** | T5 T12c T7c | `frontend/src/app/(app)/scans/new/page.tsx` `frontend/src/components/wizard/*` `src/lib/stores/wizard.ts` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` `src/app/(app)/page.tsx` | **3** —— 2026-09-19 由 T18 按 §三.2 拆出（整条估 700–900 行）。**文件列比原 T18 那一行宽**，已拍板：`client.ts:241-245` 自己写着"包装留给它们的第一个调用点（T18 的向导）"。**6 模板文案／费用预估／高级面板／测试账号收集全归 T19**，本行只出按码渲染的 radio。`scan_mode`／`reasoning_effort`／`extra_instruction`／`credentials[]` 四个字段 T18 一律不发（`CreateScanRequest` 的默认值刚好覆盖，`extra="forbid"` 只禁多余字段不禁缺省）<br>**2026-09-19 已实现并收货**（交底任务书 `/tmp/T18a-prompt.md`，模板 3 的实现阶段）：十个新文件 + `client.ts` 追加两个包装；官方闸门 `make lint` 干净、`make test` 1086／0 skipped，纯前端 mutation 0 处。**文件列与原计划的两处差别**：`src/app/(app)/page.tsx` 按用户拍板**没动**（首页入口留给 T18b），`zh-CN.json` 的 32 个新键由**主会话**先写（把「文案」这一维从子 agent 的文件列里拿掉）。收货读代码改掉四处、`requirement` 的渲染、以及 T18b 的三件交办都记在 §交接，本行不复述。 |
-| T18b | **五步向导 —— 第 2／3 步 + 提交**：授权依据（`authorization_ref`，命中白名单时从条目预填）+ **三个独立必勾** + **逐字输入 `targets[0].normalized.host`**（期望串灰显**在输入框旁边**、**不进 `placeholder`**）+ 多目标"以上 N 个均已授权" + 第 3 步操作人 + `POST /api/scans` + 全部错误码分支 | T18a | `frontend/src/components/wizard/*` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` | **3** —— **提交成功后就地渲染成功块**（`scan_id`／`status`／生效预算 + 可折叠 `argv_preview`）+ 一句"实时面板随 T17 上线"，**不给任何链接**：`routes/scans.py` 只有 `POST ""` 与 `POST "/{id}/stop"`，**`GET /api/scans/{id}` 不存在**，`/scans/[id]` 页面是 T17 的地盘 —— 判据沿用 `page.tsx:44-49`「点下去 404 的按钮比没有按钮更糟：它把'这一步还没做'变成'这个工具坏了'」。<br>**错误渲染**：`ApiError.code` → `ErrorNotice`；`params.reason` 在时额外去 `targetGuard.reasons.*` 取人话并高亮第 `params.index` 行，不在时退回 `errors.invalid_request`（契约出处 T12a 行）。`blocked_metadata`(403) **不给任何"覆盖"入口**<br>**2026-09-20 已派发**（交底任务书 `/tmp/T18b-prompt.md`）。**文件列比本行原先写的宽两个**，已拍板：`src/components/ui/ButtonLink.tsx`（新，首页 CTA 要一个 `next/link` 版按钮，复用 `Button.module.css`；**不给 `Button` 加 `href`** —— 一个组件渲染两种元素比两个各自直白的组件难读）与 `src/app/(app)/page.tsx`（T18a 按用户拍板没动首页，入口就欠在这一行）。另加 `GET /api/allowlist` 的包装 `fetchAllowlist()` —— 授权依据要从命中的条目取 `authorization_ref`，而 `TargetValidation.allowlist_entry` 只回条目的 **label**，编号只在 `/api/allowlist` 的正文里。**原计划里"命中白名单时从条目预填"改成"展示条目 + 一键填入"**（用户拍板，理由在 §交接）。方案与收货判据在 §交接，本行不复述。<br>**2026-09-20 已实现并收货**：6 新 + 8 改（+ `zh-CN.json` 45 键由主会话先写）。`make lint` 干净、`make test` **1086／0 skipped**，纯前端 mutation 0 处；整读 14 个文件读出三处真缺陷（声明不随目标作废、回执活在本地 state、`.btn` 在 `<a>` 上失效），全部已修，逐条在 §交接。**人眼验收待做。** |
+| T18b | **五步向导 —— 第 2／3 步 + 提交**：授权依据（`authorization_ref`，命中白名单时从条目预填）+ **三个独立必勾** + **逐字输入 `targets[0].normalized.host`**（期望串灰显**在输入框旁边**、**不进 `placeholder`**）+ 多目标"以上 N 个均已授权" + 第 3 步操作人 + `POST /api/scans` + 全部错误码分支 | T18a | `frontend/src/components/wizard/*` `src/lib/api/client.ts` `frontend/messages/zh-CN.json` | **3** —— **提交成功后就地渲染成功块**（`scan_id`／`status`／生效预算 + 可折叠 `argv_preview`）+ 一句"实时面板随 T17 上线"，**不给任何链接**：`routes/scans.py` 只有 `POST ""` 与 `POST "/{id}/stop"`，**`GET /api/scans/{id}` 不存在**，`/scans/[id]` 页面是 T17 的地盘 —— 判据沿用 `page.tsx:44-49`「点下去 404 的按钮比没有按钮更糟：它把'这一步还没做'变成'这个工具坏了'」。<br>**错误渲染**：`ApiError.code` → `ErrorNotice`；`params.reason` 在时额外去 `targetGuard.reasons.*` 取人话并高亮第 `params.index` 行，不在时退回 `errors.invalid_request`（契约出处 T12a 行）。`blocked_metadata`(403) **不给任何"覆盖"入口**<br>**2026-09-20 已派发**（交底任务书 `/tmp/T18b-prompt.md`）。**文件列比本行原先写的宽两个**，已拍板：`src/components/ui/ButtonLink.tsx`（新，首页 CTA 要一个 `next/link` 版按钮，复用 `Button.module.css`；**不给 `Button` 加 `href`** —— 一个组件渲染两种元素比两个各自直白的组件难读）与 `src/app/(app)/page.tsx`（T18a 按用户拍板没动首页，入口就欠在这一行）。另加 `GET /api/allowlist` 的包装 `fetchAllowlist()` —— 授权依据要从命中的条目取 `authorization_ref`，而 `TargetValidation.allowlist_entry` 只回条目的 **label**，编号只在 `/api/allowlist` 的正文里。**原计划里"命中白名单时从条目预填"改成"展示条目 + 一键填入"**（用户拍板，理由在 §交接）。方案与收货判据在 §交接，本行不复述。<br>**2026-09-20 已实现并收货**：6 新 + 8 改（+ `zh-CN.json` 45 键由主会话先写）。`make lint` 干净、`make test` **1086／0 skipped**，纯前端 mutation 0 处；整读 14 个文件读出三处真缺陷（声明不随目标作废、回执活在本地 state、`.btn` 在 `<a>` 上失效），全部已修。三处逐条：① **改目标之后整份声明仍然勾着** —— 三个 setter 只作废 `validation`，三条声明／"以上 N 个均已授权"／逐字确认串都留着，而逐字确认**只钉住 `targets[0]`**，于是改第二行或加一个 host 之后那些勾全在 → 用户为一份他没签过的清单签了字，**而这一屏存在的理由正是这件事**；现在三个 setter 一起清 `CLEARED_DECLARATION`（校验快照 + 逐字串 + 三个勾 + 多目标那条），`authorizationRef`／`operatorName` **刻意不清**（它们是这次委托的属性，不是某一批目标的属性）。**这一处是子 agent 自己点出来留给我拍板的，它的判断是对的。** ② **202 的回执活在提交面板的本地 state 里** → 翻回第 3 步再回来就没了，而那个 `scan_id` 是**屏幕上唯一一份**（没有扫描列表、`GET /api/scans/{id}` 不存在，丢了连 stop 都调不出来）；已提进 store 的 `accepted`，只有 202 会写、没有置回 `null` 那一路、且不随目标变化作废。③ **`ButtonLink` 渲染 `<a>` 而 `.btn` 既没 `display` 也没 `text-decoration`** → 行内元素吃不住上下 `padding`、且全站 `a` 带下划线（`globals.css:205-209`）→ 一个带下划线的填色按钮；已给 `.btn` 补两行（对 `<button>` 是无害的重复）。另删掉 `common.notReadyYet`（首页三处入口现在全是真的，零引用）。<br>**✅ 人眼验收（用户，2026-09-20）：五处全过、零缺陷** —— 逐字串在输入框旁边不在 `placeholder`、单目标时"以上 N 个均已授权"不渲染、空框不骂人、成功块里没有指向 `/scans/{id}` 的链接、首页「开始填写工单」是按钮样式的链接。**第一次人眼一处都没抓到**（T18a 抓到三处）—— 差别是那三处的教训（控件属性静默拦住的东西学不到、字段正交≠文案正交）这轮在交底任务书里就写成了硬要求。已 commit `68337a1`。 |
 | T19 | 6 个场景模板 + 费用预估 + 测试账号收集 + 高级面板 | T18 | `frontend/src/components/wizard/*` `routes/templates.py` | **3** —— "费用预估"要如实展示 bearer 形状贵 4～6 倍这个真实取舍，是产品决策不是填表。读 T5／T18 的约定，**不再开** frontend-design |
 | T20 | 发现 tab | T17 | `frontend/src/components/findings/*` | **3** |
 | T21 | `Translator`（逐条 + executive、`Semaphore(4)`、JSON 修复、缓存表、费用核算）| T13 | `services/translator.py` `migrations/002_report_translations.sql` | **3** —— 含**新建迁移 = 表结构设计**（`agent-rules.md` §四 明列）；且"绝不翻译 `poc_script_code`／`evidence`／`endpoint`／`code_locations`"是硬约束，译错等于伪造证据 |
@@ -1703,8 +1746,8 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 14. **压缩韧性（R3 验收）**：注入 `STRIX_MAX_CONTEXT_IMAGES=1` + `STRIX_CONTEXT_BUFFER_TOKENS=1` 重跑。
     **两个 env 各驱动一件不同的事，所以分开断言**（2026-09-17 随 §实时流设计 那处修正改）：
     `STRIX_MAX_CONTEXT_IMAGES=1` → 至少一次 `notice(screenshot_elided)` 且 **epoch 不变**；
-    `STRIX_CONTEXT_BUFFER_TOKENS=1` → 至少一次 epoch 递增的 `events.snapshot` 伴随
-    `notice(context_compacted)`。`scan_events` 保留**所有** epoch；
+    `STRIX_CONTEXT_BUFFER_TOKENS=1` → 至少一次 epoch 递增、且新 epoch 下整份事件被逐条 `event.add`
+    重发（`events.snapshot` 已删，见 §实时流设计 末），伴随 `notice(context_compacted)`。`scan_events` 保留**所有** epoch；
     **截图画廊仍显示每一张截图**，尽管 `agents.db` 里已变成 `[older screenshot elided…]`
 15. **中文报告**：每条 finding 的 `title_zh/what_zh/impact_zh/fix_zh/severity_reason_zh` 均非空；
     无词表里的未翻译术语；`not_tested_zh` 非空（来自 `coverage.json`）；重复 POST → `translated_findings: 0`（命中缓存）
