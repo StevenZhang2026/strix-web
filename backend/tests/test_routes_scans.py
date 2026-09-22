@@ -34,9 +34,12 @@ from pydantic import SecretStr
 
 from app.db import Database
 from app.main import create_app
+from app.routes import scans as scans_routes
 from app.services.allowlist import AllowlistConfig, AllowlistStore
 from app.services.dns_resolver import Resolution, ResolutionError, Resolver
 from app.services.key_vault import IDLE_TTL_SECONDS, CredentialSet, KeyVault
+from app.services.run_projector import ProjectedAgent
+from app.services.scan_frames import _agent_row
 from app.services.scan_launcher import LaunchPlan
 from app.services.scan_supervisor import ScanOutcome
 from app.services.target_guard import AllowlistMode
@@ -931,3 +934,273 @@ def test_lifespan_shutdown_closes_the_channels_while_the_database_is_still_open(
         app.state.channels = OrderRecordingChannels(order, db=app.state.db)
 
     assert order == ["shutdown", "db-open"]
+
+
+# =============================================================================
+# 17 读取端：`GET /api/scans` 与 `GET /api/scans/{id}`（T16e）
+# =============================================================================
+# 这 15 个列名一个都不许出现在读取端的响应里。前 8 个是泄漏面（`vault_handle` 是 KeyVault
+# 的句柄，`cwd`／`run_dir` 是宿主绝对路径），后 7 个没有消费者 —— "以后可能用得上"就不写。
+_FORBIDDEN_COLUMNS = (
+    "vault_handle argv_json env_var_names_json instruction_sha256 cwd run_dir strix_run_name "
+    "pid api_base auth_shape phase scope_mode resume_available strix_version sandbox_image"
+).split()
+
+
+def test_the_read_endpoints_expose_no_credential_surface(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """列表与详情的**正文全文**里不许有 Key／测试口令／vault 句柄，也不许有那 15 个列名。
+
+    `test_no_secret_reaches_the_db_the_audit_or_the_response` 盯的是 POST 的响应与库／审计，
+    这条盯的是两个只读端点：SELECT 里多点一列、响应模型里多一个字段，这条就红。
+    """
+    handle = _store_credentials(app)
+    response = client.post(
+        "/api/scans",
+        json=_payload(
+            vault_handle=handle,
+            credentials=[{"role": "user", "username": "alice", "password": _TEST_PASSWORD}],
+        ),
+    )
+    assert response.status_code == 202, response.text
+    scan_id = str(response.json()["scan_id"])
+
+    listed = client.get("/api/scans")
+    detail = client.get(f"/api/scans/{scan_id}")
+
+    assert listed.status_code == 200, listed.text
+    assert detail.status_code == 200, detail.text
+    haystack = listed.text + detail.text
+    for secret in (_API_KEY, _TEST_PASSWORD, handle):
+        assert secret not in haystack
+    for column in _FORBIDDEN_COLUMNS:
+        assert column not in haystack
+    # 光按**键名**查挡不住"把 `cwd` 的值塞进一个合法字段"（比如 `reasoning_effort=row["cwd"]`），
+    # 所以也按**值**查一遍：宿主数据目录的绝对路径一个字节都不许出现在响应里。
+    assert str(settings.console_data_dir) not in haystack
+
+
+# 响应的键白名单。**字面写出来**：SELECT 里多点一列或者模型里多一个字段，下面两条就红。
+_SUMMARY_KEYS = frozenset(
+    "id created_at started_at finished_at status template_id targets scan_mode max_budget_usd "
+    "cost_usd count_critical count_high count_medium count_low agent_count event_count "
+    "exit_code exit_meaning error_code".split()
+)
+_DETAIL_KEYS = _SUMMARY_KEYS | frozenset(
+    "error_message max_turns reasoning_effort provider strix_llm current_epoch "
+    "authorization_id".split()
+)
+
+_AGENT = ProjectedAgent(
+    id="agent-1",
+    name="recon",
+    parent_id=None,
+    status="running",
+    created_at="2026-09-08T00:00:01.000Z",
+    updated_at="2026-09-08T00:00:02.000Z",
+    error_message=None,
+)
+_FINDING: dict[str, object] = {
+    "id": "vuln-1",
+    "severity": "high",
+    "title": "SQL 注入",
+    "endpoint": "/rest/products/search",
+    "evidence": {"request": "GET /rest/products/search?q='"},
+}
+
+
+@contextmanager
+def _writable_conn(settings: Settings) -> Iterator[sqlite3.Connection]:
+    """造数据用的**可写**连接（`_rows` 那个只读）。
+
+    同 `_rows` 的理由：刻意不复用 `app.state.db` 的连接，那一个属于事件循环所在的线程。
+    """
+    connection = sqlite3.connect(settings.db_path)
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield connection
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _seed_finished_scan(settings: Settings, scan_id: str = "scan-1") -> None:
+    """一行终态扫描 + 一个 agent + 一条发现。
+
+    **刻意不走 `ScanPersist`**：那是 W3 的行为，在这里用它就是把两层的不变式缠在一起。
+    """
+    with _writable_conn(settings) as conn:
+        insert_authorization(conn)
+        insert_scan(conn, scan_id)
+        conn.execute(
+            "UPDATE scans SET status = 'completed', exit_code = 2, exit_meaning = ?, "
+            "count_high = 1, agent_count = 1, event_count = 7, cost_usd = 0.5, max_turns = 40 "
+            "WHERE id = ?",
+            ("vulnerabilities_found", scan_id),
+        )
+        conn.execute(
+            "INSERT INTO scan_agents "
+            "(scan_id, agent_id, name, parent_id, status, error_message, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                scan_id,
+                _AGENT.id,
+                _AGENT.name,
+                _AGENT.parent_id,
+                _AGENT.status,
+                _AGENT.error_message,
+                _AGENT.created_at,
+                _AGENT.updated_at,
+            ),
+        )
+        _insert_finding(conn, scan_id, "2026-09-08T00:00:03.000Z", _FINDING)
+
+
+def _insert_finding(
+    conn: sqlite3.Connection,
+    scan_id: str,
+    first_seen_at: str,
+    raw: dict[str, object],
+) -> None:
+    """一条发现。`finding_id` 取 `raw["id"]`，`input_hash` 拿它填满 64 位（列上有长度 CHECK）。"""
+    finding_id = str(raw["id"])
+    conn.execute(
+        "INSERT INTO scan_findings "
+        "(scan_id, finding_id, severity, title, first_seen_at, raw_json, input_hash) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (
+            scan_id,
+            finding_id,
+            str(raw.get("severity") or "low"),
+            str(raw.get("title") or ""),
+            first_seen_at,
+            json.dumps(raw, ensure_ascii=False, sort_keys=True),
+            finding_id.ljust(64, "0")[:64],
+        ),
+    )
+
+
+def test_the_scan_list_is_empty_on_a_fresh_install(client: TestClient) -> None:
+    """空库不是错误 —— 恒 200 加一张空表。"""
+    response = client.get("/api/scans")
+
+    assert response.status_code == 200
+    assert response.json() == {"scans": [], "truncated": False}
+
+
+def test_the_scan_list_is_newest_first_and_carries_exactly_the_summary_keys(
+    client: TestClient, settings: Settings
+) -> None:
+    with _writable_conn(settings) as conn:
+        insert_authorization(conn)
+        insert_scan(conn, "scan-old")
+        insert_scan(conn, "scan-new")
+        conn.execute(
+            "UPDATE scans SET created_at = ? WHERE id = 'scan-new'", ("2026-09-09T00:00:00.000Z",)
+        )
+
+    body = client.get("/api/scans").json()
+
+    assert [scan["id"] for scan in body["scans"]] == ["scan-new", "scan-old"]
+    assert set(body["scans"][0]) == _SUMMARY_KEYS
+    assert body["scans"][0]["targets"] == ["https://example.com"]
+    assert body["truncated"] is False
+
+
+def test_truncated_says_the_cap_was_hit(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`truncated` ⟺ 真取到了 `_MAX_SCANS` 行。
+
+    把上限改小而不是造 500 行：那只是慢，并不多测出任何东西。顺带钉住同毫秒时的次序键
+    （两行 `created_at` 相同，先回的必须是 id 大的那个）。
+    """
+    monkeypatch.setattr(scans_routes, "_MAX_SCANS", 1)
+    with _writable_conn(settings) as conn:
+        insert_authorization(conn)
+        insert_scan(conn, "scan-1")
+        insert_scan(conn, "scan-2")
+
+    body = client.get("/api/scans").json()
+
+    assert [scan["id"] for scan in body["scans"]] == ["scan-2"]
+    assert body["truncated"] is True
+
+
+def test_the_scan_detail_carries_exactly_the_detail_keys(
+    client: TestClient, settings: Settings
+) -> None:
+    _seed_finished_scan(settings)
+
+    body = client.get("/api/scans/scan-1").json()
+
+    assert set(body["scan"]) == _DETAIL_KEYS
+    assert body["scan"]["status"] == "completed"
+    assert body["scan"]["exit_code"] == 2
+    assert body["scan"]["count_high"] == 1
+    assert body["scan"]["max_turns"] == 40
+    assert body["scan"]["authorization_id"] == "auth-1"
+
+
+def test_the_snapshot_rows_have_the_same_shape_as_the_live_frames(
+    client: TestClient, settings: Settings
+) -> None:
+    """**快照与直播同形状。**
+
+    `agents` 的行对着 `scan_frames._agent_row` 断言（有人给帧加了一个键却忘了加到这里，
+    这条当场红），`findings` 的每一项就是当初 `vuln.add` 帧里那个 dict 原样。不然前端要为
+    "从 WS 收到的"和"从 REST 拿到的"各写一套解析。
+    """
+    _seed_finished_scan(settings)
+
+    body = client.get("/api/scans/scan-1").json()
+
+    assert body["agents"] == [_agent_row(_AGENT)]
+    assert body["findings"] == [_FINDING]
+
+
+def test_findings_come_back_in_the_order_they_were_pushed(
+    client: TestClient, settings: Settings
+) -> None:
+    """`findings` 的次序 = 当初推 `vuln.add` 帧的次序，也就是 `first_seen_at`。
+
+    三条的 id 次序与首见次序**两个方向都不一样**：按 `finding_id` 升序排（"忘了写 ORDER BY"
+    时拿到的就是这个 PK 次序）或降序排，都会让这条红。
+    """
+    _seed_finished_scan(settings)  # vuln-1，首见 00:00:03
+    with _writable_conn(settings) as conn:
+        _insert_finding(conn, "scan-1", "2026-09-08T00:00:04.000Z", {"id": "vuln-0"})
+        _insert_finding(conn, "scan-1", "2026-09-08T00:00:05.000Z", {"id": "vuln-2"})
+
+    body = client.get("/api/scans/scan-1").json()
+
+    assert [finding["id"] for finding in body["findings"]] == ["vuln-1", "vuln-0", "vuln-2"]
+
+
+def test_an_unknown_scan_is_not_found(client: TestClient) -> None:
+    response = client.get("/api/scans/nope")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+def test_the_detail_reads_the_conclusion_the_background_task_wrote(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """这个端点是结论的**唯一出处**（`done` 帧刻意不带结论），所以它读到的必须就是
+    `_run_to_completion` 写下的那一行。"""
+    accepted = _launch(client, app)
+    scan_id = str(accepted["scan_id"])
+    process = app.state.supervisor.get(scan_id)
+    assert process is not None
+
+    process.finish()
+    row = _wait_for_status(settings, scan_id, "completed")
+
+    scan = client.get(f"/api/scans/{scan_id}").json()["scan"]
+
+    assert scan["status"] == row["status"] == "completed"
+    assert scan["exit_code"] == row["exit_code"] == 0
+    assert scan["exit_meaning"] == row["exit_meaning"] == "no_vulnerabilities_found"
+    assert scan["targets"] == ["https://example.com"]

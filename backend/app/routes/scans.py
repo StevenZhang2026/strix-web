@@ -1,4 +1,4 @@
-"""`POST /api/scans`（起扫描）与 `POST /api/scans/{id}/stop`（停扫描）。
+"""`POST /api/scans`（起扫描）、`POST /api/scans/{id}/stop`（停扫描）与两个读取端点。
 
 这是把 T6–T12b 那一串零件真正接上线的地方：护栏判定、白名单、DNS 重解析、准入、
 argv 构造、凭据登记、并发闸、落库、审计。**本文件自己不做任何判定** —— 判定都在
@@ -107,6 +107,34 @@ _SCAN_COLUMNS = (
     "max_budget_usd, max_turns, reasoning_effort, provider, auth_shape, strix_llm, api_base, "
     "vault_handle, cwd, argv_json, env_var_names_json, instruction_sha256, strix_version, "
     "sandbox_image"
+)
+
+# 列表一次最多回多少行。**不做分页参数**：本机单账号 + 有留存清理，到不了 500 次扫描。
+# 真到了那天，判据是实测行数而不是现在猜（同 `routes/audit.py` 的 `_MAX_ROWS`）。
+_MAX_SCANS = 500
+
+# 读取端**只点名这些列**。`scans` 还有 vault_handle / cwd / argv_json / … —— 那些是泄漏面
+# 或者没有消费者，所以这两个清单就是白名单本身（`tests/test_routes_scans.py` 盯着它）。
+_SUMMARY_COLUMNS = (
+    "id, created_at, started_at, finished_at, status, template_id, targets_json, scan_mode, "
+    "max_budget_usd, cost_usd, count_critical, count_high, count_medium, count_low, "
+    "agent_count, event_count, exit_code, exit_meaning, error_code"
+)
+_DETAIL_EXTRA_COLUMNS = (
+    "error_message, max_turns, reasoning_effort, provider, strix_llm, current_epoch, "
+    "authorization_id"
+)
+# `ORDER BY created_at DESC, id DESC`（不是只按 `created_at`）：它是毫秒精度的字符串，同一
+# 毫秒内的两条会并列，拿它单独当排序键得到的顺序是不确定的（判据同 `routes/audit.py`）。
+_SELECT_SCANS = f"SELECT {_SUMMARY_COLUMNS} FROM scans ORDER BY created_at DESC, id DESC LIMIT ?"  # noqa: S608
+_SELECT_SCAN = f"SELECT {_SUMMARY_COLUMNS}, {_DETAIL_EXTRA_COLUMNS} FROM scans WHERE id = ?"  # noqa: S608
+_SELECT_SCAN_AGENTS = (
+    "SELECT agent_id, name, parent_id, status, created_at, updated_at, error_message "
+    "FROM scan_agents WHERE scan_id = ? ORDER BY created_at, agent_id"
+)
+# `ORDER BY first_seen_at, finding_id` = 当初推 `vuln.add` 帧的顺序。
+_SELECT_SCAN_FINDINGS = (
+    "SELECT raw_json FROM scan_findings WHERE scan_id = ? ORDER BY first_seen_at, finding_id"
 )
 
 
@@ -223,6 +251,76 @@ class StopScanRequest(BoundaryModel):
 class StopScanAcceptedResponse(BoundaryModel):
     scan_id: str
     mode: str
+
+
+class ScanSummary(BoundaryModel):
+    """列表页的一行。刻意**没有** `error_message`（可能很长）与 `current_epoch`（用不上）。"""
+
+    id: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    status: str
+    template_id: str
+    targets: list[str]
+    """`targets_json` 解析后的结果 —— 这是整个响应里唯一一处改名。"""
+
+    scan_mode: str
+    max_budget_usd: float
+    cost_usd: float
+    count_critical: int
+    count_high: int
+    count_medium: int
+    count_low: int
+    agent_count: int
+    event_count: int
+    exit_code: int | None
+    exit_meaning: str | None
+    error_code: str | None
+
+
+class ScanDetail(ScanSummary):
+    """详情页的那一行 = 列表的 19 键 + 这 7 键。"""
+
+    error_message: str | None
+    max_turns: int | None
+    """可空：`scans.max_turns` 的 DDL 是 `INTEGER CHECK (… IS NULL OR … > 0)`。"""
+
+    reasoning_effort: str | None
+    provider: str
+    strix_llm: str
+    current_epoch: int
+    authorization_id: str
+
+
+class ScanAgentRow(BoundaryModel):
+    """**与 `scan_frames._agent_row` 逐字段同形状**（`agent_id` → `id` 是唯一的改名）。
+
+    快照与直播帧形状不一致，前端就要为"从 WS 收到的"和"从 REST 拿到的"各写一套解析。
+    """
+
+    id: str
+    name: str | None
+    parent_id: str | None
+    status: str | None
+    created_at: str
+    updated_at: str
+    error_message: str | None
+
+
+class ScanListResponse(BoundaryModel):
+    scans: list[ScanSummary]
+    truncated: bool
+    """⟺ 真取到了 `_MAX_SCANS` 行。放**正文**而不是响应头：顶层是信封，加字段不破坏契约。"""
+
+
+class ScanDetailResponse(BoundaryModel):
+    scan: ScanDetail
+    agents: list[ScanAgentRow]
+    findings: list[dict[str, object]]
+    """每一项就是 `scan_findings.raw_json` 原样，也就是当初 `vuln.add` 帧里那个
+    `payload["vulnerability"]`。穷举漏洞条目的形状等于让本模块认识上游每一个字段
+    （判据同 `ws_envelope.Envelope.payload`）。"""
 
 
 # =============================================================================
@@ -587,6 +685,61 @@ async def stop_scan(
 
 
 # =============================================================================
+# 读取
+# =============================================================================
+@router.get("", response_model=ScanListResponse)
+async def list_scans(request: Request) -> ScanListResponse:
+    """列表页的一次性快照。恒 200 —— 空库回空表，那不是错误。
+
+    只读端点**不写审计**（判据在 `routes/audit.py`：会被反复调用的只读操作不记）。
+    """
+
+    def query(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+        return conn.execute(_SELECT_SCANS, (_MAX_SCANS,)).fetchall()
+
+    rows = await _db(request).run(query)
+    return ScanListResponse(
+        scans=[_summary_of(row) for row in rows], truncated=len(rows) == _MAX_SCANS
+    )
+
+
+@router.get("/{scan_id}", response_model=ScanDetailResponse)
+async def get_scan(request: Request, scan_id: str) -> ScanDetailResponse:
+    """一次扫描的当前快照 —— **结论（状态／归因／漏洞数）的唯一出处**。
+
+    直播流的 `done` 帧刻意不带结论（`scan_frames.done_spec`），而 WS 只推增量：半途连上来
+    的客户端没有别的办法知道"现在是什么样"（agents 树与发现列表不在事件镜像里）。
+    """
+
+    def query(
+        conn: sqlite3.Connection,
+    ) -> tuple[sqlite3.Row | None, list[sqlite3.Row], list[sqlite3.Row]]:
+        """三条 SELECT 在**同一个事务**里（`Database.run` 包了 BEGIN IMMEDIATE）。
+
+        拆成三次 `db.run()` 就是三个事务，客户端可能拿到"计数是新的、发现是旧的"这种
+        自相矛盾的快照。
+        """
+        scan = conn.execute(_SELECT_SCAN, (scan_id,)).fetchone()
+        if scan is None:
+            return None, [], []
+        agents = conn.execute(_SELECT_SCAN_AGENTS, (scan_id,)).fetchall()
+        findings = conn.execute(_SELECT_SCAN_FINDINGS, (scan_id,)).fetchall()
+        return scan, agents, findings
+
+    scan, agents, findings = await _db(request).run(query)
+    if scan is None:
+        # 不区分"没有过"与"被留存清理了"：`scans` 那一行留存清理不删，所以 404 就是真的没有过。
+        raise NotFoundError()
+    return ScanDetailResponse(
+        scan=_detail_of(scan),
+        agents=[_agent_row_of(row) for row in agents],
+        # `raw_json` 原样回去。DDL 有 `CHECK (json_valid(raw_json))`，所以**不接**
+        # `JSONDecodeError`：坏 JSON 进不了库，真炸了就是库被人手工改坏了，该 500。
+        findings=[json.loads(row["raw_json"]) for row in findings],
+    )
+
+
+# =============================================================================
 # 后台任务：把子进程的结局落库
 # =============================================================================
 async def _run_to_completion(
@@ -727,6 +880,62 @@ async def _resolve_hosts(raw_targets: list[str], resolver: Resolver) -> dict[str
     unique = tuple(dict.fromkeys(hosts))
     outcomes = await asyncio.gather(*(resolver(host) for host in unique))
     return dict(zip(unique, outcomes, strict=True))
+
+
+def _summary_of(row: sqlite3.Row) -> ScanSummary:
+    """`scans` 的一行 → 列表那 19 个键。
+
+    **显式点名每个字段**而不是 `ScanSummary(**dict(row))`：`targets_json` → `targets` 这一处
+    改名让后者不成立，硬凑出来的那一版反而看不出响应到底有哪些键。
+    """
+    return ScanSummary(
+        id=row["id"],
+        created_at=row["created_at"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        status=row["status"],
+        template_id=row["template_id"],
+        targets=json.loads(row["targets_json"]),
+        scan_mode=row["scan_mode"],
+        max_budget_usd=row["max_budget_usd"],
+        cost_usd=row["cost_usd"],
+        count_critical=row["count_critical"],
+        count_high=row["count_high"],
+        count_medium=row["count_medium"],
+        count_low=row["count_low"],
+        agent_count=row["agent_count"],
+        event_count=row["event_count"],
+        exit_code=row["exit_code"],
+        exit_meaning=row["exit_meaning"],
+        error_code=row["error_code"],
+    )
+
+
+def _detail_of(row: sqlite3.Row) -> ScanDetail:
+    """同一行 → 详情那 26 个键。前 19 个借 `_summary_of`，**列表与详情不许各写一遍**。"""
+    return ScanDetail(
+        **_summary_of(row).model_dump(),
+        error_message=row["error_message"],
+        max_turns=row["max_turns"],
+        reasoning_effort=row["reasoning_effort"],
+        provider=row["provider"],
+        strix_llm=row["strix_llm"],
+        current_epoch=row["current_epoch"],
+        authorization_id=row["authorization_id"],
+    )
+
+
+def _agent_row_of(row: sqlite3.Row) -> ScanAgentRow:
+    """`scan_agents` 的一行 → 与 `agents` 帧同形状的那 7 个键。"""
+    return ScanAgentRow(
+        id=row["agent_id"],
+        name=row["name"],
+        parent_id=row["parent_id"],
+        status=row["status"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        error_message=row["error_message"],
+    )
 
 
 def _affirmed_detail(
