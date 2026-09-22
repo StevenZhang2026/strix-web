@@ -106,9 +106,11 @@ from app.services.image_puller import ImagePuller
 from app.services.key_vault import KeyVault, assert_single_worker
 from app.services.reaper import Reaper
 from app.services.retention import RetentionSweeper
+from app.services.scan_channel import ChannelRegistry
 from app.services.scan_secrets import ScanSecretRegistry
 from app.services.scan_supervisor import ScanSupervisor, assert_sandbox_env
 from app.settings import Settings, assert_no_credential_env, load_settings
+from app.strix_profile import profile_for
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +454,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         supervisor = ScanSupervisor(resolved, strix_version, on_scan_finished=reaper.request_sweep)
         app.state.reaper = reaper
         app.state.supervisor = supervisor
+        # W2c。实时流的注册表：每次扫描起进程时开一个 channel、进程退出后关掉（起关都在
+        # `routes/scans.py::_run_to_completion` 的 try/finally 两端）。**必须在本轮就接进
+        # lifespan**，否则 `ScanChannel` 就是一段没人跑过的代码。
+        # `scans_dir` 传 `Settings` 的那个 property 本身：`EventMirror` 的 rel_path 取它的
+        # `.name`，拼过的子目录会静默写出错的相对路径。
+        app.state.channels = ChannelRegistry(
+            db=db,
+            scans_dir=resolved.scans_dir,
+            profile=profile_for(strix_version),
+            redact=redactor.redact,
+        )
         # T12c。两者都**必须在 lifespan 里**建，不能是模块级常量：`asyncio.Lock` 绑定它被
         # 创建时的事件循环，模块级那一个会在测试里跨多个循环复用（同一个进程起好几个 app），
         # 而"锁看起来在但其实属于另一个循环"是一个静默失效。
@@ -502,6 +515,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # （表现是一句 ProgrammingError，以及一行永远卡在 running 的扫描）。
             # `return_exceptions=True`：一个任务的异常不许挡住其它任务的收尾。
             await asyncio.gather(*tuple(scan_tasks), return_exceptions=True)
+            # W2c。**排在 gather 之后**：正常结束的扫描由 `_run_to_completion` 的 finally
+            # 自己关掉 channel，这里收的是"那个后台任务被 cancel 掉／死得不正常，没走到
+            # finally"留下的残留。**也必须排在 `db.close()` 之前**：`finish()` 的最后一次
+            # tick 会经 `EventMirror` 写库，库关了就是一句 ProgrammingError（与上面那条
+            # drain 同一个理由）。
+            await app.state.channels.shutdown()
             # T11b。拉取任务也要在事件循环关掉之前收干净（形状与下面两个后台任务一样：
             # cancel 并 await）。刻意**不等它拉完**：一个 GB 级镜像会让停机卡上几分钟。
             await app.state.image_puller.shutdown()

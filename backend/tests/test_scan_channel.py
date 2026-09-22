@@ -1,6 +1,6 @@
 """扫描 channel 的轮询循环（W2b：`app/services/scan_channel.py`）。
 
-# 这个文件盯的两条不变式
+# 这个文件盯的三条不变式
 
 1. **慢订阅者被摘掉，且不拖住轮询循环**
    （`test_full_queue_subscriber_is_dropped_and_the_loop_keeps_going`）：队列满 → 摘掉它
@@ -11,6 +11,10 @@
    `EventMirror.append` 抛出来就必须一路冒泡把 channel 任务打死。只追加的真源出洞比
    断流更糟（回放会永久缺那一帧），而扫描本身与 `scans` 终态由 `routes/scans.py` 的
    `_run_to_completion` 兜着，不靠 channel。
+3. **终态或停机之后 channel 一定被关掉、不泄漏 asyncio 任务**（W2c，`ChannelRegistry`
+   那一节的六条）：`close` 幂等、`shutdown` 一个不剩、即使 channel 已经死在镜像写上，
+   它的轮询任务也必须被回收。接线层那一半（谁在什么时候调 close）在
+   `test_routes_scans.py`。
 
 # 为什么用 `asyncio.run` 而不是 `async def test_`
 
@@ -36,6 +40,7 @@ from app.services.scan_channel import (
     BASE_INTERVAL_S,
     MAX_INTERVAL_S,
     SUBSCRIBER_QUEUE_SIZE,
+    ChannelRegistry,
     ScanChannel,
     Subscriber,
 )
@@ -427,3 +432,229 @@ def test_log_tailer_is_long_lived_so_lines_are_not_re_pushed(
     log_frames = [frame for frame in drain(sub) if frame.type == "log"]
     rows = [frame.payload["lines"] for frame in log_frames]
     assert [len(row) for row in rows] == [1, 1], f"日志被重推了：{rows}"
+
+
+# =============================================================================
+# 9. ChannelRegistry（W2c）—— 终态或停机之后一个 channel 都不许剩
+# =============================================================================
+@dataclass
+class RegistryHarness:
+    registry: ChannelRegistry
+    cwd: Path
+    mirror: FakeMirror
+    reads: list[Path]
+    mirror_args: list[tuple[object, Path, str]]
+
+
+def make_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    snapshots: list[RunSnapshot] | None = None,
+    mirror: FakeMirror | None = None,
+) -> RegistryHarness:
+    """一个真 registry：只有 `EventMirror` 与 `read_run_dir` 是替身。
+
+    channel 与它的轮询任务都是**真的** —— 本节要测的就是"任务真的起了、真的被回收"，
+    换成替身就把这句话测空了。所以这里也没有注入的 `sleep`（registry 刻意不开那个口子），
+    时间靠 `wait_for` 等，而不是靠拨表。
+    """
+    queued = list(snapshots or [a_snapshot()])
+    reads: list[Path] = []
+
+    def fake_read_run_dir(run_dir: Path, profile: StrixProfile) -> RunSnapshot:
+        reads.append(run_dir)
+        return queued.pop(0) if len(queued) > 1 else queued[0]
+
+    the_mirror = mirror if mirror is not None else FakeMirror()
+    mirror_args: list[tuple[object, Path, str]] = []
+
+    def fake_mirror(db: object, scans_dir: Path, scan_id: str) -> FakeMirror:
+        mirror_args.append((db, scans_dir, scan_id))
+        return the_mirror
+
+    monkeypatch.setattr(channel_module, "read_run_dir", fake_read_run_dir)
+    # registry 自己建 `EventMirror`，所以替身只能从这里换进去。**参数要记下来**：传给它的
+    # 目录传错了是静默的（见下面那条测试）。
+    monkeypatch.setattr(channel_module, "EventMirror", fake_mirror)
+    make_run_dir(tmp_path, status="running")
+    registry = ChannelRegistry(
+        # 镜像已经是替身，所以库一次都不会被碰到 —— 给一个真库只会让意图变模糊。
+        db=None,  # type: ignore[arg-type]
+        scans_dir=tmp_path / "scans",
+        profile=profile_for("1.6.2"),
+        redact=lambda text: text,
+    )
+    return RegistryHarness(
+        registry=registry,
+        cwd=tmp_path,
+        mirror=the_mirror,
+        reads=reads,
+        mirror_args=mirror_args,
+    )
+
+
+async def wait_for(predicate: Callable[[], bool]) -> None:
+    """等后台任务做到某个状态。
+
+    真 channel 的一轮里有两次 `to_thread`，`await asyncio.sleep(0)` 让不出足够的时间 ——
+    必须真的把控制权交出去若干次。上限写死不做参数：没有哪条用例需要另一个值。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5.0
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("等超时了：channel 的轮询任务没有做到期望的状态")
+
+
+def task_of(registry: ChannelRegistry, scan_id: str) -> asyncio.Task[None]:
+    """拿那个轮询任务。访问私有字段是刻意的（同 conftest 的 `conn` 夹具）：本节的不变式
+    是"任务不许泄漏"，而"它被收掉了"只能从任务对象上看出来。"""
+    return registry._live[scan_id][1]
+
+
+def test_open_starts_the_polling_task_and_get_finds_the_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> list[Envelope]:
+        channel = h.registry.open("scan-1", h.cwd)
+        subscriber = channel.subscribe()
+        # `get` 是 registry 存在的理由：WS 路由只有 scan_id。
+        assert h.registry.get("scan-1") is channel
+        await wait_for(lambda: subscriber.queue.qsize() >= 2)
+        frames = drain(subscriber)
+        await h.registry.close("scan-1")
+        return frames
+
+    frames = asyncio.run(scenario())
+
+    # 没人 await 那个任务，它却真的转了一轮 —— 强引用没被 GC 掉、循环真的在跑。
+    assert [frame.type for frame in frames] == ["agents", "summary"]
+    assert h.reads != []
+
+
+def test_close_finishes_the_channel_and_reaps_the_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> tuple[list[Envelope], bool, ScanChannel | None]:
+        channel = h.registry.open("scan-1", h.cwd)
+        subscriber = channel.subscribe()
+        task = task_of(h.registry, "scan-1")
+        await wait_for(lambda: subscriber.queue.qsize() >= 2)
+        await h.registry.close("scan-1")
+        return drain(subscriber), task.done(), h.registry.get("scan-1")
+
+    frames, task_done, still_there = asyncio.run(scenario())
+
+    # `finish()` 的最后一次 tick + **唯一**一个 done。
+    assert [frame.type for frame in frames] == ["agents", "summary", "done"]
+    assert task_done is True, "轮询任务没被回收 —— 它会一直转到事件循环关闭"
+    assert still_there is None
+
+
+def test_close_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """终态可能被多条路径观察到（正常结束、被停、停机兜底），第二次 close 必须是空操作。"""
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> tuple[int, int]:
+        h.registry.open("scan-1", h.cwd)
+        await wait_for(lambda: h.reads != [])
+        await h.registry.close("scan-1")
+        after_first = len(h.reads)
+        await h.registry.close("scan-1")
+        return after_first, len(h.reads)
+
+    after_first, after_second = asyncio.run(scenario())
+
+    assert after_first == after_second, "第二次 close 又做了一次 tick"
+
+
+def test_opening_the_same_scan_twice_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """静默替换掉旧的那个 = 泄漏一个还在跑的任务，正是本节的不变式要挡的事。"""
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> None:
+        first = h.registry.open("scan-1", h.cwd)
+        try:
+            with pytest.raises(RuntimeError, match="已经开着了"):
+                h.registry.open("scan-1", h.cwd)
+            assert h.registry.get("scan-1") is first, "第二次 open 把在册的那个换掉了"
+        finally:
+            await h.registry.close("scan-1")
+
+    asyncio.run(scenario())
+
+
+def test_close_does_not_raise_when_the_channel_died_on_a_mirror_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """镜像写失败会把 channel 任务打死（I2）。`close` 是那个异常的**回收点**，不是传播点：
+    它往外抛就会跳过 `_run_to_completion` 的 `forget`/`release` —— 那是凭据泄漏。"""
+    h = make_registry(
+        tmp_path,
+        monkeypatch,
+        snapshots=[a_snapshot(events=(an_event(),))],
+        mirror=FakeMirror(error=OSError("media 目录写不进去")),
+    )
+
+    async def scenario() -> tuple[BaseException | None, bool, ScanChannel | None]:
+        h.registry.open("scan-1", h.cwd)
+        task = task_of(h.registry, "scan-1")
+        await wait_for(task.done)
+        died_of = task.exception()
+        await h.registry.close("scan-1")
+        return died_of, task.done(), h.registry.get("scan-1")
+
+    died_of, task_done, still_there = asyncio.run(scenario())
+
+    assert isinstance(died_of, OSError)
+    assert task_done is True
+    assert still_there is None
+
+
+def test_shutdown_closes_every_open_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> tuple[list[bool], list[ScanChannel | None]]:
+        h.registry.open("scan-1", h.cwd)
+        h.registry.open("scan-2", h.cwd)
+        tasks = [task_of(h.registry, "scan-1"), task_of(h.registry, "scan-2")]
+        await wait_for(lambda: len(h.reads) >= 2)
+        await h.registry.shutdown()
+        return [task.done() for task in tasks], [
+            h.registry.get("scan-1"),
+            h.registry.get("scan-2"),
+        ]
+
+    done, left = asyncio.run(scenario())
+
+    assert done == [True, True]
+    assert left == [None, None]
+
+
+def test_the_mirror_gets_the_scans_dir_itself_not_a_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`EventMirror` 的 `rel_path` 列取的是 `scans_dir.name`，所以 registry 必须把
+    `Settings.scans_dir` **本身**交给它。在这里拼一层子目录是**静默**写出错的相对路径
+    （回放时按 rel_path 找落地的截图会找不着），没有任何别的地方盯着这一个参数。
+    """
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> None:
+        h.registry.open("scan-1", h.cwd)
+        await h.registry.close("scan-1")
+
+    asyncio.run(scenario())
+
+    assert h.mirror_args == [(None, tmp_path / "scans", "scan-1")]

@@ -828,3 +828,106 @@ def test_startup_flips_leftover_running_scans_to_interrupted(
     # 退出码是"子进程告诉我们的"，我们没等到它 —— 编一个是撒谎。
     assert row["exit_code"] is None
     assert row["exit_meaning"] is None
+
+
+# =============================================================================
+# 16 实时流 channel 的起停（W2c）
+# =============================================================================
+class OrderRecordingChannels:
+    """`ChannelRegistry` 的替身，只记下自己被调的顺序。
+
+    真的那个也能用（lifespan 建的就是真的），但"close 排在 forget 前面还是后面"只能
+    从调用顺序上看 —— 后果（最后一批帧没脱敏）在这一层观察不到。
+    """
+
+    def __init__(self, order: list[str], db: Database | None = None) -> None:
+        self.order = order
+        self._db = db
+
+    def open(self, scan_id: str, cwd: Path) -> None:
+        self.order.append("open")
+
+    async def close(self, scan_id: str) -> None:
+        self.order.append("close")
+
+    async def shutdown(self) -> None:
+        self.order.append("shutdown")
+        if self._db is not None:
+            # 停机兜底的那次 `close()` 还要做最后一次 tick，而那次 tick 经 `EventMirror`
+            # 写库 —— 所以这一刻库必须还开着。私有字段是唯一看得见它的地方（同 conftest
+            # 的 `conn` 夹具）。
+            self.order.append("db-open" if self._db._conn is not None else "db-closed")
+
+
+def test_the_channel_is_opened_on_launch_and_closed_at_the_terminal_state(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """W2c 的不变式在接线层的那一半：扫描到终态之后 registry 里不许还留着这个 scan_id
+    （留着就是一个永远转下去的轮询任务）。用**真**的 registry，替身测不出这件事。"""
+    accepted = _launch(client, app)
+    scan_id = str(accepted["scan_id"])
+    # `open` 在后台任务里，它与本请求的返回没有先后保证。
+    _wait_until(lambda: app.state.channels.get(scan_id) is not None)
+    process = app.state.supervisor.get(scan_id)
+    assert process is not None
+
+    process.finish()
+
+    _wait_for_status(settings, scan_id, "completed")
+    # 等后台任务**整个**跑完：终态只说明 try 里最后一步过了，`finally` 还没跑。
+    _wait_until(lambda: not app.state.scan_tasks)
+
+    assert app.state.channels.get(scan_id) is None
+
+
+def test_the_channel_is_closed_before_the_secrets_are_forgotten(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """**这条顺序是安全约束**：`close()` 的最后一次 tick 会把进程退出前写下的最后一批
+    日志行推成帧，而脱敏靠的是此刻**还在册**的凭据值。先 `forget` 再关 channel，最后
+    那批帧就是没脱敏的。结构上防不住，只有这条测试盯着。
+    """
+    order: list[str] = []
+    app.state.channels = OrderRecordingChannels(order)
+    secrets = app.state.scan_secrets
+    real_forget = secrets.forget
+
+    def recording_forget(scan_id: str) -> bool:
+        order.append("forget")
+        return bool(real_forget(scan_id))
+
+    secrets.forget = recording_forget  # type: ignore[method-assign]
+
+    accepted = _launch(
+        client,
+        app,
+        credentials=[{"role": "user", "username": "alice", "password": _TEST_PASSWORD}],
+    )
+    scan_id = str(accepted["scan_id"])
+    process = app.state.supervisor.get(scan_id)
+    assert process is not None
+
+    process.finish()
+
+    _wait_for_status(settings, scan_id, "completed")
+    _wait_until(lambda: not app.state.scan_tasks)
+
+    assert order == ["open", "close", "forget"]
+
+
+def test_lifespan_shutdown_closes_the_channels_while_the_database_is_still_open(
+    app: FastAPI,
+) -> None:
+    """不变式的另一半：**停机**之后一个 channel 都不许剩。
+
+    正常结束的扫描由 `_run_to_completion` 的 finally 关掉，这里收的是"那个后台任务被
+    cancel 掉、没走到 finally"的残留 —— 删掉 lifespan 里那一句调用，上面两条测试都不会红
+    （收货时实测 0 红），所以这一句接线需要自己的守卫。顺带钉住它排在 `db.close()` 之前。
+    """
+    order: list[str] = []
+    with TestClient(app, base_url="https://testserver"):
+        # 替身只能在 lifespan **跑完之后**装（同 `test_keys.py` 那条注释：在 `app` 夹具里
+        # 塞会被 lifespan 原地盖掉）。
+        app.state.channels = OrderRecordingChannels(order, db=app.state.db)
+
+    assert order == ["shutdown", "db-open"]

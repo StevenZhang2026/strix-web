@@ -81,6 +81,7 @@ from app.services.scan_admission import (
     audit_for,
     evaluate_admission,
 )
+from app.services.scan_channel import ChannelRegistry
 from app.services.scan_launcher import LaunchPlan, LaunchSpec, TestCredential, build_launch_plan
 from app.services.scan_secrets import ScanSecretRegistry
 from app.services.scan_supervisor import ScanProcess, ScanSupervisor
@@ -285,6 +286,21 @@ def _supervisor(request: Request) -> ScanSupervisor:
     """
     supervisor: ScanSupervisor = request.app.state.supervisor
     return supervisor
+
+
+def _channels(request: Request) -> ChannelRegistry:
+    """**同 `_supervisor`，这也是单测的注入点。**
+
+    刻意不做 `isinstance`：真的 registry 会起轮询任务、经 `EventMirror` 写库，而有些
+    用例要断言的正是"它的哪个方法在什么时候被调"，所以测试里挂的是鸭子类型替身。
+    """
+    registry: ChannelRegistry | None = getattr(request.app.state, "channels", None)
+    if registry is None:
+        raise RuntimeError(
+            "app.state.channels 不存在。本接口要求 lifespan 已经跑过 —— "
+            "测试里请用 `with TestClient(app):`。"
+        )
+    return registry
 
 
 def _resolver(request: Request) -> Resolver:
@@ -495,6 +511,10 @@ async def create_scan(request: Request, payload: CreateScanRequest) -> ScanAccep
                     db=db,
                     audit_dir=settings.audit_dir,
                     process=process,
+                    channels=_channels(request),
+                    # 显式传 cwd 而不是从 `process` 上取：`ScanProcess` 把 plan 存成私有的
+                    # `self._plan`，为这一个值去开放一个属性比多传一个参数贵。
+                    cwd=plan.cwd,
                     scan_secrets=scan_secrets,
                     vault=vault,
                     vault_handle=payload.vault_handle,
@@ -574,6 +594,8 @@ async def _run_to_completion(
     db: Database,
     audit_dir: Path,
     process: ScanProcess,
+    channels: ChannelRegistry,
+    cwd: Path,
     scan_secrets: ScanSecretRegistry,
     vault: KeyVault,
     vault_handle: str,
@@ -581,7 +603,7 @@ async def _run_to_completion(
     entry_client_ip: str | None,
     entry_user_agent: str | None,
 ) -> None:
-    """`running` → 等结果 → 终态 → 审计 → 放掉凭据。
+    """`running` → 等结果 → 终态 → 审计 → 关 channel → 放掉凭据。
 
     异常**不重抛**：这是一个 detached task，重抛只会在 GC 时打一句
     "Task exception was never retrieved"（连 traceback 都可能丢），比这里 log 一次更差。
@@ -589,6 +611,11 @@ async def _run_to_completion(
     """
     scan_id = process.scan_id
     try:
+        # 起 channel 是 `try` 的第一件事（比 `mark_running` 还早）：越早开，越早捞到 Strix
+        # 写下的第一批产物。"开"与"关"落在同一个函数的 try/finally 两端 —— 中间任何一行
+        # 抛异常都仍然会关。
+        channels.open(scan_id, cwd)
+
         started_at = audit.iso_utc(datetime.now(UTC))
 
         def mark_running(conn: sqlite3.Connection) -> None:
@@ -650,6 +677,10 @@ async def _run_to_completion(
     except Exception:
         logger.exception("扫描收尾失败", extra={"scan_id": scan_id})
     finally:
+        # **这一行必须排在下面两句之前，这是安全约束不是风格**：`close()` 的最后一次 tick
+        # 会把进程退出前写下的最后一批日志行推成帧，而脱敏靠的是此刻**还在册**的凭据值。
+        # 先 forget/release 再关 channel，最后那批帧就是没脱敏的。
+        await channels.close(scan_id)
         # **凭据卫生不许依赖 DB 写成功。** 这两句在 finally 里，所以上面任何一步炸了、
         # 或者任务被 cancel 了，口令与凭据引用都还是会被放掉。
         scan_secrets.forget(scan_id)
