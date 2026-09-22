@@ -23,6 +23,7 @@ from app.routes.auth import SESSION_COOKIE_NAME
 from app.services.allowlist import AllowlistEntry
 from app.services.auth import AuthRecord, write_auth_file
 from app.services.docker_probe import DockerReply
+from app.services.run_projector import ProjectedEvent, fingerprint_of
 from app.settings import Settings
 
 # ---- 单账号登录的测试凭据 ----------------------------------------------------
@@ -220,6 +221,32 @@ def make_agents_db(
     finally:
         conn.close()
     return path
+
+
+def make_projected_event(
+    *,
+    key: str = "tool_12",
+    kind: str = "tool_result",
+    agent_id: str | None = "agent-1",
+    ts: str | None = "2026-09-16T03:04:05.678901Z",
+    upstream_version: int = 3,
+    data: dict[str, object],
+) -> ProjectedEvent:
+    """造一条投影事件（镜像与回放两边的测试共用）。
+
+    `data` 刻意**没有**默认值：它只能默认成"带一张内联 PNG"或"不带"，而两边的测试
+    各要一种 —— 给了默认就会有一半调用方默默拿到不想要的那种。
+    """
+    return ProjectedEvent(
+        key=key,
+        kind=kind,
+        agent_id=agent_id,
+        ts=ts,
+        upstream_version=upstream_version,
+        # 指纹是对**上游原始** payload 取的：改写后的 data 绝不能改变它。
+        fingerprint=fingerprint_of(data),
+        data=data,
+    )
 
 
 @pytest.fixture

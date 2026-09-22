@@ -26,8 +26,8 @@ from app.services.event_mirror import (
     strix_id_of,
 )
 from app.services.retention import InvalidScanIdError
-from app.services.run_projector import ProjectedEvent, fingerprint_of
-from tests.conftest import insert_authorization, insert_scan
+from app.services.run_projector import ProjectedEvent
+from tests.conftest import insert_authorization, insert_scan, make_projected_event
 
 # 只要是能解码出的非空字节就够：`extract_media` 不校验 PNG 结构（它的测试兜着这件事）。
 _PNG_BYTES = b"\x89PNG\r\n\x1a\nfake-pixels"
@@ -44,16 +44,7 @@ def _event(
 ) -> ProjectedEvent:
     """造一条投影事件。默认带一张内联 PNG。"""
     payload: dict[str, object] = {"screenshot": _PNG_DATA_URL} if data is None else data
-    return ProjectedEvent(
-        key=key,
-        kind="tool_result",
-        agent_id=agent_id,
-        ts="2026-09-16T03:04:05.678901Z",
-        upstream_version=3,
-        # 指纹是对**上游原始** payload 取的：改写后的 data 绝不能改变它。
-        fingerprint=fingerprint_of(payload),
-        data=payload,
-    )
+    return make_projected_event(key=key, agent_id=agent_id, data=payload)
 
 
 def _mirror(db: Database, conn: sqlite3.Connection, tmp_path: Path) -> EventMirror:
