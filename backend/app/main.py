@@ -94,6 +94,7 @@ from app.routes import health as health_routes
 from app.routes import keys as keys_routes
 from app.routes import providers as providers_routes
 from app.routes import scans as scans_routes
+from app.routes import stream as stream_routes
 from app.routes import system as system_routes
 from app.routes import targets as targets_routes
 from app.routes import templates as templates_routes
@@ -589,6 +590,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 目标。挡住"任意网页跨域打它"的是「没有 CORS」+「只把 application/json 喂给 Pydantic」，
     # 所以这条路由的安全性也依赖于**永远不装 CORSMiddleware**（CLAUDE.md §安全不变式）。
     app.include_router(scans_routes.router)
+    # T16b。`/ws/scans/{id}`（扫描帧的直播出口）同样刻意**不在** `/api/scans` 前缀下 ——
+    # 挂到上面那个 router 上会静默变成 `/api/scans/ws/scans/{id}`，而 nginx 的四条 WS
+    # upgrade 指令在 `location /ws/` 下。见 `routes/stream.py` 里 `ws_router` 的注释。
+    app.include_router(stream_routes.ws_router)
     # T25。`/api/audit.csv` 同样在全局鉴权之后：审计流水里写着谁在什么时候批准扫了什么，
     # 未鉴权导出等于把内网资产清单（主机名 + 解析出来的地址 + 授权人 + 工单号）交出去。
     # 它是只读的，也**不写**自己的审计事件（理由在 `routes/audit.py` 的模块 docstring）。

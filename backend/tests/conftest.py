@@ -10,6 +10,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -121,6 +122,17 @@ def client(anonymous: TestClient) -> TestClient:
     anonymous.post("/api/auth/login", json={"username": USERNAME, "password": PASSWORD})
     assert anonymous.cookies.get(SESSION_COOKIE_NAME), "登录没成功，后面的断言会全是 401"
     return anonymous
+
+
+def ws_headers(client: TestClient) -> dict[str, str]:
+    """把会话 cookie 手工放进握手头。
+
+    **这是 TestClient 的限制，不是产品缺陷**：`websocket_connect` 把 base_url 的
+    `https` 换成 `wss`，而标准库 `http.cookiejar` 只认 `https` 是安全 scheme，于是带
+    `Secure` 的会话 cookie 不会被自动带上（浏览器对 `wss://` 会带 —— 它就是安全 scheme）。
+    不这么做的话，"登录了也连得上"这条测试会永远看到 401，看起来像鉴权坏了。
+    """
+    return {"Cookie": f"{SESSION_COOKIE_NAME}={client.cookies[SESSION_COOKIE_NAME]}"}
 
 
 def make_entry(label: str = "预生产", **overrides: object) -> AllowlistEntry:
@@ -274,6 +286,21 @@ def conn(db: Database) -> sqlite3.Connection:
     # 访问私有方法是刻意的：Database 对外只暴露 run()（见 db.py 模块 docstring），
     # 而测试需要绕过它去直接验证 schema。这是测试的特权，不是 API 缺口。
     return db._require_conn()
+
+
+@contextmanager
+def writable_conn(settings: Settings) -> Iterator[sqlite3.Connection]:
+    """造数据用的**可写**连接（`_rows` 那个只读）。
+
+    同 `_rows` 的理由：刻意不复用 `app.state.db` 的连接，那一个属于事件循环所在的线程。
+    """
+    connection = sqlite3.connect(settings.db_path)
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield connection
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def insert_authorization(conn: sqlite3.Connection, auth_id: str = "auth-1") -> str:

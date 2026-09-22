@@ -25,11 +25,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketDenialResponse
 
-from app.routes.auth import SESSION_COOKIE_NAME
 from app.services.audit import EVENT_IMAGE_PULL_STARTED
 from app.services.image_puller import ALREADY_PRESENT_PHASE, ImagePuller
 from app.settings import Settings
-from tests.conftest import FakeClock, FakeTransport, StreamHandler, const
+from tests.conftest import FakeClock, FakeTransport, StreamHandler, const, ws_headers
 
 ENVELOPE_KEYS = {"v", "epoch", "seq", "type", "ts", "payload"}
 
@@ -54,17 +53,6 @@ def install_puller(
     puller = ImagePuller(transport, clock=FakeClock())
     client.app.state.image_puller = puller
     return puller, transport
-
-
-def ws_headers(client: TestClient) -> dict[str, str]:
-    """把会话 cookie 手工放进握手头。
-
-    **这是 TestClient 的限制，不是产品缺陷**：`websocket_connect` 把 base_url 的
-    `https` 换成 `wss`，而标准库 `http.cookiejar` 只认 `https` 是安全 scheme，于是带
-    `Secure` 的会话 cookie 不会被自动带上（浏览器对 `wss://` 会带 —— 它就是安全 scheme）。
-    不这么做的话，"登录了也连得上"这条测试会永远看到 401，看起来像鉴权坏了。
-    """
-    return {"Cookie": f"{SESSION_COOKIE_NAME}={client.cookies[SESSION_COOKIE_NAME]}"}
 
 
 def audit_lines(settings: Settings) -> list[dict[str, object]]:

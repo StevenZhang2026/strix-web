@@ -51,6 +51,7 @@ from tests.conftest import (
     insert_authorization,
     insert_scan,
     make_entry,
+    writable_conn,
 )
 
 _FIRST_ADDRESS = "93.184.216.34"
@@ -1010,27 +1011,12 @@ _FINDING: dict[str, object] = {
 }
 
 
-@contextmanager
-def _writable_conn(settings: Settings) -> Iterator[sqlite3.Connection]:
-    """造数据用的**可写**连接（`_rows` 那个只读）。
-
-    同 `_rows` 的理由：刻意不复用 `app.state.db` 的连接，那一个属于事件循环所在的线程。
-    """
-    connection = sqlite3.connect(settings.db_path)
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield connection
-        connection.commit()
-    finally:
-        connection.close()
-
-
 def _seed_finished_scan(settings: Settings, scan_id: str = "scan-1") -> None:
     """一行终态扫描 + 一个 agent + 一条发现。
 
     **刻意不走 `ScanPersist`**：那是 W3 的行为，在这里用它就是把两层的不变式缠在一起。
     """
-    with _writable_conn(settings) as conn:
+    with writable_conn(settings) as conn:
         insert_authorization(conn)
         insert_scan(conn, scan_id)
         conn.execute(
@@ -1092,7 +1078,7 @@ def test_the_scan_list_is_empty_on_a_fresh_install(client: TestClient) -> None:
 def test_the_scan_list_is_newest_first_and_carries_exactly_the_summary_keys(
     client: TestClient, settings: Settings
 ) -> None:
-    with _writable_conn(settings) as conn:
+    with writable_conn(settings) as conn:
         insert_authorization(conn)
         insert_scan(conn, "scan-old")
         insert_scan(conn, "scan-new")
@@ -1117,7 +1103,7 @@ def test_truncated_says_the_cap_was_hit(
     （两行 `created_at` 相同，先回的必须是 id 大的那个）。
     """
     monkeypatch.setattr(scans_routes, "_MAX_SCANS", 1)
-    with _writable_conn(settings) as conn:
+    with writable_conn(settings) as conn:
         insert_authorization(conn)
         insert_scan(conn, "scan-1")
         insert_scan(conn, "scan-2")
@@ -1169,7 +1155,7 @@ def test_findings_come_back_in_the_order_they_were_pushed(
     时拿到的就是这个 PK 次序）或降序排，都会让这条红。
     """
     _seed_finished_scan(settings)  # vuln-1，首见 00:00:03
-    with _writable_conn(settings) as conn:
+    with writable_conn(settings) as conn:
         _insert_finding(conn, "scan-1", "2026-09-08T00:00:04.000Z", {"id": "vuln-0"})
         _insert_finding(conn, "scan-1", "2026-09-08T00:00:05.000Z", {"id": "vuln-2"})
 
