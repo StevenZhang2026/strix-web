@@ -4,22 +4,36 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-23）：**T16 已拆成 T16a–T16d + 新增 T16e；T16e 已收货，下一棒是 T16b**
+### 最新（2026-09-23）：**T16 已拆成 T16a–T16d + 新增 T16e；T16b 已收货，下一棒是 T16c**
 
-W2a／W2b／W2c／W3／T16a／T16e 都已实现 + 收货三件事做完，逐条在 §派发清单 对应行，本节不复述。
+W2a／W2b／W2c／W3／T16a／T16e／T16b 都已实现 + 收货三件事做完，逐条在 §派发清单 对应行，本节不复述。
 
 **现在的实际状态**：帧的**生产端与镜像端都通了**。每起一次扫描，`_run_to_completion` 的 `try`
 第一行 `channels.open`、`finally` 第一行 `await channels.close`（排在 `forget`／`release` 之前，
 那是安全约束），lifespan 收残留；`ScanPersist` 每一轮把投影落进 `scan_agents`／`scan_findings`／
 `scans` 的计数列。`ChannelRegistry` 的公开面只有 `open`／`get`／`close`／`shutdown`，
 **`get(scan_id) -> ScanChannel | None` 就是 WS 路由的入口**（它只有 scan_id）。
-`services/event_replay.py::replay_batch(db, scan_id, *, resume_from, ts, limit)` 已就位并被测住
-（回放出来的帧与当初直播推出去的那一帧逐字段相等），但**它还没有任何生产调用方** ——
-所以 T16b 收货时必须把"删掉那句 `replay_batch` 调用 → 变红"当成一处 mutation。
-**当前闸门基线：`make lint` 干净、`make test` 1161 passed / 0 skipped。**
+`services/event_replay.py::replay_batch(db, scan_id, *, resume_from, ts, limit)` 的生产调用方就是
+T16b 的 `routes/stream.py::stream_frames`。
+**当前闸门基线：`make lint` 干净、`make test` 1188 passed / 0 skipped。**
 
-**仍然缺的是帧的出口**，按依赖顺序：**T16b**（`WS /ws/scans/{id}`）→ **T16c**（SSE 兜底）→
-**T16d**（media 路由）。快照那一半已经有了（T16e）：形状是 **REST 快照 + WS 只管增量** ——
+**出口开了第一个：`WS /ws/scans/{id}`（T16b，commit `e3cca4d`）。**
+`routes/stream.py` 的形状是 **与传输无关的 async generator `stream_frames` + 一层薄传输** ——
+**T16c 的 SSE 只换传输层、复用同一个 generator，不许另写一份产帧逻辑**；它抛的两个类型化异常
+`ScanNotFound`／`SubscriberLagged` 就是给"每种传输自己翻成各自的错误形状"用的（WS 那边翻成
+`error{not_found}`+1000 与 `error{stream_lagged}`+1011）。三条别再重新发明：**订阅必须先于回放
+查询**；**去重只对 `event.add`／`event.update` 生效**；**去重游标是"这条连接的回放实际交出去了
+什么"，绝不是客户端自报的 `resume_from`**（三条的理由都写在那个文件的 docstring 里）。
+`ws_router` 是第二个、**无 prefix** 的 router（挂到 `prefix="/api/scans"` 上会静默变成
+`/api/scans/ws/scans/{id}`，而 nginx 的 upgrade 指令在 `location /ws/` 下）—— T16c 的 SSE 路径
+在 `/api/` 下，那条**不能**挂这个 router。
+
+**仍然缺的**：**T16c**（SSE 兜底）→ **T16d**（media 路由）。
+**T17 的三笔债**（细节在 §派发清单 T16b 行）：① 4 个 WS 帧码（`screenshot_elided`、
+`context_compacted`、`stream_resynced`、`stream_lagged`）还没有文案树与双向覆盖测试，T17 建第五棵；
+**帧类型新增了一个 `error`，它不在 `services/scan_frames.py` 的 8 种里**，任何"帧类型全清单"的
+地方要带上它；② T17 存 `resume_from` 必须存**见过的最大** `(epoch,seq)`，不是最后一帧的 seq；
+③ `_db` 已经第三份，提取归属地 `routes/_context.py`，留给下一条本来就要碰那几个文件的任务。快照那一半已经有了（T16e）：形状是 **REST 快照 + WS 只管增量** ——
 事件能从镜像回放，但 agents 树／summary／发现列表不在镜像里，而 channel 只在指纹变了才推，
 半途连上来的客户端只能从 `GET /api/scans/{id}` 拿"现在是什么样"，WS 只负责之后的增量。
 （另一条路"新订阅者到达就清 `FrameState` 重推一轮"已否决：会把上百 KB 的报告扇给所有在线订阅者。）
