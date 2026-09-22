@@ -1,6 +1,6 @@
 """扫描 channel 的轮询循环（W2b：`app/services/scan_channel.py`）。
 
-# 这个文件盯的三条不变式
+# 这个文件盯的四条不变式
 
 1. **慢订阅者被摘掉，且不拖住轮询循环**
    （`test_full_queue_subscriber_is_dropped_and_the_loop_keeps_going`）：队列满 → 摘掉它
@@ -15,6 +15,10 @@
    那一节的六条）：`close` 幂等、`shutdown` 一个不剩、即使 channel 已经死在镜像写上，
    它的轮询任务也必须被回收。接线层那一半（谁在什么时候调 close）在
    `test_routes_scans.py`。
+4. **每一轮都真的落了库，而落库失败同样不被吞**（W3，
+   `test_every_tick_persists_the_projection` / `test_persist_failure_kills_the_channel`）：
+   四张表是回放与报告的真源，删掉 `_tick` 里那句 `record` 必须有测试变红。落库**本身**的
+   正确性（计数从自己的行上数、首见即插）在 `test_scan_persist.py`，这里只测接线。
 
 # 为什么用 `asyncio.run` 而不是 `async def test_`
 
@@ -100,6 +104,21 @@ class FakeMirror:
         return MirroredEvent(seq=seq, event=rewritten, new_media=(), skipped=())
 
 
+@dataclass
+class FakePersist:
+    """落库替身。记下每一轮的 `(epoch, snapshot, at)`；`error` 是 I3 唯一的测法
+    （真库很难按需抛）。落库**内容**对不对是 `test_scan_persist.py` 的事。
+    """
+
+    error: Exception | None = None
+    calls: list[tuple[int, RunSnapshot, str]] = field(default_factory=list)
+
+    async def record(self, *, snapshot: RunSnapshot, epoch: int, at: str) -> None:
+        if self.error is not None:
+            raise self.error
+        self.calls.append((epoch, snapshot, at))
+
+
 def an_event(key: str = "tool_1", **overrides: object) -> ProjectedEvent:
     fields: dict[str, object] = {
         "key": key,
@@ -134,6 +153,7 @@ class Harness:
     channel: ScanChannel
     run_dir: Path
     mirror: FakeMirror
+    persist: FakePersist
     sleeper: Sleeper
     reads: list[Path]
     """`read_run_dir` 的每一次调用 —— stat 门"整轮跳过"就是看这个列表没长。"""
@@ -146,6 +166,7 @@ def make_channel(
     snapshots: list[RunSnapshot] | None = None,
     sleeper: Sleeper | None = None,
     mirror: FakeMirror | None = None,
+    persist: FakePersist | None = None,
     with_run_dir: bool = True,
 ) -> Harness:
     """一个只对着替身说话的 channel。
@@ -165,12 +186,14 @@ def make_channel(
     monkeypatch.setattr(channel_module, "read_run_dir", fake_read_run_dir)
     run_dir = make_run_dir(tmp_path, status="running") if with_run_dir else tmp_path / "missing"
     the_mirror = mirror if mirror is not None else FakeMirror()
+    the_persist = persist if persist is not None else FakePersist()
     the_sleeper = sleeper if sleeper is not None else Sleeper(limit=1)
     channel = ScanChannel(
         scan_id="scan-1",
         cwd=tmp_path,
         profile=profile_for("1.6.2"),
         mirror=the_mirror,  # type: ignore[arg-type]
+        persist=the_persist,  # type: ignore[arg-type]
         redact=lambda text: text,
         sleep=the_sleeper,
     )
@@ -178,6 +201,7 @@ def make_channel(
         channel=channel,
         run_dir=run_dir,
         mirror=the_mirror,
+        persist=the_persist,
         sleeper=the_sleeper,
         reads=reads,
     )
@@ -267,6 +291,45 @@ def test_mirror_write_failure_kills_the_channel(
     # 中途抛异常不许留下**半更新**的状态：留了的话，重跑那一轮会把已经发过的帧
     # 当成"推过了"而永远不再发。访问私有字段是刻意的（同 conftest 的 `conn` 夹具）。
     assert h.channel._frames == FrameState.empty()
+    assert h.channel._gate is None
+
+
+# =============================================================================
+# 2b. I3 —— 每一轮都落库，落库失败不被吞
+# =============================================================================
+def test_every_tick_persists_the_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """删掉 `_tick` 里那句 `record` 就没有任何人写 `scan_agents` / `scan_findings` /
+    `scans` 的计数列了 —— 而那是 T16 回放与 T21 报告的唯一真源。"""
+    snapshots = [a_snapshot(), a_snapshot(cost_usd=4.0)]
+    h = make_channel(tmp_path, monkeypatch, snapshots=snapshots, sleeper=Sleeper(limit=2))
+    h.sleeper.on_sleep = lambda n: bump(h.run_dir, f"bump-{n}")
+    sub = h.channel.subscribe()
+
+    drive(h.channel)
+
+    assert [call[0] for call in h.persist.calls] == [0, 0], "没有每一轮都落库"
+    # 落库的 epoch 必须与帧的 epoch 是同一个（重同步那一轮它俩一起 +1）。
+    assert {frame.epoch for frame in drain(sub)} == {0}
+    # 拿到的是这一轮真正读出来的那份投影，不是上一轮的。
+    assert [call[1] for call in h.persist.calls] == snapshots
+    assert all(call[2].endswith("Z") for call in h.persist.calls)
+
+
+def test_persist_failure_kills_the_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """同 I2：库里少一批行比断流更糟，所以不许 `try/except` 记个日志继续。"""
+    h = make_channel(
+        tmp_path,
+        monkeypatch,
+        sleeper=Sleeper(limit=5),
+        persist=FakePersist(error=RuntimeError("scans 表写不进去")),
+    )
+
+    with pytest.raises(RuntimeError, match="scans 表写不进去"):
+        asyncio.run(h.channel.run_forever())
+
+    # 与 I2 同样不许留下半更新的状态：留了的话那一轮永远不会被补。
     assert h.channel._gate is None
 
 
@@ -444,6 +507,7 @@ class RegistryHarness:
     mirror: FakeMirror
     reads: list[Path]
     mirror_args: list[tuple[object, Path, str]]
+    persist_args: list[tuple[object, str]]
 
 
 def make_registry(
@@ -473,7 +537,17 @@ def make_registry(
         mirror_args.append((db, scans_dir, scan_id))
         return the_mirror
 
+    the_persist = FakePersist()
+    persist_args: list[tuple[object, str]] = []
+
+    def fake_persist(db: object, scan_id: str) -> FakePersist:
+        persist_args.append((db, scan_id))
+        return the_persist
+
     monkeypatch.setattr(channel_module, "read_run_dir", fake_read_run_dir)
+    # 同 `EventMirror`：registry 自己建 `ScanPersist`，替身只能从这里换进去（库是 None，
+    # 真的那个一落库就会炸）。参数照样记下来 —— 传错 scan_id 是静默写到别人名下。
+    monkeypatch.setattr(channel_module, "ScanPersist", fake_persist)
     # registry 自己建 `EventMirror`，所以替身只能从这里换进去。**参数要记下来**：传给它的
     # 目录传错了是静默的（见下面那条测试）。
     monkeypatch.setattr(channel_module, "EventMirror", fake_mirror)
@@ -491,6 +565,7 @@ def make_registry(
         mirror=the_mirror,
         reads=reads,
         mirror_args=mirror_args,
+        persist_args=persist_args,
     )
 
 
@@ -658,3 +733,17 @@ def test_the_mirror_gets_the_scans_dir_itself_not_a_subdirectory(
     asyncio.run(scenario())
 
     assert h.mirror_args == [(None, tmp_path / "scans", "scan-1")]
+
+
+def test_the_persist_gets_the_scan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """registry 自己建 `ScanPersist`，所以"它拿到的是哪个 scan_id"只有这里盯着 ——
+    传错了就是把一条扫描的 agents／findings 与计数静默写到另一条名下。"""
+    h = make_registry(tmp_path, monkeypatch)
+
+    async def scenario() -> None:
+        h.registry.open("scan-1", h.cwd)
+        await h.registry.close("scan-1")
+
+    asyncio.run(scenario())
+
+    assert h.persist_args == [(None, "scan-1")]

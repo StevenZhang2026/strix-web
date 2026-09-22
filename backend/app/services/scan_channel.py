@@ -9,12 +9,15 @@
 退出后调（单一权威；两处各判一次必然打架）。`done` 帧不带任何结论，状态／归因／漏洞数只由
 `GET /api/scans/{id}` 给。channel 也不 own `EventMirror` / `Database` 的生命周期。
 
-两条不变式（各有测试守着，见 `tests/test_scan_channel.py`）：
+三条不变式（各有测试守着，见 `tests/test_scan_channel.py`）：
 
 - **I1 慢订阅者被摘掉，且不拖住轮询循环。** 每个订阅者一个有界队列；满了就摘掉它并
   标记（客户端稍后带 `resume_from` 重连），扇出全程 `put_nowait`，**绝不 await**。
 - **I2 镜像写失败不被吞。** `EventMirror.append` 抛出来就让它冒泡把 channel 任务打死：
   只追加的真源出洞比断流更糟，而扫描本身与 `scans` 终态由 `_run_to_completion` 兜着。
+- **I3 落库失败同样不被吞。** 每一轮都调一次 `ScanPersist.record`（四张表的聚合列靠它，
+  T16 的回放与 T21 的报告都读库），它抛出来也一路冒泡把 channel 任务打死 —— 与 I2 同一个
+  立场：库里少一批行比断流更糟。
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from app.services.scan_frames import (
     event_payload,
     plan_frames,
 )
+from app.services.scan_persist import ScanPersist
 from app.strix_bridge.projection import read_run_dir
 from app.strix_profile import StrixProfile
 from app.ws_envelope import Envelope, Sequencer, now_ts
@@ -124,6 +128,7 @@ class ScanChannel:
         cwd: Path,
         profile: StrixProfile,
         mirror: EventMirror,
+        persist: ScanPersist,
         redact: Callable[[str], str],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -131,6 +136,8 @@ class ScanChannel:
         self._cwd = cwd
         self._profile = profile
         self._mirror = mirror
+        # 必填、没有默认值：漏传就是类型错误，比"跑起来才发现没人写库"便宜。
+        self._persist = persist
         self._redact = redact
         # 注入是因为本仓刻意没有 pytest-asyncio：测试没法拨事件循环的表，只能拨这个。
         self._sleep = sleep
@@ -222,6 +229,9 @@ class ScanChannel:
         epoch = result.state.epoch
         for spec in specs:
             await self._emit(spec, epoch)
+        # 排在帧之后：帧是用户看得见的延迟路径，聚合列是它的衍生品。又必须排在状态提交
+        # 之前，好让"这一轮没走完"整轮都不算数。抛出来的异常**刻意不接**（I3）。
+        await self._persist.record(snapshot=snapshot, epoch=epoch, at=now_ts())
         # 整轮成功走完才提交状态：中途抛异常（I2）留下半更新的状态，会让已经发过一半的
         # 那一轮被当成"推过了"而永远不再补。
         self._gate = gate
@@ -327,6 +337,7 @@ class ChannelRegistry:
             cwd=cwd,
             profile=self._profile,
             mirror=mirror,
+            persist=ScanPersist(self._db, scan_id),
             redact=self._redact,
         )
         # 任务必须有人拿着强引用：`create_task` 的返回值没人持有时事件循环可以把它 GC 掉
