@@ -45,7 +45,9 @@
  * **真正的 401** + `content-type: application/json` + `{"code":"unauthenticated"}`
  * （ASGI WebSocket Denial Response 扩展），不是一个没有正文的 403。
  * 所以 T13/T17 建 `lib/ws/*` 时，握手失败可以直接调用本文件的
- * `notifyUnauthenticated()`，不需要第二套判定。本轮刻意不建 `lib/ws/*`。
+ * `notifyUnauthenticated()`，不需要第二套判定。但浏览器的 `WebSocket` **看不到**
+ * 握手状态码（只看到一次没 open 过的 close），所以 `lib/ws/scanStream.ts` 先问一次
+ * `/api/auth/me` 再决定要不要调它。
  *
  * =============================================================================
  * 三、刻意不做的事
@@ -243,13 +245,13 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 // =============================================================================
 // 只包**后端真实存在、且前端此刻真的在用**的端点。不给不存在的接口写包装函数 ——
 // 那会让下游以为它们能用；也不为已经存在但还没有调用点的接口先写一个占位包装。
-// 现在是十三个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
+// 现在是十五个：四个鉴权/健康 + `/api/system/status`（T3 收尾时首页要用）
 // + 凭据那四个（`/api/providers` 与 `/api/keys` 的增删查，T7c 的凭据表单在用）
 // + `/api/targets/validate` 与 `/api/scan-templates`（向导第 1／4 步在用）
 // + `/api/allowlist`（T18b 第 2 步用它把命中的清单条目的授权编号摆出来）
-// + `POST /api/scans`（T18b 的提交）。
-// `/ws/*` 仍然是 404，要等 T13；`GET /api/scans/{id}` 也还没有，所以提交成功之后
-// **没有任何指向 `/scans/{id}` 的链接**。
+// + `POST /api/scans`（T18b 的提交）
+// + `GET /api/scans/{id}` 与 `POST /api/scans/{id}/stop`（`/scans/{id}` 实时面板在用）。
+// `/ws/scans/{id}` 已上线，但它不是 HTTP 请求，不在本文件：由 `lib/ws/scanStream.ts` 负责。
 // =============================================================================
 
 /** `GET /api/health`。免鉴权（nginx 与 compose 的 healthcheck 要打它）。 */
@@ -647,4 +649,86 @@ export interface ScanAcceptedResponse {
  */
 export function createScan(request: CreateScanRequest): Promise<ScanAcceptedResponse> {
   return apiFetch<ScanAcceptedResponse>("/api/scans", { body: request });
+}
+
+/**
+ * Agent 树的一行。REST 快照（`GET /api/scans/{id}` 的 `agents[]`）与 WS 的 `agents` 帧
+ * **逐字段同形状**（后端刻意共用一套解析），所以只定义一次、两边共用。
+ */
+export interface AgentRow {
+  readonly id: string;
+  readonly name: string | null;
+  readonly parent_id: string | null;
+  readonly status: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly error_message: string | null;
+}
+
+/**
+ * 扫描列表的一行（后端 19 键）。`status` 取值：
+ * `starting running completed stopped failed interrupted`（另有历史值 `orphaned_running`）。
+ */
+export interface ScanSummary {
+  readonly id: string;
+  readonly created_at: string;
+  readonly started_at: string | null;
+  readonly finished_at: string | null;
+  readonly status: string;
+  readonly template_id: string;
+  readonly targets: readonly string[];
+  readonly scan_mode: string;
+  readonly max_budget_usd: number;
+  readonly cost_usd: number;
+  readonly count_critical: number;
+  readonly count_high: number;
+  readonly count_medium: number;
+  readonly count_low: number;
+  readonly agent_count: number;
+  readonly event_count: number;
+  readonly exit_code: number | null;
+  readonly exit_meaning: string | null;
+  readonly error_code: string | null;
+}
+
+export interface ScanDetail extends ScanSummary {
+  readonly error_message: string | null;
+  readonly max_turns: number | null;
+  readonly reasoning_effort: string | null;
+  readonly provider: string;
+  readonly strix_llm: string;
+  readonly current_epoch: number;
+  readonly authorization_id: string;
+}
+
+export interface ScanDetailResponse {
+  readonly scan: ScanDetail;
+  readonly agents: readonly AgentRow[];
+  readonly findings: readonly Readonly<Record<string, unknown>>[];
+}
+
+/**
+ * `GET /api/scans/{id}`。未知 id → `ApiError(404, "not_found")`。
+ *
+ * **扫描结论只从这里取** —— WS 的 `done` 帧是纯信号，不带结论。
+ */
+export function fetchScan(scanId: string, signal?: AbortSignal): Promise<ScanDetailResponse> {
+  const path = `/api/scans/${encodeURIComponent(scanId)}`;
+  return apiFetch<ScanDetailResponse>(path, signal === undefined ? {} : { signal });
+}
+
+/** `202`。 */
+export interface StopScanAcceptedResponse {
+  readonly scan_id: string;
+  readonly mode: string;
+}
+
+/**
+ * `POST /api/scans/{id}/stop`。已结束或未知 → `ApiError(404, "not_found")`。
+ *
+ * 只发 `graceful`：`force` 没有 UI 入口，所以不暴露成参数。
+ */
+export function stopScan(scanId: string): Promise<StopScanAcceptedResponse> {
+  const path = `/api/scans/${encodeURIComponent(scanId)}/stop`;
+  return apiFetch<StopScanAcceptedResponse>(path, { body: { mode: "graceful" } });
 }
