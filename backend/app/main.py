@@ -594,6 +594,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 挂到上面那个 router 上会静默变成 `/api/scans/ws/scans/{id}`，而 nginx 的四条 WS
     # upgrade 指令在 `location /ws/` 下。见 `routes/stream.py` 里 `ws_router` 的注释。
     app.include_router(stream_routes.ws_router)
+    # T16c。它的 SSE 兜底 `/api/scans/{id}/stream` 反过来**必须**在 `/api/` 下（nginx 按
+    # `/ws/` 与 `/api/` 分 location），所以是同一个模块里的第二个 router，而不是挂到上面那个。
+    app.include_router(stream_routes.sse_router)
     # T25。`/api/audit.csv` 同样在全局鉴权之后：审计流水里写着谁在什么时候批准扫了什么，
     # 未鉴权导出等于把内网资产清单（主机名 + 解析出来的地址 + 授权人 + 工单号）交出去。
     # 它是只读的，也**不写**自己的审计事件（理由在 `routes/audit.py` 的模块 docstring）。

@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketDenialResponse, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from app.routes.stream import STREAM_LAGGED, should_forward
+from app.routes.stream import STREAM_LAGGED, advance, parse_sse_cursor, should_forward
 from app.services.event_replay import DEFAULT_LIMIT, ReplayCursor
 from app.services.scan_channel import SUBSCRIBER_QUEUE_SIZE, Subscriber
 from app.settings import Settings
@@ -461,3 +461,205 @@ def test_a_closed_page_leaves_no_task_behind(client: TestClient, settings: Setti
                 return
             time.sleep(0.1)
     raise AssertionError("关掉页面之后端点没有收尾 —— 它还挂在 queue.get() 上")
+
+
+# =============================================================================
+# SSE 兜底（T16c）：续传游标（无 IO 纯函数）
+# =============================================================================
+def test_advance_starts_from_the_first_frame() -> None:
+    assert advance(None, envelope(epoch=1, seq=4)) == ReplayCursor(epoch=1, seq=4)
+
+
+def test_advance_moves_forward_in_the_same_epoch() -> None:
+    assert advance(ReplayCursor(epoch=1, seq=10), envelope(epoch=1, seq=11)) == ReplayCursor(
+        epoch=1, seq=11
+    )
+
+
+def test_advance_never_moves_back_on_a_late_non_event_frame() -> None:
+    """接缝上 seq 不单调：回放交到 (1,10) 之后，队列里还可能躺着 `notice(1,6)`。
+
+    `id:` 写成它自己的，浏览器重连报 `1:6`，服务端就把 7–10 重发一遍。
+    """
+    high = ReplayCursor(epoch=1, seq=10)
+    assert advance(high, envelope(epoch=1, seq=6, frame_type="notice")) == high
+
+
+def test_advance_moves_forward_into_a_new_epoch_even_though_seq_restarts() -> None:
+    assert advance(ReplayCursor(epoch=1, seq=99), envelope(epoch=2, seq=0)) == ReplayCursor(
+        epoch=2, seq=0
+    )
+
+
+@pytest.mark.parametrize("raw", [None, "", "3", "1:2:3", "a:1", "1:b", ":"])
+def test_parse_sse_cursor_is_lenient_about_bad_shapes(raw: str | None) -> None:
+    assert parse_sse_cursor(raw) is None
+
+
+def test_parse_sse_cursor_reads_epoch_and_seq() -> None:
+    assert parse_sse_cursor("3:41") == ReplayCursor(epoch=3, seq=41)
+
+
+# =============================================================================
+# SSE 兜底（T16c）：传输层的翻译
+# =============================================================================
+SSE_PATH = f"/api/scans/{SCAN_ID}/stream"
+CONNECTED = {"": "connected"}  # `: connected` 这行注释按下面的切法落成的样子
+END = {"event": "end", "data": "{}"}
+
+
+def sse_messages(body: str) -> list[dict[str, str]]:
+    """按 `\\n\\n` 切消息、每行按第一个 `": "` 拆成 `field: value`（注释行的 field 是空串）。"""
+    return [
+        dict(line.split(": ", 1) for line in block.split("\n"))
+        for block in body.split("\n\n")
+        if block
+    ]
+
+
+def sse_get(
+    client: TestClient, *, headers: dict[str, str] | None = None, query: str = ""
+) -> list[dict[str, str]]:
+    response = client.get(SSE_PATH + query, headers=headers)
+    assert response.status_code == 200
+    return sse_messages(response.text)
+
+
+def ids_and_seqs(messages: list[dict[str, str]]) -> list[tuple[str, int]]:
+    return [(m["id"], json.loads(m["data"])["seq"]) for m in messages if "id" in m]
+
+
+def test_sse_replays_history_then_ends(client: TestClient, settings: Settings) -> None:
+    seed_scan(settings)
+    seed_events(settings, range(2))
+
+    response = client.get(SSE_PATH)
+    messages = sse_messages(response.text)
+
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+    assert messages[0] == CONNECTED
+    assert [set(m) for m in messages[1:-1]] == [{"id", "data"}] * 2
+    assert ids_and_seqs(messages) == [("1:0", 0), ("1:1", 1)]
+    assert set(json.loads(messages[1]["data"])) == ENVELOPE_KEYS
+    assert messages[-1] == END
+
+
+def test_sse_id_is_the_highest_cursor_so_far_not_the_frames_own(
+    client: TestClient, settings: Settings
+) -> None:
+    """接缝上一帧 seq 更小的 `notice` 不许把 `id:` 拉回去（S3 在路由层的证据）。"""
+    seed_scan(settings)
+    seed_events(settings, range(3))
+    install_channel(
+        client,
+        staged=[envelope(epoch=1, seq=1, frame_type="notice"), envelope(epoch=1, seq=3), None],
+    )
+
+    messages = sse_get(client)
+
+    assert ids_and_seqs(messages) == [("1:0", 0), ("1:1", 1), ("1:2", 2), ("1:2", 1), ("1:3", 3)]
+    assert messages[-1] == END
+
+
+@pytest.mark.parametrize(
+    ("headers", "query", "seqs"),
+    [
+        ({"Last-Event-ID": "1:2"}, "?resume_from=1:0", [3]),  # 头优先
+        (None, "?resume_from=1:1", [2, 3]),  # 初次连接只有 query
+        ({"Last-Event-ID": "garbage"}, "?resume_from=1:1", [2, 3]),  # 头解析不出来 → query
+    ],
+)
+def test_sse_resume_cursor_comes_from_last_event_id_then_query(
+    client: TestClient,
+    settings: Settings,
+    headers: dict[str, str] | None,
+    query: str,
+    seqs: list[int],
+) -> None:
+    seed_scan(settings)
+    seed_events(settings, range(4))
+
+    messages = sse_get(client, headers=headers, query=query)
+
+    assert [seq for _id, seq in ids_and_seqs(messages)] == seqs
+
+
+def test_sse_unknown_scan_gets_an_error_and_an_end(client: TestClient) -> None:
+    """要有 `end`：不然浏览器每 3 秒重连一个不存在的扫描，永远。"""
+    messages = sse_get(client)
+
+    assert messages[0] == CONNECTED
+    assert set(messages[1]) == {"data"}
+    assert json.loads(messages[1]["data"])["payload"] == {"code": "not_found"}
+    assert messages[2:] == [END]
+
+
+def test_sse_a_lagged_subscriber_gets_an_error_and_no_end(
+    client: TestClient, settings: Settings
+) -> None:
+    """**不许有 `end`**：没有它浏览器才会带 `Last-Event-ID` 自动重连（= WS 的 1011）。"""
+    seed_scan(settings)
+    install_channel(client, staged=[None], dropped=True)
+
+    messages = sse_get(client)
+
+    assert messages[0] == CONNECTED
+    assert [set(m) for m in messages[1:]] == [{"data"}]
+    assert json.loads(messages[1]["data"])["payload"] == {"code": STREAM_LAGGED}
+
+
+def test_sse_anonymous_is_denied(anonymous: TestClient) -> None:
+    assert anonymous.get(SSE_PATH).status_code == 401
+
+
+def test_sse_a_closed_page_releases_the_subscription(
+    client: TestClient, settings: Settings
+) -> None:
+    """页面关掉 → 订阅必须被释放（见 `_sse_body` 的 finally 注释：靠 Starlette 在
+    spec_version < 2.4 时监听 `http.disconnect`）。
+
+    TestClient 读不到永不结束的流的"中途"，所以直接调 ASGI app，跑在 app 自己的事件循环
+    里。scope 的 `spec_version` 写 "2.3" = uvicorn 0.52.4 实际给的。观察点是
+    `unsubscribe`（不是任务条数 —— lifespan 的后台任务会把条数搅乱）。
+    """
+    seed_scan(settings)
+    subscribed = asyncio.Event()  # 3.12 的 Event 在第一次 wait 时才绑循环，在这里建没问题
+    # 不给哨兵：流永远不会自己结束。
+    channel = install_channel(client, staged=[], on_subscribe=subscribed.set)
+    cookie = ws_headers(client)["Cookie"]
+
+    async def scenario() -> None:
+        requested = False
+
+        async def receive() -> dict[str, object]:
+            nonlocal requested
+            if not requested:
+                requested = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            # 订阅生效之后才"关页面"。不能以收到 `: connected` 为准：它在 generator 被碰
+            # 之前就发了，那时断开会在订阅之前就 cancel 掉，本条测试什么也测不到。
+            await subscribed.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, object]) -> None:
+            """响应体丢掉：观察点是 `unsubscribe`。"""
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "https",
+            "path": SSE_PATH,
+            "raw_path": SSE_PATH.encode(),
+            "query_string": b"",
+            "headers": [(b"host", b"testserver"), (b"cookie", cookie.encode())],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 443),
+            "root_path": "",
+        }
+        await asyncio.wait_for(client.app(scope, receive, send), 2)
+
+    client.portal.call(scenario)  # type: ignore[union-attr]  # 夹具已经进过 `with`
+    assert channel.unsubscribed == channel.subscribed != []

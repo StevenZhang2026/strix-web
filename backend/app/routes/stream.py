@@ -1,4 +1,5 @@
-"""`WS /ws/scans/{scan_id}`：扫描帧的出口（T16b）。
+"""扫描帧的两个出口：`WS /ws/scans/{scan_id}`（T16b）与它的 SSE 兜底
+`GET /api/scans/{scan_id}/stream`（T16c）。
 
 先把已经落进镜像的历史帧回放给客户端，然后转成直播。
 
@@ -14,8 +15,7 @@
 
 # 形状：与传输无关的 async generator + 一层薄传输
 
-产帧是 `stream_frames`，WS 端点只做传输。T16c（SSE 兜底）复用**同一个** generator、
-只换传输层；这也是把接缝去重逻辑单独测住的形状。
+产帧是 `stream_frames`，WS 与 SSE 两个端点都只做传输、复用**同一个** generator；这也是把接缝去重逻辑单独测住的形状。
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Final
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from starlette.requests import HTTPConnection
 
 from app.db import Database
@@ -40,6 +41,10 @@ from app.ws_envelope import Envelope, now_ts
 # nginx 的 `location /ws/` 下（四条 upgrade 指令在那里），所以它们必须真的以 `/ws/`
 # 开头。`test_routes_stream.py` 里有一条测试连的就是 `/ws/scans/{id}` 这个确切字符串。
 ws_router = APIRouter(tags=["scans"])
+
+# SSE 兜底（WS 连不上时前端用 `EventSource` 连它）反过来**必须**在 `/api/` 下 —— nginx 就是
+# 按 `/ws/` 与 `/api/` 分 location 的。
+sse_router = APIRouter(prefix="/api/scans", tags=["scans"])
 
 STREAM_LAGGED: Final = "stream_lagged"
 """客户端跟不上、已经被 channel 摘掉。
@@ -322,3 +327,98 @@ async def scan_stream(websocket: WebSocket, scan_id: str) -> None:
             await gone
         # ⚠️ 显式 `aclose()`，**不依赖 GC** —— generator 的 `finally` 里有 `unsubscribe`。
         await frames.aclose()
+
+
+# =============================================================================
+# SSE 兜底（T16c）
+# =============================================================================
+def advance(high: ReplayCursor | None, envelope: Envelope) -> ReplayCursor:
+    """到这一帧为止交出去过的最大 `(epoch, seq)`。无 IO 纯函数。
+
+    ⚠️ SSE 的 `id:` 写的是**这个最大值**，**不是这一帧自己的** `(epoch, seq)`：
+    `should_forward` 对非事件帧一律透传，所以接缝上 seq **不单调** —— 回放交到 `(1,10)`
+    之后，队列里可能还躺着一帧 `notice(1,6)`（订阅早于回放查询那个窗口里产出的）。`id:`
+    写它自己的，浏览器重连时就报 `Last-Event-ID: 1:6`，服务端把 7–10 **重发一遍**。
+    （T17 的 `resume_from` 是同一笔债；这里浏览器替前端存游标，所以服务端必须直接写最大值。）
+    """
+    # `ReplayCursor` 不可排序，按元组比：新一代 seq 归零，`(2,0) > (1,99)`。
+    if high is not None and (envelope.epoch, envelope.seq) <= (high.epoch, high.seq):
+        return high
+    return ReplayCursor(epoch=envelope.epoch, seq=envelope.seq)
+
+
+def parse_sse_cursor(raw: str | None) -> ReplayCursor | None:
+    """`"3:41"` → 游标。**宽容**（照 `_parse_resume_from`）：解析不出来一律 `None`，不报 400。"""
+    parts = (raw or "").split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return ReplayCursor(epoch=int(parts[0]), seq=int(parts[1]))
+    except ValueError:
+        return None
+
+
+def _sse_frame(envelope: Envelope, high: ReplayCursor) -> str:
+    return f"id: {high.epoch}:{high.seq}\ndata: {envelope.model_dump_json()}\n\n"
+
+
+def _sse_error(code: str) -> str:
+    # 无 `id:`：`error` 帧不属于任何一代（见 `_error_frame`），不许挪动浏览器的续传游标。
+    # 无 `event:`：`event: error` 与浏览器自己的连接错误事件同名，前端分不清。
+    return f"data: {_error_frame(code).model_dump_json()}\n\n"
+
+
+# 前端收到它就 `es.close()`；**没收到它就结束的响应，浏览器会自动带 `Last-Event-ID` 重连**。
+_SSE_END: Final = "event: end\ndata: {}\n\n"
+
+
+async def _sse_body(frames: AsyncIterator[Envelope]) -> AsyncIterator[str]:
+    # 首字节不依赖扫描状态：一个安静的扫描可以几分钟不出一帧（验收 26 量"首字节 < 2s"）。
+    yield ": connected\n\n"
+    high: ReplayCursor | None = None
+    try:
+        async for envelope in frames:
+            high = advance(high, envelope)
+            yield _sse_frame(envelope, high)
+        yield _SSE_END
+    except ScanNotFound:
+        # 要发 `end`：不然浏览器每 3 秒重连一个不存在的扫描，永远。
+        yield _sse_error(_NOT_FOUND)
+        yield _SSE_END
+    except SubscriberLagged:
+        # **不发** `end`：直接结束响应 → 浏览器带 `Last-Event-ID` 重连，就是续传（= WS 的 1011）。
+        yield _sse_error(STREAM_LAGGED)
+    finally:
+        # ⚠️ 断开检测靠 Starlette：uvicorn 0.52.4 给 HTTP 的 `asgi.spec_version` 是 "2.3"，
+        # 而 `StreamingResponse` 在 < 2.4 时另起任务监听 `http.disconnect`、收到就 cancel 掉
+        # 迭代本生成器的任务 —— cancel 落进 `queue.get()`，`stream_frames` 的 finally 就会
+        # `unsubscribe`。**哪天 uvicorn 升到 spec 2.4，Starlette 改成"只在写失败时才发现
+        # 断开"**，一个安静的扫描会让关掉的页面把订阅握到下一帧或扫描结束为止 —— 升级
+        # uvicorn 时要回来看这里（`test_sse_a_closed_page_releases_the_subscription`）。
+        # 显式 `aclose()`，不依赖 GC（同 WS 端点）。
+        await frames.aclose()
+
+
+@sse_router.get("/{scan_id}/stream")
+async def scan_stream_sse(
+    request: Request, scan_id: str, resume_from: str | None = None
+) -> StreamingResponse:
+    """`/ws/scans/{id}` 的兜底传输，帧一样、只换传输。鉴权同 WS：全局依赖，本文件不做。
+
+    起点游标：`Last-Event-ID` 头优先 —— 自动重连时 URL 不变（query 还是初次那个旧值），
+    头才是新的；初次连接 `EventSource` 设不了头，所以用 `?resume_from=`。
+    """
+    db = _db(request)
+    channels = _channels(request)
+    cursor = parse_sse_cursor(request.headers.get("last-event-id"))
+    if cursor is None:
+        cursor = parse_sse_cursor(resume_from)
+    frames = stream_frames(scan_id=scan_id, db=db, channels=channels, resume_from=cursor)
+    return StreamingResponse(
+        _sse_body(frames),
+        media_type="text/event-stream",
+        # ⚠️ `X-Accel-Buffering: no` 让 nginx 对这条响应逐条关掉缓冲。`nginx.conf` 的
+        # `proxy_buffering off` 现在设在 server 级，但这条让"SSE 不被缓冲"不再依赖别人别去
+        # 改那一行 —— 缓冲下 `EventSource` 会挂到超时（验收 26）。
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
