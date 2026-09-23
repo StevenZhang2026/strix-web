@@ -47,7 +47,13 @@ from typing import Any
 import pytest
 
 from app.errors import ALL_ERRORS, SCAN_FAILURE_CODES, ConsoleError
+from app.routes.stream import STREAM_LAGGED
 from app.services.dns_resolver import RESOLUTION_ERROR_CODES
+from app.services.run_projector import (
+    NOTICE_CONTEXT_COMPACTED,
+    NOTICE_SCREENSHOT_ELIDED,
+    NOTICE_STREAM_RESYNCED,
+)
 from app.services.system_status import ALL_BLOCKER_CODES
 from app.services.target_guard import (
     GuardRequirement,
@@ -425,3 +431,35 @@ def test_every_blocker_code_has_fix_copy(messages: dict[str, Any]) -> None:
 def test_no_orphan_fix_copy(messages: dict[str, Any]) -> None:
     orphans = set(_fix_copy(messages).keys()) - set(ALL_BLOCKER_CODES)
     assert not orphans, f"{_STATUS_TREE}.fixes 里这些码后端已经不存在了：{sorted(orphans)}"
+
+
+# =============================================================================
+# 实时流帧里的码（`wsNotices.*`）
+#
+# 第五棵码树：`notice` 帧的三个码 + `error{stream_lagged}`。它们既不是 HTTP 码也不是
+# 扫描归因码，所以不进 `errors.*`／`scanFailures.*`（理由在 `routes/stream.py` 的
+# `STREAM_LAGGED` docstring）。`error{not_found}` 刻意不在这里：它与 HTTP 的 `not_found`
+# 是同一件事，前端复用 `errors.not_found` 那张卡片。
+# 条目是纯字符串（渲染成面板顶上的一行提示，不是错误卡片）。
+# =============================================================================
+_WS_NOTICE_TREE = "wsNotices"
+_WS_NOTICE_CODES = frozenset(
+    {NOTICE_SCREENSHOT_ELIDED, NOTICE_CONTEXT_COMPACTED, NOTICE_STREAM_RESYNCED, STREAM_LAGGED}
+)
+
+
+def test_every_ws_notice_code_has_copy(messages: dict[str, Any]) -> None:
+    missing = _WS_NOTICE_CODES - set(messages[_WS_NOTICE_TREE].keys())
+    assert not missing, (
+        f"这些实时流帧码没有中文文案，去 zh-CN.json 的 {_WS_NOTICE_TREE} 里加：{sorted(missing)}"
+    )
+
+
+def test_no_orphan_ws_notice_copy(messages: dict[str, Any]) -> None:
+    orphans = set(messages[_WS_NOTICE_TREE].keys()) - _WS_NOTICE_CODES
+    assert not orphans, f"{_WS_NOTICE_TREE} 里这些码后端已经不发了：{sorted(orphans)}"
+
+
+def test_ws_notice_copy_entries_are_plain_sentences(messages: dict[str, Any]) -> None:
+    for code, value in messages[_WS_NOTICE_TREE].items():
+        assert isinstance(value, str) and value.strip(), f"{_WS_NOTICE_TREE}.{code} 缺失或为空"

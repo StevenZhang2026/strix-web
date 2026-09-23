@@ -210,6 +210,43 @@
     "resumeNeedsKey": "继续扫描需要重新提供一次凭据。"
   },
 
+  "live": {
+    "pageTitle": "扫描记录",
+    "scanIdLabel": "扫描编号",
+    "backHome": "回到首页",
+    "openLive": "打开实时面板",
+    "agentsHeading": "子任务",
+    "agentsEmpty": "还没有子任务启动",
+    "eventsHeading": "执行记录",
+    "eventsEmpty": "还没有记录",
+    "terminalHeading": "终端",
+    "terminalEmpty": "还没有执行过命令",
+    "screenshotsHeading": "截图",
+    "screenshotsEmpty": "还没有截图",
+    "roleUser": "指令",
+    "roleAssistant": "模型",
+    "toolRunning": "执行中",
+    "toolCompleted": "完成",
+    "toolFailed": "失败",
+    "streamConnecting": "正在连接实时进度",
+    "streamLive": "实时进度已接通",
+    "streamReconnecting": "连接中断，正在重连",
+    "streamEnded": "实时进度已结束",
+    "costSoftAlert": "已经用掉费用上限的八成。现在停下，已经拿到的结果不会丢。",
+    "conclusionHeading": "结论",
+    "conclusionPending": "扫描还没有结束，结论要等它跑完。",
+    "conclusionFound": "发现了漏洞，逐条内容在发现列表里。",
+    "conclusionNoneFound": "扫描完整跑完，没有发现漏洞。",
+    "stopRequested": "已发出停止请求，正在收尾。"
+  },
+
+  "wsNotices": {
+    "screenshot_elided": "有一张较早的截图已从模型的上下文里移除；这里仍然保留着它。",
+    "context_compacted": "早期对话已被摘要替代，执行记录已按新的快照重新整理。",
+    "stream_resynced": "执行记录已按新的快照重新整理。",
+    "stream_lagged": "页面跟不上实时进度，正在从断开的位置重新接上。"
+  },
+
   "status": {
     "starting": "准备中",
     "running": "进行中",
