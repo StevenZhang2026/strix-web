@@ -403,3 +403,104 @@ def test_every_template_composes_the_same_shared_tail() -> None:
     for template in TEMPLATES:
         text = scan_launcher.compose_instruction(template, _spec(template_id=template.template_id))
         assert SHARED_TAIL in text
+
+
+# ---- 续跑 ------------------------------------------------------------------
+_RUN_NAME = "app-example-com_a1b2"
+
+
+def _resume(**overrides: object) -> scan_launcher.ResumeSpec:
+    fields: dict[str, object] = {
+        "scan_id": _SCAN_ID,
+        "strix_run_name": _RUN_NAME,
+        "scan_mode": "quick",
+        "max_budget_usd": 10.0,
+        "spent_usd": 5.1382,
+        "max_turns": 60,
+        "reasoning_effort": None,
+    }
+    fields.update(overrides)
+    return scan_launcher.ResumeSpec(**fields)  # type: ignore[arg-type]  # 键与类型由调用方逐个给
+
+
+def _resume_argv(spec: scan_launcher.ResumeSpec) -> tuple[str, ...]:
+    return scan_launcher.build_resume_argv(spec, config_path=_CONFIG, budget_ceiling_usd=_CEILING)
+
+
+def test_golden_resume_argv() -> None:
+    """同时钉住"没有 `-t`、没有 `--instruction-file`"：带 `-t` Strix 直接 parser.error。"""
+    golden = (
+        f"strix -n --resume {_RUN_NAME} -m quick --max-budget-usd 10 --max-turns 60"
+        f" --config {_CONFIG}"
+    )
+    assert _resume_argv(_resume()) == tuple(golden.split(" "))
+
+
+@pytest.mark.parametrize(
+    ("total", "spent"),
+    [(5.1382, 5.1382), (4.0, 5.1382), (0.0, 0.0), (-1.0, 0.0)],
+)
+def test_resume_budget_must_exceed_spent(total: float, spent: float) -> None:
+    """续跑的预算是**总额**：`<= 已花费` 时 Strix 一启动就停，白起一个进程。"""
+    with pytest.raises(InvalidRequestError) as excinfo:
+        _resume_argv(_resume(max_budget_usd=total, spent_usd=spent))
+    assert excinfo.value.params["field"] == "max_budget_usd"
+
+
+def test_resume_budget_just_above_spent_passes() -> None:
+    assert "5.15" in _resume_argv(_resume(max_budget_usd=5.15, spent_usd=5.1382))
+
+
+def test_resume_total_above_ceiling_is_409_even_if_increment_is_small() -> None:
+    with pytest.raises(BudgetExceedsCeilingError):
+        _resume_argv(_resume(max_budget_usd=_CEILING + 1, spent_usd=_CEILING - 1))
+
+
+@pytest.mark.parametrize(
+    ("field", "overrides"),
+    [
+        ("strix_run_name", {"strix_run_name": ""}),
+        ("scan_mode", {"scan_mode": "thorough"}),
+        ("max_turns", {"max_turns": 0}),
+        ("reasoning_effort", {"reasoning_effort": "turbo"}),
+    ],
+)
+def test_resume_invalid_field_is_rejected(field: str, overrides: dict[str, object]) -> None:
+    with pytest.raises(InvalidRequestError) as excinfo:
+        _resume_argv(_resume(**overrides))
+    assert excinfo.value.params["field"] == field
+
+
+def test_resume_plan_reuses_cwd_with_fresh_tmpfs_home(ws_settings: Settings) -> None:
+    cwd = ws_settings.scans_dir / _SCAN_ID
+    (cwd / "strix_runs" / _RUN_NAME).mkdir(parents=True)
+
+    plan = scan_launcher.build_resume_plan(ws_settings, _resume(), _credentials(), environ={})
+
+    assert plan.cwd == cwd
+    assert (cwd / "tmp").is_dir()
+    assert plan.argv_preview is plan.argv
+    assert plan.instruction_path is None and plan.instruction_sha256 is None
+    root = ws_settings.console_ephemeral_home_root / f"scan-{_SCAN_ID}"
+    assert not (root / "instruction.txt").exists()
+    assert json.loads(plan.config_path.read_text(encoding="utf-8")) == {"env": {}}
+    assert _mode(plan.config_path) == 0o600
+    assert plan.env["STRIX_RUN_ID"] == _SCAN_ID
+    assert plan.env["HOME"] == str(plan.home)
+    assert plan.env["TMPDIR"] == str(cwd / "tmp")
+    assert _API_KEY not in "\x00".join(plan.argv)
+
+
+def test_resume_plan_rejects_before_building_workspace(ws_settings: Settings) -> None:
+    (ws_settings.scans_dir / _SCAN_ID).mkdir(parents=True)
+    with pytest.raises(InvalidRequestError):
+        scan_launcher.build_resume_plan(
+            ws_settings, _resume(max_budget_usd=1.0), _credentials(), environ={}
+        )
+    assert not (ws_settings.console_ephemeral_home_root / f"scan-{_SCAN_ID}").exists()
+
+
+def test_resume_plan_does_not_recreate_a_purged_scan_dir(ws_settings: Settings) -> None:
+    with pytest.raises(FileNotFoundError):
+        scan_launcher.build_resume_plan(ws_settings, _resume(), _credentials(), environ={})
+    assert not (ws_settings.scans_dir / _SCAN_ID).exists()

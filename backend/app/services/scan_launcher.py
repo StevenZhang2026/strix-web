@@ -1,5 +1,6 @@
 """把「一次扫描的意图」翻成「可以直接 exec 的 argv + env + 工作区」。
 
+首次扫描走 `build_launch_plan`，续跑走 `build_resume_plan`。
 **本模块不起进程**（那是 T10 的事），只做纯构造，加上 `prepare_workspace` /
 `cleanup_workspace` 这两个碰 IO 的函数。这条边界是刻意的：argv 与 env 是全部安全不变式
 的落点，它们必须能在没有 docker、没有网络、没有子进程的单测里逐元素比对。
@@ -97,6 +98,23 @@ class LaunchSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class ResumeSpec:
+    """续跑的意图：同一个 cwd 上 `strix --resume <strix_run_name>`。
+
+    `max_budget_usd` 是新的**总额**，不是增量：Strix 续跑时把上次的 `llm_usage` 读回来，
+    再拿本次 `--max-budget-usd` 重算是否超限。无默认值，理由同 `LaunchSpec`。
+    """
+
+    scan_id: str
+    strix_run_name: str
+    scan_mode: str
+    max_budget_usd: float
+    spent_usd: float
+    max_turns: int
+    reasoning_effort: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class Workspace:
     """一次扫描的目录布局。`root` 在 tmpfs 上，`cwd` 在 `${DATA}` 上 —— 两者寿命不同。"""
 
@@ -114,6 +132,8 @@ class LaunchPlan:
 
     `env` 含明文凭据 —— **绝不整体进日志/DB**；要记就记 `env_var_names`。
     `instruction_sha256` 是正文的唯一留痕：正文随 tmpfs 一起消失。
+    两个 instruction 字段为 `None` = 续跑：指令由 Strix 从 `run.json` 读回，
+    DB 里那一行保留首次的摘要（T31b 不覆写它）。
     """
 
     argv: tuple[str, ...]
@@ -123,8 +143,8 @@ class LaunchPlan:
     cwd: Path
     home: Path
     config_path: Path
-    instruction_path: Path
-    instruction_sha256: str
+    instruction_path: Path | None
+    instruction_sha256: str | None
 
 
 def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
@@ -134,6 +154,12 @@ def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
         raise InvalidRequestError(field="template_id")
     if not spec.targets:
         raise InvalidRequestError(field="targets")
+    _validate_limits(spec, budget_ceiling_usd)
+    return template
+
+
+def _validate_limits(spec: LaunchSpec | ResumeSpec, budget_ceiling_usd: float) -> None:
+    """与模板无关的五条，首次与续跑共用。"""
     if spec.scan_mode not in _SCAN_MODES:
         raise InvalidRequestError(field="scan_mode")
     if spec.max_budget_usd <= 0:
@@ -148,7 +174,17 @@ def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
         raise InvalidRequestError(field="max_turns")
     if spec.reasoning_effort is not None and spec.reasoning_effort not in _REASONING_EFFORTS:
         raise InvalidRequestError(field="reasoning_effort")
-    return template
+
+
+def _validate_resume(spec: ResumeSpec, budget_ceiling_usd: float) -> None:
+    """续跑的全部拒绝路径，同样一个新错误码都不加。"""
+    if not spec.strix_run_name:
+        raise InvalidRequestError(field="strix_run_name")
+    _validate_limits(spec, budget_ceiling_usd)
+    # 等于也拒：Strix 的判据是"已花费 >= 上限即停"，总额等于已花费就是一启动即停，
+    # 白起一个进程还报"结论不完整"。
+    if spec.max_budget_usd <= spec.spent_usd:
+        raise InvalidRequestError(field="max_budget_usd")
 
 
 def _format_usd(value: float) -> str:
@@ -194,9 +230,38 @@ def build_argv(
     )
 
 
+def build_resume_argv(
+    spec: ResumeSpec,
+    *,
+    config_path: Path,
+    budget_ceiling_usd: float,
+) -> tuple[str, ...]:
+    """纯函数。校验挂在这里的理由同 `build_argv`：构造 argv 是唯一的入口。
+
+    没有 `-t`（Strix 拒绝 `--resume` 与 `-t` 同时出现）、没有 `--instruction-file`
+    （指令它从 `run.json` 读回）。`-m` 必须显式发：Strix 只在 `-m` 等于默认值 `deep` 时
+    才换成持久化的模式，不发的话"原来就是 deep"和"没说"分不开。
+    """
+    _validate_resume(spec, budget_ceiling_usd)
+    return (
+        "strix",
+        "-n",
+        "--resume",
+        spec.strix_run_name,
+        "-m",
+        spec.scan_mode,
+        "--max-budget-usd",
+        _format_usd(spec.max_budget_usd),
+        "--max-turns",
+        str(spec.max_turns),
+        "--config",
+        str(config_path),
+    )
+
+
 def build_env(
     credentials: CredentialSet,
-    spec: LaunchSpec,
+    spec: LaunchSpec | ResumeSpec,
     *,
     home: Path,
     cwd: Path,
@@ -271,22 +336,31 @@ def _write_private(path: Path, text: str) -> None:
     path.chmod(0o600)
 
 
-def prepare_workspace(settings: Settings, spec: LaunchSpec, instruction_text: str) -> Workspace:
-    """建目录、落两个文件。**本模块唯一碰 IO 的地方**（除了 `cleanup_workspace`）。"""
-    root = settings.console_ephemeral_home_root / f"scan-{spec.scan_id}"
+def _prepare_home(settings: Settings, scan_id: str) -> tuple[Path, Path, Path]:
+    """tmpfs 那一半：`root`／`home`／`home/.strix` + `cli-config.json`。首次与续跑共用。"""
+    root = settings.console_ephemeral_home_root / f"scan-{scan_id}"
     home = root / "home"
     config_dir = home / ".strix"
-    cwd = settings.scans_dir / spec.scan_id
-    for directory in (root, home, config_dir, cwd, cwd / "tmp"):
+    for directory in (root, home, config_dir):
         directory.mkdir(parents=True, exist_ok=True)
         # `mkdir(mode=…)` 会被 umask 削掉，所以显式 chmod。
+        directory.chmod(0o700)
+    config_path = config_dir / "cli-config.json"
+    # 预置 `{"env":{}}`：Strix 读不到配置文件时会去问交互式向导，而 `-n` 下那是挂住。
+    _write_private(config_path, json.dumps({"env": {}}))
+    return root, home, config_path
+
+
+def prepare_workspace(settings: Settings, spec: LaunchSpec, instruction_text: str) -> Workspace:
+    """建目录、落两个文件。**本模块唯一碰 IO 的地方**（除了 `cleanup_workspace`）。"""
+    root, home, config_path = _prepare_home(settings, spec.scan_id)
+    cwd = settings.scans_dir / spec.scan_id
+    for directory in (cwd, cwd / "tmp"):
+        directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
 
     instruction_path = root / "instruction.txt"
     _write_private(instruction_path, instruction_text)
-    config_path = config_dir / "cli-config.json"
-    # 预置 `{"env":{}}`：Strix 读不到配置文件时会去问交互式向导，而 `-n` 下那是挂住。
-    _write_private(config_path, json.dumps({"env": {}}))
 
     return Workspace(
         root=root,
@@ -364,4 +438,42 @@ def build_launch_plan(
         config_path=workspace.config_path,
         instruction_path=workspace.instruction_path,
         instruction_sha256=workspace.instruction_sha256,
+    )
+
+
+def build_resume_plan(
+    settings: Settings,
+    spec: ResumeSpec,
+    credentials: CredentialSet,
+    *,
+    environ: Mapping[str, str],
+) -> LaunchPlan:
+    """续跑的唯一入口：同一个 cwd、新的 tmpfs HOME、同一个 `STRIX_RUN_ID`（沙箱 label 连续）。
+
+    先校验再建目录，理由同 `build_launch_plan`。
+    """
+    _validate_resume(spec, settings.console_max_budget_ceiling_usd)
+    _root, home, config_path = _prepare_home(settings, spec.scan_id)
+    cwd = settings.scans_dir / spec.scan_id
+    # `tmp` 上次被 `cleanup_scan_tmpdir` 删了，而 `TMPDIR` 指向它，所以重建。
+    # 刻意不带 `parents=True`：cwd 已被留存清理删掉时必须抛 `FileNotFoundError`，
+    # 不许把一个没有产物的 scan 目录凭空建出来（T31b 准入时先查，这里是结构性兜底）。
+    (cwd / "tmp").mkdir(exist_ok=True)
+    (cwd / "tmp").chmod(0o700)
+    argv = build_resume_argv(
+        spec,
+        config_path=config_path,
+        budget_ceiling_usd=settings.console_max_budget_ceiling_usd,
+    )
+    env = build_env(credentials, spec, home=home, cwd=cwd, environ=environ)
+    return LaunchPlan(
+        argv=argv,
+        argv_preview=argv,  # 同一个对象，理由见 `build_launch_plan`。
+        env=env,
+        env_var_names=tuple(sorted(env)),
+        cwd=cwd,
+        home=home,
+        config_path=config_path,
+        instruction_path=None,
+        instruction_sha256=None,
     )
