@@ -1,0 +1,10 @@
+/* 截图画廊。只用 token，零 `box-shadow`。 */
+.empty, .failed { margin: 0; font-size: var(--fs-2); color: var(--ink-mute); }
+.list { display: flex; flex-direction: column; gap: var(--s3); margin: 0; padding: 0; list-style: none; }
+.img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-box);
+}

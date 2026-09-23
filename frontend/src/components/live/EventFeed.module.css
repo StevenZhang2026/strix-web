@@ -1,0 +1,25 @@
+/* 事件流。只用 token，零 `box-shadow`。 */
+.empty { margin: 0 0 var(--s2); font-size: var(--fs-2); color: var(--ink-mute); }
+.list { margin: 0; padding: 0; list-style: none; }
+.row { padding: var(--s2) 0; border-top: 1px solid var(--rule); }
+.row:first-child { border-top: 0; }
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-2);
+}
+.time { color: var(--ink-mute); }
+.label { font-weight: 600; color: var(--ink); }
+.status { display: inline-flex; align-items: center; gap: var(--s1); color: var(--ink-2); }
+.content {
+  max-width: var(--measure);
+  max-height: calc(var(--s8) * 3);
+  overflow: auto;
+  margin-top: var(--s1);
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

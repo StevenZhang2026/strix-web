@@ -1,0 +1,9 @@
+/* 通知条：一行小字 + 左侧 2px 印章色竖线。零 `box-shadow`。 */
+.bar { display: flex; flex-direction: column; gap: var(--s1); }
+.notice {
+  margin: 0;
+  padding-left: var(--s2);
+  border-left: 2px solid var(--stamp);
+  font-size: var(--fs-2);
+  color: var(--ink-2);
+}

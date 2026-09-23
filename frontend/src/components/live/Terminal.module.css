@@ -1,0 +1,26 @@
+/* 终端块。只用 `--con-*` token；唯一的高亮是失败那条命令（`--con-hit`）。 */
+.empty { margin: 0; font-size: var(--fs-2); color: var(--ink-mute); }
+.term {
+  max-height: calc(var(--s8) * 6);
+  overflow: auto;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-box);
+  background: var(--con-bg);
+  color: var(--con-ink);
+  font-family: var(--mono);
+  font-size: var(--fs-1);
+}
+.entry { padding: var(--s2) 0; border-top: 1px solid var(--con-rule); }
+.entry:first-child { border-top: 0; }
+.cmd, .cmdFailed, .output, .status { white-space: pre-wrap; word-break: break-all; }
+.cmd { color: var(--con-cmd); }
+.cmdFailed { color: var(--con-hit); }
+.status { color: var(--con-mute); }
+.output {
+  max-height: var(--con-max-h);
+  overflow: auto;
+  margin: var(--s1) 0 0;
+  font-family: var(--mono);
+  font-size: inherit;
+  color: var(--con-ink);
+}

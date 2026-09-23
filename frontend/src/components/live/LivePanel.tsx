@@ -12,8 +12,12 @@ import { useScanStream } from "@/lib/ws/scanStream";
 
 import { AgentTree } from "./AgentTree";
 import { CostMeter } from "./CostMeter";
+import { EventFeed } from "./EventFeed";
 import styles from "./LivePanel.module.css";
+import { NoticeBar } from "./NoticeBar";
 import { ScanHeader, type StopState } from "./ScanHeader";
+import { ScreenshotGallery } from "./ScreenshotGallery";
+import { Terminal } from "./Terminal";
 
 type Connection = "connecting" | "live" | "reconnecting" | "ended" | "not_found";
 
@@ -98,6 +102,8 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
         {t(CONNECTION_LABEL[live.connection])}
       </p>
 
+      <NoticeBar notices={live.notices} />
+
       <ScanHeader
         scanId={scanId}
         scan={scan}
@@ -115,6 +121,14 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
           stopPending={stop.kind === "pending"}
           onStop={() => void onStop()}
         />
+      </div>
+
+      <div className={styles.grid}>
+        <EventFeed events={live.events} />
+        <div className={styles.column}>
+          <Terminal events={live.events} />
+          <ScreenshotGallery events={live.events} scanId={scanId} />
+        </div>
       </div>
     </div>
   );

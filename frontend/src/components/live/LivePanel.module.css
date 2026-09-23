@@ -26,3 +26,4 @@
 @media (max-width: 900px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
 }
+.column { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
