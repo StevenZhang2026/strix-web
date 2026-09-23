@@ -57,10 +57,12 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse
 from pydantic import Field, SecretStr, field_validator
 
 from app.db import Database
 from app.errors import (
+    ArtifactsPurgedError,
     ConcurrencyLimitError,
     InvalidRequestError,
     KeyRequiredError,
@@ -737,6 +739,48 @@ async def get_scan(request: Request, scan_id: str) -> ScanDetailResponse:
         # `JSONDecodeError`：坏 JSON 进不了库，真炸了就是库被人手工改坏了，该 500。
         findings=[json.loads(row["raw_json"]) for row in findings],
     )
+
+
+# URL 是内容地址（sha256）：同一 URL 永远同一字节，可以放心长缓存；`private` 因为这是登录后的证据。
+# `nosniff`：`extract_media` 不校验 PNG 结构，字节来自被测目标的截图管线，我们同源交给浏览器。
+_MEDIA_HEADERS = {
+    "Cache-Control": "private, max-age=31536000, immutable",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
+@router.get("/{scan_id}/media/{sha256}.png")
+async def get_scan_media(request: Request, scan_id: str, sha256: str) -> FileResponse:
+    """`EventMirror` 改写进事件正文的截图 URL 的读取端。
+
+    路径的**唯一**出处是 `scan_media.rel_path`：URL 两段只当 SQL 参数，查不到行就不碰磁盘，
+    所以路径穿越结构上不可能 —— 别再加 sha 正则／`resolve()` 比对，那是第二份、会漂移的判据。
+    """
+
+    def query(conn: sqlite3.Connection) -> tuple[str | None, bool]:
+        # `scan_id` 条件不能少：少了它，任何扫描的 URL 都能读到别的扫描的截图。
+        row = conn.execute(
+            "SELECT rel_path FROM scan_media WHERE scan_id = ? AND sha256 = ?",
+            (scan_id, sha256),
+        ).fetchone()
+        if row is not None:
+            return row["rel_path"], False
+        # 留存清理删了目录和 `scan_media` 行、`scans` 行不删 —— 只有审计分得清"被删"与"从没有"。
+        purged = conn.execute(
+            "SELECT 1 FROM audit_log WHERE scan_id = ? AND event = ? LIMIT 1",
+            (scan_id, audit.EVENT_SCAN_PURGED),
+        ).fetchone()
+        return None, purged is not None
+
+    rel_path, purged = await _db(request).run(query)
+    if rel_path is None:
+        raise ArtifactsPurgedError() if purged else NotFoundError()
+    path = _settings(request).console_data_dir / rel_path
+    # 先查：`FileResponse` 发送时才 stat，文件不在会 RuntimeError → 500。
+    if not await asyncio.to_thread(path.is_file):
+        logger.warning("scan_media 有记账但文件不在", extra={"scan_id": scan_id, "sha256": sha256})
+        raise NotFoundError()
+    return FileResponse(path, media_type="image/png", headers=_MEDIA_HEADERS)
 
 
 # =============================================================================

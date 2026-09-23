@@ -98,6 +98,18 @@ class NotFoundError(ConsoleError):
     status = 404
 
 
+class ArtifactsPurgedError(ConsoleError):
+    """扫描还在，但它的产物（截图、事件镜像）已被留存清理删掉（`services/retention.py`）。
+
+    为什么不并进 `not_found`：`scans` 那一行留存清理不删，前端能看到这次扫描、点开截图却 404 ——
+    不单列一个码，用户只能看到"链接过期"，而真相是"按策略删了、不会回来"。
+    判据是 `audit_log` 里有这次扫描的 `scan.purged`，不是"磁盘上没有文件"（后者分不清被删与从没落过盘）。
+    """
+
+    code = "artifacts_purged"
+    status = 404
+
+
 class MethodNotAllowedError(ConsoleError):
     """路径存在但方法不对。**只由 `main.py` 的 HTTPException 处理器产出**。
 
@@ -297,6 +309,7 @@ class OriginMismatchError(ConsoleError):
 ALL_ERRORS: tuple[type[ConsoleError], ...] = (
     InvalidRequestError,
     NotFoundError,
+    ArtifactsPurgedError,
     MethodNotAllowedError,
     InternalError,
     NotInAllowlistError,
