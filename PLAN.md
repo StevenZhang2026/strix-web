@@ -8,7 +8,7 @@
 
 - 下一步两件，顺序由用户定：① **人眼看一次真扫描**（juice-shop，quick，预算 2–3 USD，走 Bedrock；目标 URL 写 `http://juice-shop:3000`），对照验收 7／14 的前端半边；② **T17d** `/scans` 列表页（交底还没写）。
 - **2026-09-24 第一次真扫描**（`436d5fa3…`，quick_triage，上限 $5）：`stopped` + `exit_meaning=no_vulnerabilities_found` → 页面正确显示「结论不完整」、费用尺溢出段正确。镜像 37 条事件形状与前端判据一致（12 条 `exec_command` 带 `args.cmd` + 字符串 `result`；0 截图 —— 浏览器走 `agent-browser` CLI，不是截图工具）。**用户人眼看过整页（2026-09-24）：推理过程、工具调用、终端内容都正常** —— T17 前端半边验收通过。
-  由此冒出的三件（都没开工）：① `scanFailures.scan_incomplete` 的 action 写"提高费用上限后继续这次扫描"，但 **resume 端点不存在** → 文案在承诺没有的功能；② **$5.14／2 分 50 秒／约 20 轮 ≈ $0.25 一轮**，要按条 22／23／38 核一次成本估算是真贵还是估高了；③ 验活把 `endpoint_unreachable`（区域填错时实测）也显示成"凭据被拒"，用户会去查 key 而不是查区域。
+  由此冒出的三件：① ✅ **已修（2026-09-24）**：续跑 v1 已砍（§Key 不落盘 末段），`scan_incomplete`／`stopped_by_operator` 的 action 改成"重新发起"，删掉无人引用的 `scan.resume`／`scan.resumeNeedsKey`；② ✅ **已核（2026-09-24），估算没估高，是真贵**：`run.json` 23 次请求、输入 1,536,439、**cached 0**、输出 4,117；按 litellm 价目表 `us.` 区域 profile（$3.3/M 入、$16.5/M 出，比 `global.`／裸名贵 10%）复算 = `$5.1382`，与 `llm_usage.cost` 逐位相同。**钱 99% 花在输入上**：Strix 每轮底座 ≈61k token（system prompt + skill），`bearer → invoke/ → STRIX_PROMPT_CACHE=false`（条 22／23，`scan_launcher.py:223`）让每轮全价重发。估算：开缓存同样 23 轮约 $0.8–1.0（≈1/5）。**现成的出路是 `bedrock_sigv4` 凭据形状**（走 converse、缓存不关）—— **未实测**，要一对 IAM access key 真跑一次、断言 `cached_tokens > 0` 且 `cost > 0`（条 38）。次要：`global.` profile 再省 10%（价目表有键、护栏不断；要先确认数据驻留可接受 + 该端点没被解密）。这两条做不做、UI 要不要提示"bearer 形状贵约 5 倍"，**待用户定**；③ 验活把 `endpoint_unreachable`（区域填错时实测）也显示成"凭据被拒"，用户会去查 key 而不是查区域。
   另：本机 `api`／`web` 镜像一度停在 09-19（T17 之前），已 `up -d --build api web` 重建 —— **收货后要看页面就得先重建镜像**。
 - **记下不追**：`StampBar` 在 `/scans/[id]` 上用不起来 —— `GET /api/scans/{id}` 不带操作人／授权依据／声明时间／解析地址（只有 `authorization_id`）。要用得给 T16e 响应加一个 `authorization` 子对象，另起一条。
 
