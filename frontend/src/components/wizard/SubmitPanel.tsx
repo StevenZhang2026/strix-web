@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ErrorNotice } from "@/components/errors/ErrorNotice";
 import { Button } from "@/components/ui/Button";
+import { ButtonLink } from "@/components/ui/ButtonLink";
 import { ApiError, createScan, type ScanAcceptedResponse } from "@/lib/api/client";
 import { formatUsd } from "@/lib/format";
 import { t, type MessageKey } from "@/lib/messages";
@@ -151,9 +152,7 @@ function Rejection({
 /**
  * 202 之后。
  *
- * **没有任何指向 `/scans/{id}` 的链接、也不渲染 `ws`**：`GET /api/scans/{id}` 与
- * `/scans/[id]` 页面都还不存在。判据沿用首页那条注释 —— "点下去 404 的按钮比没有
- * 按钮更糟，它把'这一步还没做'变成'这个工具坏了'"。
+ * 链接指向 `/scans/{scan_id}`；仍不渲染 `ws`（WS 由实时面板自己连）。
  */
 function Accepted({ response }: { readonly response: ScanAcceptedResponse }) {
   return (
@@ -182,7 +181,7 @@ function Accepted({ response }: { readonly response: ScanAcceptedResponse }) {
         </ol>
       </details>
 
-      <p className={steps.hint}>{t("wizard.livePending")}</p>
+      <ButtonLink href={`/scans/${encodeURIComponent(response.scan_id)}`}>{t("live.openLive")}</ButtonLink>
     </div>
   );
 }

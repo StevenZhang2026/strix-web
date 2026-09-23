@@ -1,0 +1,52 @@
+/* 费用尺。`--fs-meter` 全站只在这里用；只用 token，零 `box-shadow`。 */
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s4);
+  margin: 0 0 var(--s4);
+}
+.amount { font-size: var(--fs-meter); line-height: 1; color: var(--ink); }
+.ceiling { font-size: var(--fs-2); color: var(--ink-2); }
+.track {
+  position: relative;
+  height: var(--ruler-track-h);
+  background: var(--sheet-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-box);
+  overflow: hidden;
+}
+.spent { position: absolute; top: 0; bottom: 0; left: 0; background: var(--gate); }
+.overflow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--ruler-stripe-a) 0 4px,
+    var(--ruler-stripe-b) 4px 8px
+  );
+}
+.reserve,
+.limit { position: absolute; top: 0; bottom: 0; width: 0; }
+.reserve { border-left: 1px dashed var(--ink-2); }
+.limit { border-left: 2px solid var(--ink); }
+.notes {
+  margin: var(--s3) 0 0;
+  padding-left: var(--s4);
+  font-size: var(--fs-1);
+  color: var(--ink-mute);
+}
+.alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+  margin-top: var(--s4);
+  padding: var(--s3);
+  border: 1px solid var(--stamp);
+  border-radius: var(--r-box);
+  background: var(--stamp-soft);
+}
+.alertText { margin: 0; font-size: var(--fs-2); color: var(--ink); }

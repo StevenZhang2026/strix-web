@@ -1,0 +1,17 @@
+/* 扫描头部：编号／状态／目标 + 停止 + 结论。只用 token，零 `box-shadow`。 */
+.header { display: flex; flex-direction: column; gap: var(--s4); }
+.pairs {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--s2) var(--s4);
+  margin: 0;
+}
+.key { font-size: var(--fs-2); color: var(--ink-mute); }
+.value { margin: 0; font-size: var(--fs-3); color: var(--ink); overflow-wrap: anywhere; }
+.stop { display: flex; align-items: center; gap: var(--s3); }
+.hint { margin: 0; font-size: var(--fs-1); color: var(--ink-mute); }
+.conclusion { display: flex; flex-direction: column; gap: var(--s3); }
+.headline { margin: 0; font-size: var(--fs-4); font-weight: 600; color: var(--ink); }
+.counts { display: flex; flex-wrap: wrap; gap: var(--s5); margin: 0; }
+.count { display: flex; flex-direction: column; gap: var(--s1); }
+.countValue { margin: 0; font-size: var(--fs-5); color: var(--ink); }
