@@ -18,6 +18,7 @@ def test_profile_1_6_2_literals() -> None:
     assert profile.version == "1.6.2"
     assert profile.runs_dir_name == "strix_runs"
     assert profile.run_record_name == "run.json"
+    assert profile.coverage_record_name == "coverage.json"
     assert profile.exit_code_ok == 0
     assert profile.exit_code_failed == 1
     assert profile.exit_code_vulnerabilities_found == 2

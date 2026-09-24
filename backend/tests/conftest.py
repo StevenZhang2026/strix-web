@@ -166,6 +166,18 @@ def make_run_dir(
     return run_dir
 
 
+def make_coverage_json(run_dir: Path, *, complete: object) -> Path:
+    """在 run 目录下写 `coverage.json`，返回它的路径。
+
+    形状照 `report/coverage.py:_completeness`，只放判定读的那一个键；`complete` 收
+    `object` 是为了能喂 `"true"`／`1`／`None` 这类非布尔值。
+    """
+    path = run_dir / "coverage.json"
+    record = {"completeness": {"complete": complete, "caveats": []}}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
 def make_agents_json(
     run_dir: Path,
     statuses: Mapping[str, str],

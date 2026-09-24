@@ -9,9 +9,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from app.services.run_discovery import discover_run, read_run_instruction, read_run_status
+import pytest
+
+from app.services.run_discovery import (
+    discover_run,
+    read_coverage_complete,
+    read_run_instruction,
+    read_run_status,
+)
 from app.strix_profile import profile_for
-from tests.conftest import make_run_dir
+from tests.conftest import make_coverage_json, make_run_dir
 
 PROFILE = profile_for("1.6.2")
 
@@ -103,3 +110,29 @@ def test_instruction_of_missing_run_json_is_none(tmp_path: Path) -> None:
 def test_non_string_instruction_is_none(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path, instruction=123)
     assert read_run_instruction(run_dir, PROFILE) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param({"completeness": {"complete": True}}, True, id="true"),
+        pytest.param({"completeness": {"complete": False}}, False, id="false"),
+        pytest.param({"completeness": {"complete": "true"}}, False, id="string-true"),
+        pytest.param({"completeness": {"complete": 1}}, False, id="one"),
+        pytest.param({"completeness": {"complete": None}}, False, id="null"),
+        pytest.param(None, False, id="missing-file"),
+        pytest.param("{not json", False, id="broken-json"),
+        pytest.param("[]", False, id="top-level-list"),
+        pytest.param('{"completeness": true}', False, id="completeness-not-dict"),
+    ],
+)
+def test_coverage_complete_only_on_literal_true(
+    tmp_path: Path, raw: dict[str, dict[str, object]] | str | None, expected: bool
+) -> None:
+    """没有"覆盖完整"的证据就不能说目标没问题 —— 缺失、读坏、形状不对一律 `False`，且不抛。"""
+    run_dir = make_run_dir(tmp_path)
+    if isinstance(raw, dict):
+        make_coverage_json(run_dir, complete=raw["completeness"]["complete"])
+    elif isinstance(raw, str):
+        (run_dir / "coverage.json").write_text(raw, encoding="utf-8")
+    assert read_coverage_complete(run_dir, PROFILE) is expected

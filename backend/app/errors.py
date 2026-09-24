@@ -371,6 +371,7 @@ def error_for_code(code: str) -> type[ConsoleError]:
 #     （TLS 被解密 / 凭据无效 / 形状与路由不匹配 / 路由不接受某参数）打的是同一个
 #     `LLM CONNECTION FAILED` 面板。只按标题分类会把三种都报成"连不上"。
 #   · run.json.status == "stopped" → scan_incomplete。
+#   · run.json.status == "completed" 但 coverage.json 的 completeness.complete 不是 true → coverage_incomplete。
 #
 # scan_incomplete 是发布阻断项的那一条：退出码 0 **不代表扫描跑完了**，预算耗尽被
 # 掐死的扫描同样退 0 并宣称"未发现漏洞"。一个渗透测试控制台在钱花光时报"目标干净"，
@@ -382,6 +383,8 @@ def error_for_code(code: str) -> type[ConsoleError]:
 # 为什么不复用现成的码：`scan_incomplete` 的文案写死了"费用或轮次先用完了"，拿它解释
 # "你自己点了停止"是撒谎；而让 `error_code` 为 NULL 则意味着"没跑完但没人说得出为什么"，
 # 那就把"不许暗示目标干净"这条安全语义推给了展示层。
+# `scan_incomplete` 的"费用或轮次先用完了"对 coverage_incomplete 同样不贴切（root 自己收尾了，
+# 是子任务没做完）。
 #
 # 为什么是 frozenset 而不是 Enum：这些值来自对**外部程序输出**的模式匹配，取值域会
 # 随 Strix 版本变化（升级预警线是 test_strix_contract.py）。Enum 的收益是穷举性检查，
@@ -407,6 +410,7 @@ SCAN_FAILURE_CODES: frozenset[str] = frozenset(
         "scan_preparation_failed",
         # ---- 结论完整性（来自 run.json.status，不是 stdout）-----------------
         "scan_incomplete",
+        "coverage_incomplete",  # run.json 说 completed，但 coverage.json 说不完整
         # ---- 没跑完但不是故障（来自"我们自己发过信号"这个事实，不是退出码）----
         "stopped_by_operator",  # 操作者点了停止
         "interrupted_by_restart",  # api 停机 / run.json.status == "interrupted"

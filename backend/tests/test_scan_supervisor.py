@@ -39,7 +39,7 @@ from app.services.scan_supervisor import (
 )
 from app.settings import Settings
 from app.strix_profile import PROFILES, profile_for
-from tests.conftest import make_run_dir
+from tests.conftest import make_coverage_json, make_run_dir
 
 PROFILE = profile_for("1.6.2")
 RULES = compile_rules(PROFILE)
@@ -49,12 +49,14 @@ def resolve(
     *,
     exit_code: int = 1,
     run_status: str | None = None,
+    coverage_complete: bool = True,
     stdout_tail: str = "",
     stopped_by: str | None = None,
 ) -> Attribution:
     return resolve_attribution(
         exit_code=exit_code,
         run_status=run_status,
+        coverage_complete=coverage_complete,
         stdout_tail=stdout_tail,
         stopped_by=stopped_by,
         profile=PROFILE,
@@ -170,6 +172,27 @@ def test_completed_wins_over_a_stop_we_sent() -> None:
     """
     got = resolve(exit_code=0, run_status="completed", stopped_by="operator")
     assert got == Attribution("completed", "no_vulnerabilities_found", None)
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "stopped_by", "exit_meaning"),
+    [
+        (0, None, "no_vulnerabilities_found"),
+        (2, None, "vulnerabilities_found"),
+        (0, "operator", "no_vulnerabilities_found"),
+    ],
+)
+def test_completed_with_incomplete_coverage_is_not_a_clean_verdict(
+    exit_code: int, stopped_by: str | None, exit_meaning: str
+) -> None:
+    """Strix 自己收尾了（`completed`），但覆盖记录说有子任务没测完 —— 不能说"没问题"。"""
+    got = resolve(
+        exit_code=exit_code,
+        run_status="completed",
+        coverage_complete=False,
+        stopped_by=stopped_by,
+    )
+    assert got == Attribution("stopped", exit_meaning, "coverage_incomplete")
 
 
 # ---- B/B2/C2. 规则表的顺序 ----------------------------------------------------
@@ -300,7 +323,7 @@ def test_clean_exit_cleans_tmpfs_and_tmpdir_but_keeps_products(
     sandbox_settings: Settings,
 ) -> None:
     plan = make_plan(sandbox_settings, "ok", "exit 0")
-    make_run_dir(plan.cwd, status="completed")
+    make_coverage_json(make_run_dir(plan.cwd, status="completed"), complete=True)
 
     outcome = run_to_outcome(sandbox_settings, "ok", plan)
 
@@ -318,6 +341,19 @@ def test_clean_exit_cleans_tmpfs_and_tmpdir_but_keeps_products(
     assert (plan.cwd / "strix_runs" / "strix-run-1" / "run.json").is_file()
 
 
+def test_completed_without_coverage_record_is_incomplete(sandbox_settings: Settings) -> None:
+    """与上一条一起钉住 `_collect` 真的读了 coverage、读的是对的文件。"""
+    plan = make_plan(sandbox_settings, "nocov", "exit 0")
+    make_run_dir(plan.cwd, status="completed")
+
+    outcome = run_to_outcome(sandbox_settings, "nocov", plan)
+
+    assert outcome.status == "stopped"
+    assert outcome.error_code == "coverage_incomplete"
+    assert outcome.exit_meaning == "no_vulnerabilities_found"
+    assert outcome.run_status == "completed"
+
+
 def test_finished_scan_notifies_the_reaper_after_leaving_the_registry(
     sandbox_settings: Settings,
 ) -> None:
@@ -333,7 +369,7 @@ def test_finished_scan_notifies_the_reaper_after_leaving_the_registry(
         on_scan_finished=lambda: seen.append(supervisor.active_scan_ids()),
     )
     plan = make_plan(sandbox_settings, "notify", "exit 0")
-    make_run_dir(plan.cwd, status="completed")
+    make_coverage_json(make_run_dir(plan.cwd, status="completed"), complete=True)
 
     async def scenario() -> None:
         process = await supervisor.start("notify", plan)
@@ -346,7 +382,7 @@ def test_finished_scan_notifies_the_reaper_after_leaving_the_registry(
 
 def test_exit_code_2_is_success_with_findings(sandbox_settings: Settings) -> None:
     plan = make_plan(sandbox_settings, "found", "exit 2")
-    make_run_dir(plan.cwd, status="completed")
+    make_coverage_json(make_run_dir(plan.cwd, status="completed"), complete=True)
 
     outcome = run_to_outcome(sandbox_settings, "found", plan)
 
@@ -362,7 +398,7 @@ def test_two_megabytes_of_output_does_not_deadlock(sandbox_settings: Settings) -
         "loud",
         'i=0; while [ $i -lt 2048 ]; do printf "%01024d" "$i"; i=$((i+1)); done; exit 0',
     )
-    make_run_dir(plan.cwd, status="completed")
+    make_coverage_json(make_run_dir(plan.cwd, status="completed"), complete=True)
     supervisor = ScanSupervisor(sandbox_settings, "1.6.2")
 
     async def scenario() -> tuple[ScanOutcome, int]:

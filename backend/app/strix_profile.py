@@ -35,6 +35,7 @@ class StrixProfile:
     version: str
     runs_dir_name: str
     run_record_name: str
+    coverage_record_name: str
     # 轮询的 stat 门盯的另外三个文件（相对 run 目录的 POSIX 路径，`run_dir / "a/b"` 直接可用）。
     # 在这里而不是在循环里写字面量：升级 Strix 时"哪几个文件要重验"必须一处看全。
     agents_record_rel_path: str
@@ -93,6 +94,7 @@ _P_1_6_2 = StrixProfile(
     version="1.6.2",
     runs_dir_name="strix_runs",  # core/paths.py:8 RUNS_DIR_NAME
     run_record_name="run.json",  # core/paths.py:10 RUN_RECORD_FILENAME
+    coverage_record_name="coverage.json",  # report/coverage.py:45 COVERAGE_FILENAME
     # `.state/` 这一层来自 core/paths.py 的 STATE_DIR_NAME；`agents.db` 是 openai-agents
     # 的 SQLiteSession 库（interface/tui/history.py:39 读它），`agents.json` 是 agent 图
     # （live_view.py:103-106 hydrate 它）。三者都不是只追加的，所以只能靠 stat 盯变化。

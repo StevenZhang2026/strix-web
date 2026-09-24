@@ -8,7 +8,8 @@
 - `exit_code`：只能回答"有没有发现漏洞"（`2`）与"是不是失败"。**不能回答"跑完了没有"** ——
   `0` 也可能是预算耗尽被掐死，那时它还宣称"未发现漏洞"（发布阻断项）。
 - `run.json` 的 `status`：**"跑完了没有"的唯一权威**。可能是 `None`（早期失败，run 目录
-  还没建）。
+  还没建）。`completed` 时再看 `coverage.json` 的 `completeness.complete` —— 不是 `true`
+  就是"收尾了但没测完"。
 - `stopped_by`：**我们自己的记录**。这是"是不是被人停的"唯一可靠判据 —— Strix 自己装了
   SIGTERM/SIGINT/SIGHUP 处理器并 `sys.exit(1)`（`interface/cli.py:130-141`），所以被停的
   进程是**正常退出**的，`returncode` 是 `1` 而不是 `-15`。
@@ -41,7 +42,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.errors import assert_scan_failure_code
-from app.services.run_discovery import DiscoveredRun, discover_run, read_run_status
+from app.services.run_discovery import (
+    DiscoveredRun,
+    discover_run,
+    read_coverage_complete,
+    read_run_status,
+)
 from app.services.scan_launcher import LaunchPlan, cleanup_scan_tmpdir, cleanup_workspace
 from app.settings import Settings
 from app.strix_profile import StrixProfile, profile_for
@@ -135,6 +141,7 @@ def resolve_attribution(
     *,
     exit_code: int,
     run_status: str | None,
+    coverage_complete: bool,
     stdout_tail: str,
     stopped_by: str | None,
     profile: StrixProfile,
@@ -144,9 +151,18 @@ def resolve_attribution(
 
     第一条排在"我们自己发过信号"前面是刻意的：`completed` 一旦写下就再也不会被覆盖
     （`report/state.py:637`），所以它是真的跑完了 —— 哪怕操作者在进程即将正常退出的
-    一瞬点了停止。"扫描跑完了"是**单调**的。
+    一瞬点了停止。"扫描跑完了"是**单调**的 —— 但"跑完了"还得覆盖完整才算结论完整。
     """
     if run_status == "completed":
+        if not coverage_complete:
+            # 归 `stopped` 而不是 `completed`+码：`error_code` "None 当且仅当 completed"的
+            # 不变式、前端「未发现漏洞」的判据（`status==="completed"`）、续跑的条件 UPDATE
+            # （`status IN ('stopped','interrupted')`）因此都不用改。
+            return Attribution(
+                status="stopped",
+                exit_meaning=_exit_meaning(exit_code, profile, "no_vulnerabilities_found"),
+                error_code=assert_scan_failure_code("coverage_incomplete"),
+            )
         return Attribution(
             status="completed",
             exit_meaning=_exit_meaning(exit_code, profile, "no_vulnerabilities_found"),
@@ -377,12 +393,20 @@ class ScanProcess:
             # = 这一轮没写下任何状态，那个 `stopped` 是上一轮的，按"没有记录"归因。
             logger.info("续跑期间 run.json 未被改写，旧状态不计", extra={"scan_id": self.scan_id})
             run_status = None
+        # 只在 completed 时读：其余分支不看它；放在 baseline 之后是因为旧 run.json 不算数时
+        # 它的 coverage 也不算。
+        coverage_complete = False
+        if run_status == "completed" and self.run is not None:
+            coverage_complete = await asyncio.to_thread(
+                read_coverage_complete, self.run.run_dir, self._profile
+            )
 
         # 退出时才一次性解码：按块解码会把多字节字符切两半。
         stdout_tail = bytes(self._tail).decode("utf-8", errors="replace")
         attribution = resolve_attribution(
             exit_code=exit_code,
             run_status=run_status,
+            coverage_complete=coverage_complete,
             stdout_tail=stdout_tail,
             stopped_by=self._stopped_by,
             profile=self._profile,

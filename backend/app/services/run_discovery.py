@@ -1,4 +1,4 @@
-"""在扫描的 cwd 下找到本次 run 目录，并读它的 `status` 与 `instruction`。
+"""在扫描的 cwd 下找到本次 run 目录，并读它的 `status` 与 `instruction`，以及 coverage 是否完整。
 
 CLI 没有 `--output-dir`，产物固定写 `$CWD/strix_runs/<自动名>/` —— 所以"这次扫描的
 产物在哪"只能靠**发现**，不能靠约定。每任务独立 cwd 让这件事是确定的（那个目录下最多
@@ -108,3 +108,27 @@ def read_run_instruction(run_dir: Path, profile: StrixProfile) -> str | None:
         return None
     instruction = record.get("instruction")
     return instruction if isinstance(instruction, str) else None
+
+
+def read_coverage_complete(run_dir: Path, profile: StrixProfile) -> bool:
+    """`coverage.json` 的 `completeness.complete` 是不是 JSON `true`。**不抛**。
+
+    缺失／读坏判 `False` 而不是"不知道"：这是"能不能说目标没问题"的证据，没有证据就
+    不能说 —— 与 `scan_incomplete` 同一个理由。用 `is True` 而不是真值判断：`"false"`
+    这样的字符串是真值，形状一漂移就会把不完整说成完整。
+    """
+    record_path = run_dir / profile.coverage_record_name
+    try:
+        raw = record_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(record, dict):
+        return False
+    completeness = record.get("completeness")
+    if not isinstance(completeness, dict):
+        return False
+    return completeness.get("complete") is True
