@@ -385,7 +385,7 @@
       "title": "已有扫描在跑",
       "detail": "一次扫描要独占一整个沙箱容器，本机同时只允许固定数量。",
       "action": "等当前扫描结束，或者先把它停掉。",
-      "params": ["limit", "running_scan_id"]
+      "params": ["limit", "active"]
     },
     "resume_unavailable": {
       "title": "这次扫描不能继续",
@@ -485,17 +485,17 @@
     "scan_incomplete": {
       "title": "结论不完整",
       "detail": "费用或轮次先用完了，这次扫描是被提前结束的，不是跑完的。已经找到的问题都还在，但没测到的部分无从判断 —— 这次结果不能当作「目标没有问题」。",
-      "action": "需要完整结论就提高费用上限，重新发起一次扫描。"
+      "action": "提高费用上限后可以在下面继续这次扫描，接着上次的进度往下测；已花费的部分不会重付。"
     },
     "stopped_by_operator": {
       "title": "结论不完整",
       "detail": "这次扫描是你手动停止的。已经找到的问题都还在，但没测到的部分无从判断。",
-      "action": "需要完整结论就重新发起一次扫描。"
+      "action": "需要完整结论可以在下面继续这次扫描，接着上次的进度往下测。"
     },
     "interrupted_by_restart": {
       "title": "已中断",
       "detail": "这次扫描没跑完就被打断了：控制台重启，或者它的进程被强制终止（docker kill、掐电、机器重启）。扫描子进程随之结束，已写下的发现都还在。",
-      "action": "重新发起一次扫描；沙箱容器会在下次清扫时回收。"
+      "action": "可以在下面继续这次扫描；沙箱容器会在下次清扫时回收。"
     },
     "scan_failed_unknown": {
       "title": "扫描失败（原因未能归类）",
@@ -507,6 +507,20 @@
       "detail": "模型名必须是「供应商/模型」的形状。裸名会被默认路由到 OpenAI，扫描在起飞前就退出了，什么都没跑，所以这次没有任何结论。",
       "action": "回到模型设置改成带供应商前缀的名字（Bedrock 的 API key 形状要写成 bedrock/invoke/<模型>），再重新发起扫描。"
     }
+  },
+
+  "resume": {
+    "toggle": "提高上限并继续",
+    "collapse": "收起",
+    "spentLabel": "已花费",
+    "previousCeilingLabel": "上次上限",
+    "totalLabel": "新的费用上限（美元）",
+    "totalHint": "这是新的总额，不是追加的金额；必须高于已花费。",
+    "totalTooLow": "新的总额必须是数字，且高于已花费的金额。",
+    "credentialsNote": "续跑必须用与上次相同的模型服务、形状与模型。",
+    "credentialsMismatch": "先移除当前凭据，再按上次的配置重新提供。",
+    "submitting": "正在继续…",
+    "submit": "继续这次扫描"
   },
 
   "resumeRefusal": {
@@ -637,7 +651,7 @@
     "latency_ms": "耗时（毫秒）",
     "key_name": "多余的一项",
     "limit": "同时允许的扫描数",
-    "running_scan_id": "正在跑的扫描",
+    "active": "正在跑的扫描数",
     "retry_after": "剩余锁定时间",
     "origin": "来源",
     "host": "访问地址"

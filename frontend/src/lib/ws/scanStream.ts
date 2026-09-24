@@ -8,6 +8,9 @@
  * 为什么 socket / 定时器 / 退避计数全挂在 `useEffect` 的闭包里而不是模块级：
  * 模块级可变状态是本项目明令禁止的（Strix 的教训）；闭包还顺带让"卸载后别再重连"
  * 只需要一个 `disposed` 标志。
+ *
+ * `generation`：续跑 202 后调用方把它加一 → effect 重跑：`reset` + 空游标 hello，全量回放镜像；
+ * 扫描还在 starting 时现有的『1000 → 查 REST → 仍 starting 就重连』兜住。
  */
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,7 +25,7 @@ const BACKOFF_MAX_MS = 15_000;
 /** 这两个状态说明 channel 可能只是还没开（刚提交就打开了页面），值得再连。 */
 const STILL_RUNNING = new Set(["starting", "running"]);
 
-export function useScanStream(scanId: string): void {
+export function useScanStream(scanId: string, generation: number): void {
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -171,5 +174,5 @@ export function useScanStream(scanId: string): void {
       }
       socket?.close(1000);
     };
-  }, [scanId, queryClient]);
+  }, [scanId, generation, queryClient]);
 }

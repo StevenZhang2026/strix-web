@@ -696,6 +696,8 @@ export interface ScanDetail extends ScanSummary {
   readonly max_turns: number | null;
   readonly reasoning_effort: string | null;
   readonly provider: string;
+  /** 形状名不是凭据：续跑按它重新索要凭据。 */
+  readonly auth_shape: string;
   readonly strix_llm: string;
   readonly current_epoch: number;
   readonly authorization_id: string;
@@ -731,4 +733,19 @@ export interface StopScanAcceptedResponse {
 export function stopScan(scanId: string): Promise<StopScanAcceptedResponse> {
   const path = `/api/scans/${encodeURIComponent(scanId)}/stop`;
   return apiFetch<StopScanAcceptedResponse>(path, { body: { mode: "graceful" } });
+}
+
+export interface ResumeScanRequest {
+  readonly vault_handle: string;
+  /** 新的**总额**，不是增量；后端要求它严格大于已花费。 */
+  readonly max_budget_usd: number;
+}
+
+/**
+ * `POST /api/scans/{id}/resume` → `202`。**会真的起进程花钱**：调用点手写 `async`，
+ * 不包 `useMutation`（照 `createScan`）。
+ */
+export function resumeScan(scanId: string, request: ResumeScanRequest): Promise<ScanAcceptedResponse> {
+  const path = `/api/scans/${encodeURIComponent(scanId)}/resume`;
+  return apiFetch<ScanAcceptedResponse>(path, { body: request });
 }

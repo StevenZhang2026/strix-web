@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ErrorNotice } from "@/components/errors/ErrorNotice";
@@ -15,9 +15,18 @@ import { CostMeter } from "./CostMeter";
 import { EventFeed } from "./EventFeed";
 import styles from "./LivePanel.module.css";
 import { NoticeBar } from "./NoticeBar";
+import { ResumePanel } from "./ResumePanel";
 import { ScanHeader, type StopState } from "./ScanHeader";
 import { ScreenshotGallery } from "./ScreenshotGallery";
 import { Terminal } from "./Terminal";
+
+// 只决定按钮显不显示，真判定在后端 `services/scan_resume.py`，两边取值必须一致。
+const RESUMABLE_STATUSES = new Set(["stopped", "interrupted"]);
+const RESUMABLE_ERROR_CODES = new Set([
+  "scan_incomplete",
+  "stopped_by_operator",
+  "interrupted_by_restart",
+]);
 
 type Connection = "connecting" | "live" | "reconnecting" | "ended" | "not_found";
 
@@ -45,7 +54,9 @@ const CONNECTION_TONE: Record<Exclude<Connection, "not_found">, DotTone> = {
  * （照 `SubmitPanel` 的 `createScan`），不包 `useMutation`、不重试。
  */
 export function LivePanel({ scanId }: { readonly scanId: string }) {
-  useScanStream(scanId);
+  const [generation, setGeneration] = useState(0);
+  useScanStream(scanId, generation);
+  const queryClient = useQueryClient();
   // store 在 `useScanStream` 的 effect 里才 `reset(scanId)`，首帧渲染时装的可能还是上一个
   // 扫描的状态（客户端导航在两个扫描之间切换）→ 不是这个 scanId 的一律当初始态。
   const stored = useScanLiveStore((s) => s.live);
@@ -78,6 +89,12 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
     (scan.status === "starting" || scan.status === "running") &&
     !live.done &&
     stop.kind !== "requested";
+  const canResume =
+    scan !== undefined &&
+    RESUMABLE_STATUSES.has(scan.status) &&
+    scan.error_code !== null &&
+    RESUMABLE_ERROR_CODES.has(scan.error_code) &&
+    !canStop;
 
   async function onStop() {
     setStop({ kind: "pending" });
@@ -111,6 +128,19 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
         canStop={canStop}
         onStop={() => void onStop()}
       />
+
+      {!canResume ? null : (
+        // `key`：续跑后换代，本地 state（展开、总额、失败）一起重置。
+        <ResumePanel
+          key={generation}
+          scan={scan}
+          onResumed={() => {
+            setStop({ kind: "idle" });
+            setGeneration((g) => g + 1);
+            void queryClient.invalidateQueries({ queryKey: ["scan", scanId] });
+          }}
+        />
+      )}
 
       <div className={styles.grid}>
         <AgentTree agents={agents} />

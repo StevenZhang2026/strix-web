@@ -1,0 +1,28 @@
+/* 续跑展开区。只用 token，零 `box-shadow`；表单行照 `wizard/Steps.module.css`。 */
+.root { display: flex; flex-direction: column; gap: var(--s4); }
+.field { display: flex; flex-direction: column; gap: var(--s2); }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--s2) var(--s4); margin: 0; }
+.value { margin: 0; font-size: var(--fs-3); color: var(--ink); }
+
+.label {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+
+.input {
+  width: 100%;
+  max-width: var(--measure);
+  padding: var(--s2) var(--s3);
+  font: inherit;
+  font-size: var(--fs-3);
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-act);
+}
+
+.input:disabled { background: var(--sheet-sunk); color: var(--ink-mute); }
+.hint { margin: 0; max-width: var(--measure); font-size: var(--fs-2); color: var(--ink-mute); }
+.warn { margin: 0; max-width: var(--measure); font-size: var(--fs-2); font-weight: 600; color: var(--gate); }

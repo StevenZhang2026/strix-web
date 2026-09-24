@@ -37,8 +37,17 @@ import styles from "./CredentialForm.module.css";
  *
  * `vault_handle` 只经 `useKeysStore().setHandle()` 落地 —— 这个文件不碰
  * `sessionStorage`（全项目只有 `lib/stores/keys.ts` 许可碰它，eslint 封死）。
+ *
+ * `preset`（续跑用）：供应商／形状／模型锁死为上次那一套，只让用户重新填密文与参数。
+ * 后端要求三者逐字相等，所以这里不许回落到目录里的别家。
  */
-export function CredentialForm() {
+export interface CredentialPreset {
+  readonly provider: string;
+  readonly auth_shape: string;
+  readonly strix_llm: string;
+}
+
+export function CredentialForm({ preset }: { readonly preset?: CredentialPreset } = {}) {
   const handle = useKeysStore((s) => s.handle);
   const setHandle = useKeysStore((s) => s.setHandle);
 
@@ -58,9 +67,10 @@ export function CredentialForm() {
     enabled: handle === null,
   });
 
-  const [providerName, setProviderName] = useState("");
-  const [shapeName, setShapeName] = useState("");
-  const [model, setModel] = useState("");
+  const locked = preset !== undefined;
+  const [providerName, setProviderName] = useState(preset?.provider ?? "");
+  const [shapeName, setShapeName] = useState(preset?.auth_shape ?? "");
+  const [model, setModel] = useState(preset?.strix_llm ?? "");
   const [apiBase, setApiBase] = useState("");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [params, setParams] = useState<Record<string, string>>({});
@@ -81,15 +91,19 @@ export function CredentialForm() {
 
   // 选中项由"名字 + 目录"推出来，没选过就落在第一个上 —— 这样不需要一个
   // 把默认值写进 state 的 effect，也不需要一个空占位 option。
-  const provider =
-    catalog.providers.find((item) => item.provider === providerName) ?? catalog.providers[0];
-  if (provider === undefined) {
+  const namedProvider = catalog.providers.find((item) => item.provider === providerName);
+  // 有 preset 时不回落：悄悄换成别家，后端只会回一个 `key_required`。
+  const providerOrNone = locked ? namedProvider : (namedProvider ?? catalog.providers[0]);
+  if (providerOrNone === undefined) {
     return <p className={styles.hint}>{t("common.empty")}</p>;
   }
-  const shape = provider.shapes.find((item) => item.auth_shape === shapeName) ?? provider.shapes[0];
-  if (shape === undefined) {
+  const provider = providerOrNone;
+  const namedShape = provider.shapes.find((item) => item.auth_shape === shapeName);
+  const shapeOrNone = locked ? namedShape : (namedShape ?? provider.shapes[0]);
+  if (shapeOrNone === undefined) {
     return <p className={styles.hint}>{t("common.empty")}</p>;
   }
+  const shape = shapeOrNone;
 
   // 换供应商 / 换形状都要把已填的东西清掉：那几个框的键名整套都变了，
   // 留着旧值只会连同旧的密文一起发出去。
@@ -155,7 +169,7 @@ export function CredentialForm() {
           className={styles.select}
           id={`${uid}-provider`}
           value={provider.provider}
-          disabled={pending}
+          disabled={pending || locked}
           onChange={(event) => {
             setProviderName(event.target.value);
             setShapeName("");
@@ -170,7 +184,7 @@ export function CredentialForm() {
         </select>
       </div>
 
-      <fieldset className={styles.shapes} disabled={pending}>
+      <fieldset className={styles.shapes} disabled={pending || locked}>
         <legend className={styles.label}>{t("credentials.shapeLabel")}</legend>
         {provider.shapes.map((item) => (
           <label className={styles.shape} key={item.auth_shape}>
@@ -212,11 +226,12 @@ export function CredentialForm() {
           spellCheck={false}
           required
           value={model}
+          readOnly={locked}
           disabled={pending}
           onChange={(event) => setModel(event.target.value)}
         />
         <p className={styles.hint}>{t("providers.modelHint")}</p>
-        {provider.models.length === 0 ? (
+        {locked ? null : provider.models.length === 0 ? (
           <p className={styles.hint}>{t("providers.modelsEmpty")}</p>
         ) : (
           <div className={styles.samples}>
