@@ -10,6 +10,7 @@ import { ApiError, fetchKeyState, resumeScan, type ScanDetail } from "@/lib/api/
 import { formatUsd } from "@/lib/format";
 import { t, type MessageKey } from "@/lib/messages";
 import { useKeysStore } from "@/lib/stores/keys";
+import { SUGGESTED_MIN_BUDGET_USD } from "@/lib/stores/wizard";
 
 import styles from "./ResumePanel.module.css";
 
@@ -113,6 +114,10 @@ export function ResumePanel({
             <p className={styles.hint}>{t("resume.totalHint")}</p>
             {total.trim() !== "" && !totalOk ? (
               <p className={styles.warn}>{t("resume.totalTooLow")}</p>
+            ) : null}
+            {/* 只提示不拦；比的是这次还能花的，不是总额。 */}
+            {totalOk && totalNumber - scan.cost_usd < SUGGESTED_MIN_BUDGET_USD ? (
+              <p className={styles.hint}>{t("resume.headroomBelowSuggested")}</p>
             ) : null}
           </div>
 

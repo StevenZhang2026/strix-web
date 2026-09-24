@@ -3,7 +3,12 @@
 import { useId } from "react";
 
 import { t } from "@/lib/messages";
-import { isBudgetTooLow, isTurnsTooLow, useWizardStore } from "@/lib/stores/wizard";
+import {
+  isBudgetTooLow,
+  isTurnsTooLow,
+  SUGGESTED_MIN_BUDGET_USD,
+  useWizardStore,
+} from "@/lib/stores/wizard";
 
 import steps from "./Steps.module.css";
 import { SubmitPanel } from "./SubmitPanel";
@@ -16,6 +21,7 @@ import { SubmitPanel } from "./SubmitPanel";
  * 后端的 `budget_exceeds_ceiling` 告知。
  *
  * 下限反过来 —— 它是前端自己的判定（用户拍板 $2），所以就地提示、就地拦。
+ * 再往上还有一条只提示不拦的建议下限 `SUGGESTED_MIN_BUDGET_USD`（$4）。
  */
 export function StepBudget() {
   const budgetUsd = useWizardStore((s) => s.budgetUsd);
@@ -55,6 +61,10 @@ export function StepBudget() {
             而且那句话还指着一个空框。 */}
         {budgetUsd.trim() !== "" && isBudgetTooLow(budgetUsd) ? (
           <p className={steps.warn}>{t("wizard.budgetTooLow")}</p>
+        ) : null}
+        {/* 已经过了硬下限才轮到它：两句同时出现，前一句说"不许"、这一句说"可以"，自相矛盾。 */}
+        {!isBudgetTooLow(budgetUsd) && Number(budgetUsd) < SUGGESTED_MIN_BUDGET_USD ? (
+          <p className={steps.hint}>{t("wizard.budgetBelowSuggested")}</p>
         ) : null}
       </div>
 

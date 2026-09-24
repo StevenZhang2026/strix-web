@@ -209,6 +209,14 @@ export const useWizardStore = create<WizardState>((set) => ({
  */
 export const MIN_BUDGET_USD = 2;
 
+/**
+ * 建议下限（用户拍板 $4，**只提示、不拦** —— 用户可能用免费模型）。实测 $2 在 Bedrock 上
+ * 连一个探测都发不出：每轮底座 ≈61k token，每个子 agent 首轮还要全量写一次缓存。
+ * 续跑页比的是"这次还能花的"（新总额 − 已花费），不是总额。
+ * **改这个数要同时改 `wizard.budgetBelowSuggested` 与 `resume.headroomBelowSuggested`**（理由同上）。
+ */
+export const SUGGESTED_MIN_BUDGET_USD = 4;
+
 /** 轮数下限：0 轮的扫描不是扫描。 */
 export const MIN_TURNS = 1;
 
