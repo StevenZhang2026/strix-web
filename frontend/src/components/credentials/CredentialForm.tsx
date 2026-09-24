@@ -231,6 +231,11 @@ export function CredentialForm({ preset }: { readonly preset?: CredentialPreset 
           onChange={(event) => setModel(event.target.value)}
         />
         <p className={styles.hint}>{t("providers.modelHint")}</p>
+        {/* OpenRouter 的 `:free` 模型有 50 次/天硬顶，撑不住一次完整扫描（实测：6 个
+            子 agent 还没发出探测就集体 429）。只提示、不拦 —— 用户可能只是想试跑。 */}
+        {model.trim().endsWith(":free") ? (
+          <p className={styles.warning}>{t("providers.modelFreeTierWarning")}</p>
+        ) : null}
         {locked ? null : provider.models.length === 0 ? (
           <p className={styles.hint}>{t("providers.modelsEmpty")}</p>
         ) : (

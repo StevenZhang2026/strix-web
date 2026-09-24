@@ -632,6 +632,7 @@
     "modelLabel": "模型名",
     "modelHint": "只有 Bedrock 的前缀不用自己写（我们按凭据形状补 bedrock/ 或 bedrock/invoke/）。其余几家必须带供应商前缀，例如 deepseek/deepseek-chat、openai/gpt-4o —— 少了前缀，请求根本发不出去。",
     "modelsEmpty": "这一家我们没有实测过的模型名可以给你抄。照它的文档填，并在前面补上供应商前缀。",
+    "modelFreeTierWarning": "这是 OpenRouter 的免费模型（:free 结尾），每天只有 50 次请求的硬顶。一次完整扫描会同时跑好几个子任务、每个都要来回很多轮，往往还没真正开始探测就会被限流卡住、拿不到有效结论。建议换成付费模型，或先给 OpenRouter 充值解锁更高额度。",
     "apiBaseLabel": "自定义接入地址",
     "apiBaseHint": "留空即用官方地址。只有自建网关才需要填。",
     "verifyingLabel": "正在用这组凭据发一次最小请求…"
