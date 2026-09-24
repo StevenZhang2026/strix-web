@@ -155,6 +155,14 @@ def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
     if not spec.targets:
         raise InvalidRequestError(field="targets")
     _validate_limits(spec, budget_ceiling_usd)
+    # 这是"续跑能把口令找回来"的结构性保证：续跑时脱敏只能靠从指令原文解析回来的口令，
+    # 往返不成立的账号在首次就拒，而不是等续跑时才发现漏脱敏。
+    for credential in spec.test_credentials:
+        fields = (credential.role, credential.username, credential.password)
+        if any("\n" in value or "\r" in value for value in fields):
+            raise InvalidRequestError(field="credentials")
+        if _parse_credential_line(_credential_line(credential)) != credential:
+            raise InvalidRequestError(field="credentials")
     return template
 
 
@@ -307,17 +315,70 @@ def build_env(
     return env
 
 
+_TEST_ACCOUNTS_HEADER = "## Test accounts (use only these; do not touch other accounts)"
+_ROLE_PREFIX = "- role="
+_USERNAME_SEP = " username="
+_PASSWORD_SEP = " password="  # noqa: S105  # 是行格式里的分隔符，不是口令
+
+
+def _credential_line(credential: TestCredential) -> str:
+    """指令里一个账号的那一行。格式由 `_parse_credential_line` 反解，两边一起改。"""
+    return (
+        f"{_ROLE_PREFIX}{credential.role}{_USERNAME_SEP}{credential.username}"
+        f"{_PASSWORD_SEP}{credential.password}"
+    )
+
+
+def _parse_credential_line(line: str) -> TestCredential | None:
+    """`_credential_line` 的反函数：两个分隔符都取**第一次**出现，剩下整段是口令。
+
+    所以口令里带什么都能还原；role 含 `" username="`、username 含 `" password="` 还原不了
+    —— 那两种由 `_validate` 在首次扫描时就拒。
+    """
+    if not line.startswith(_ROLE_PREFIX):
+        return None
+    role, sep, rest = line[len(_ROLE_PREFIX) :].partition(_USERNAME_SEP)
+    if not sep:
+        return None
+    username, sep, password = rest.partition(_PASSWORD_SEP)
+    if not sep:
+        return None
+    return TestCredential(role=role, username=username, password=password)
+
+
+def recover_test_credentials(instruction: str) -> tuple[TestCredential, ...]:
+    """从 `compose_instruction` 的产物（续跑时即 `run.json` 的 `instruction`）解析回测试账号。
+
+    续跑要靠它把口令重新登记进脱敏：口令从不落 DB，旧对话历史里却有明文。
+    **失败即关闭（I2）**：有账号段但任一行解析不回来、或账号段是空的 → `ValueError`，
+    调用方据此拒绝续跑。绝不静默少返回一条 —— 少一条就是一个口令明文进 DB 与 WS，
+    而"拒绝续跑、请重新发起"只是多花一次钱。没有账号段 → `()`。
+    """
+    lines = instruction.split("\n")
+    if _TEST_ACCOUNTS_HEADER not in lines:
+        return ()
+    start = lines.index(_TEST_ACCOUNTS_HEADER) + 1
+    credentials: list[TestCredential] = []
+    for index, line in enumerate(lines[start:], start=start):
+        if not line:
+            break
+        credential = _parse_credential_line(line)
+        if credential is None:
+            # 不带行内容：那一行里可能就是口令。
+            raise ValueError(f"测试账号段第 {index - start + 1} 行解析失败")
+        credentials.append(credential)
+    if not credentials:
+        raise ValueError("测试账号段为空")
+    return tuple(credentials)
+
+
 def compose_instruction(template: ScanTemplate, spec: LaunchSpec) -> str:
     """纯函数。模板正文 + 目标 + 测试账号 + 操作者补充 + 统一尾巴，全英文骨架。"""
     lines: list[str] = [template.instruction_body, "", "## Targets"]
     lines += [f"- {target}" for target in spec.targets]
     if spec.test_credentials:
-        lines += ["", "## Test accounts (use only these; do not touch other accounts)"]
-        lines += [
-            f"- role={credential.role} username={credential.username} "
-            f"password={credential.password}"
-            for credential in spec.test_credentials
-        ]
+        lines += ["", _TEST_ACCOUNTS_HEADER]
+        lines += [_credential_line(credential) for credential in spec.test_credentials]
     if spec.extra_instruction:
         lines += ["", "## Additional notes from the operator", spec.extra_instruction]
     lines.append(SHARED_TAIL)

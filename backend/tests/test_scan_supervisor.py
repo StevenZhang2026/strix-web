@@ -550,3 +550,56 @@ def test_lifespan_shutdown_stops_running_scans(app: FastAPI) -> None:
         assert isinstance(app.state.supervisor, ScanSupervisor)
         app.state.supervisor = recorder
     assert recorder.shutdown_calls == 1
+
+
+# ---- 续跑：旧 run.json ----
+# 续跑的 cwd 里已经躺着上一轮的 `run.json`（通常 `status=stopped`）。Strix 要到 LLM 验活
+# 通过之后才改写它，所以"一启动就失败"的续跑留下的是**旧**状态 —— 它不能进归因。
+def _resume_to_outcome(settings: Settings, scan_id: str, plan: LaunchPlan) -> ScanOutcome:
+    supervisor = ScanSupervisor(settings, "1.6.2")
+
+    async def scenario() -> ScanOutcome:
+        process = await supervisor.start(scan_id, plan, resume=True)
+        return await asyncio.wait_for(process.wait(), timeout=60)
+
+    return asyncio.run(scenario())
+
+
+def test_resume_ignores_untouched_stale_run_status(sandbox_settings: Settings) -> None:
+    """I1：验活失败的续跑 = exit 1 + run.json 一个字节没动。旧的 `stopped` 不算数，
+    否则会报成"结论不完整，可以继续"，用户会一直重试续跑。"""
+    plan = make_plan(sandbox_settings, "resume-fail", "exit 1")
+    make_run_dir(plan.cwd, status="stopped")
+
+    outcome = _resume_to_outcome(sandbox_settings, "resume-fail", plan)
+
+    assert outcome.status == "failed"
+    assert outcome.run_status is None
+    assert outcome.error_code != "scan_incomplete"
+
+
+def test_resume_counts_run_status_rewritten_this_round(sandbox_settings: Settings) -> None:
+    """这一轮真的重写了 run.json（大小变了，三元组必变）→ 新写下的状态照常算数。"""
+    plan = make_plan(
+        sandbox_settings,
+        "resume-rewrite",
+        'sleep 0.05; printf \'%s\' \'{"status":"stopped","again":true}\''
+        " > strix_runs/strix-run-1/run.json; exit 0",
+    )
+    make_run_dir(plan.cwd, status="stopped")
+
+    outcome = _resume_to_outcome(sandbox_settings, "resume-rewrite", plan)
+
+    assert outcome.status == "stopped"
+    assert outcome.error_code == "scan_incomplete"
+
+
+def test_first_scan_still_trusts_untouched_run_status(sandbox_settings: Settings) -> None:
+    """首次扫描（不传 `resume`）行为不变：同样的预置与脚本仍是 stopped/scan_incomplete。"""
+    plan = make_plan(sandbox_settings, "first-stopped", "exit 1")
+    make_run_dir(plan.cwd, status="stopped")
+
+    outcome = run_to_outcome(sandbox_settings, "first-stopped", plan)
+
+    assert outcome.status == "stopped"
+    assert outcome.error_code == "scan_incomplete"

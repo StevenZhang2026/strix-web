@@ -168,6 +168,7 @@ def make_channel(
     mirror: FakeMirror | None = None,
     persist: FakePersist | None = None,
     with_run_dir: bool = True,
+    start_epoch: int = 0,
 ) -> Harness:
     """一个只对着替身说话的 channel。
 
@@ -196,6 +197,7 @@ def make_channel(
         persist=the_persist,  # type: ignore[arg-type]
         redact=lambda text: text,
         sleep=the_sleeper,
+        start_epoch=start_epoch,
     )
     return Harness(
         channel=channel,
@@ -331,6 +333,31 @@ def test_persist_failure_kills_the_channel(tmp_path: Path, monkeypatch: pytest.M
 
     # 与 I2 同样不许留下半更新的状态：留了的话那一轮永远不会被补。
     assert h.channel._gate is None
+
+
+# =============================================================================
+# 2c. 起始 epoch —— 续跑不撞 `scan_events` 的 `(scan_id, epoch, seq)` 主键
+# =============================================================================
+def test_the_first_frame_starts_at_the_given_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """续跑的新 channel 把全部历史在**新** epoch 下重推；若首帧仍落在 epoch 0，
+    它的 seq 0 必撞上一轮的那一行。帧、镜像行、落库三处必须是同一个 epoch。"""
+    h = make_channel(
+        tmp_path,
+        monkeypatch,
+        snapshots=[a_snapshot(events=(an_event(),))],
+        start_epoch=3,
+    )
+    sub = h.channel.subscribe()
+
+    drive(h.channel)
+
+    frames = drain(sub)
+    assert (frames[0].epoch, frames[0].seq) == (3, 0)
+    assert {frame.epoch for frame in frames} == {3}
+    assert [call[0] for call in h.mirror.calls] == [3]
+    assert [call[0] for call in h.persist.calls] == [3]
 
 
 # =============================================================================
@@ -596,7 +623,7 @@ def test_open_starts_the_polling_task_and_get_finds_the_channel(
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> list[Envelope]:
-        channel = h.registry.open("scan-1", h.cwd)
+        channel = h.registry.open("scan-1", h.cwd, start_epoch=0)
         subscriber = channel.subscribe()
         # `get` 是 registry 存在的理由：WS 路由只有 scan_id。
         assert h.registry.get("scan-1") is channel
@@ -618,7 +645,7 @@ def test_close_finishes_the_channel_and_reaps_the_task(
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> tuple[list[Envelope], bool, ScanChannel | None]:
-        channel = h.registry.open("scan-1", h.cwd)
+        channel = h.registry.open("scan-1", h.cwd, start_epoch=0)
         subscriber = channel.subscribe()
         task = task_of(h.registry, "scan-1")
         await wait_for(lambda: subscriber.queue.qsize() >= 2)
@@ -638,7 +665,7 @@ def test_close_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> tuple[int, int]:
-        h.registry.open("scan-1", h.cwd)
+        h.registry.open("scan-1", h.cwd, start_epoch=0)
         await wait_for(lambda: h.reads != [])
         await h.registry.close("scan-1")
         after_first = len(h.reads)
@@ -657,10 +684,10 @@ def test_opening_the_same_scan_twice_is_refused(
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> None:
-        first = h.registry.open("scan-1", h.cwd)
+        first = h.registry.open("scan-1", h.cwd, start_epoch=0)
         try:
             with pytest.raises(RuntimeError, match="已经开着了"):
-                h.registry.open("scan-1", h.cwd)
+                h.registry.open("scan-1", h.cwd, start_epoch=0)
             assert h.registry.get("scan-1") is first, "第二次 open 把在册的那个换掉了"
         finally:
             await h.registry.close("scan-1")
@@ -681,7 +708,7 @@ def test_close_does_not_raise_when_the_channel_died_on_a_mirror_write(
     )
 
     async def scenario() -> tuple[BaseException | None, bool, ScanChannel | None]:
-        h.registry.open("scan-1", h.cwd)
+        h.registry.open("scan-1", h.cwd, start_epoch=0)
         task = task_of(h.registry, "scan-1")
         await wait_for(task.done)
         died_of = task.exception()
@@ -701,8 +728,8 @@ def test_shutdown_closes_every_open_channel(
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> tuple[list[bool], list[ScanChannel | None]]:
-        h.registry.open("scan-1", h.cwd)
-        h.registry.open("scan-2", h.cwd)
+        h.registry.open("scan-1", h.cwd, start_epoch=0)
+        h.registry.open("scan-2", h.cwd, start_epoch=0)
         tasks = [task_of(h.registry, "scan-1"), task_of(h.registry, "scan-2")]
         await wait_for(lambda: len(h.reads) >= 2)
         await h.registry.shutdown()
@@ -727,7 +754,7 @@ def test_the_mirror_gets_the_scans_dir_itself_not_a_subdirectory(
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> None:
-        h.registry.open("scan-1", h.cwd)
+        h.registry.open("scan-1", h.cwd, start_epoch=0)
         await h.registry.close("scan-1")
 
     asyncio.run(scenario())
@@ -741,7 +768,7 @@ def test_the_persist_gets_the_scan_id(tmp_path: Path, monkeypatch: pytest.Monkey
     h = make_registry(tmp_path, monkeypatch)
 
     async def scenario() -> None:
-        h.registry.open("scan-1", h.cwd)
+        h.registry.open("scan-1", h.cwd, start_epoch=0)
         await h.registry.close("scan-1")
 
     asyncio.run(scenario())

@@ -848,7 +848,7 @@ class OrderRecordingChannels:
         self.order = order
         self._db = db
 
-    def open(self, scan_id: str, cwd: Path) -> None:
+    def open(self, scan_id: str, cwd: Path, *, start_epoch: int) -> None:
         self.order.append("open")
 
     async def close(self, scan_id: str) -> None:

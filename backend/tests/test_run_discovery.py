@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from app.services.run_discovery import discover_run, read_run_status
+from app.services.run_discovery import discover_run, read_run_instruction, read_run_status
 from app.strix_profile import profile_for
 from tests.conftest import make_run_dir
 
@@ -87,3 +87,19 @@ def test_unknown_status_is_returned_verbatim(tmp_path: Path) -> None:
     """取值域外的状态**原样返回**（只 warning）：判死它反而把升级信号丢了。"""
     run_dir = make_run_dir(tmp_path, status="teleported")
     assert read_run_status(run_dir, PROFILE) == "teleported"
+
+
+def test_instruction_is_read_back_verbatim(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path, instruction="line one\n- role=u username=a password=p")
+    assert read_run_instruction(run_dir, PROFILE) == "line one\n- role=u username=a password=p"
+
+
+def test_instruction_of_missing_run_json_is_none(tmp_path: Path) -> None:
+    run_dir = tmp_path / "strix_runs" / "strix-run-1"
+    run_dir.mkdir(parents=True)
+    assert read_run_instruction(run_dir, PROFILE) is None
+
+
+def test_non_string_instruction_is_none(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path, instruction=123)
+    assert read_run_instruction(run_dir, PROFILE) is None

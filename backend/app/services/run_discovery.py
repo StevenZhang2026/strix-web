@@ -1,4 +1,4 @@
-"""在扫描的 cwd 下找到本次 run 目录，并读它的 `status`。
+"""在扫描的 cwd 下找到本次 run 目录，并读它的 `status` 与 `instruction`。
 
 CLI 没有 `--output-dir`，产物固定写 `$CWD/strix_runs/<自动名>/` —— 所以"这次扫描的
 产物在哪"只能靠**发现**，不能靠约定。每任务独立 cwd 让这件事是确定的（那个目录下最多
@@ -87,3 +87,24 @@ def read_run_status(run_dir: Path, profile: StrixProfile) -> str | None:
             extra={"run_dir": str(run_dir), "run_status": status},
         )
     return status
+
+
+def read_run_instruction(run_dir: Path, profile: StrixProfile) -> str | None:
+    """读 `run.json` 的 `instruction`（Strix 存的是我们交给它的指令原文）。**不抛**。
+
+    续跑时用它把测试账号口令解析回来登记脱敏。宽容度与 `read_run_status` 相同；
+    不在取值上 warning —— 那是 `status` 独有的升级预警线。
+    """
+    record_path = run_dir / profile.run_record_name
+    try:
+        raw = record_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    instruction = record.get("instruction")
+    return instruction if isinstance(instruction, str) else None

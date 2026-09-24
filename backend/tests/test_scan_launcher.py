@@ -504,3 +504,79 @@ def test_resume_plan_does_not_recreate_a_purged_scan_dir(ws_settings: Settings) 
     with pytest.raises(FileNotFoundError):
         scan_launcher.build_resume_plan(ws_settings, _resume(), _credentials(), environ={})
     assert not (ws_settings.scans_dir / _SCAN_ID).exists()
+
+
+# ---- 口令往返 ----------------------------------------------------------------
+# 续跑时口令只能从 `run.json` 的指令原文里解析回来登记脱敏（它从不落 DB）。
+# I1：凡是首次放行的账号都能逐字段、保序地还原；I2：解析不回来就抛，绝不少返回一条。
+def _cred(
+    role: str = "user", username: str = "alice", password: str = _PASSWORD
+) -> scan_launcher.TestCredential:
+    return scan_launcher.TestCredential(role=role, username=username, password=password)
+
+
+def _composed(
+    credentials: tuple[scan_launcher.TestCredential, ...], extra: str | None = None
+) -> str:
+    template = template_for("full_review")
+    assert template is not None
+    return scan_launcher.compose_instruction(
+        template, _spec(test_credentials=credentials, extra_instruction=extra)
+    )
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        (_cred(password="two words here"),),
+        (_cred(password="a=b==c"),),
+        (_cred(password="x password=y"),),
+        (_cred(role="管理员", username="张三", password="口令 含中文"),),
+        (_cred(role="user", username="alice"), _cred(role="admin", username="root")),
+        (),
+    ],
+)
+def test_recover_round_trips_what_compose_wrote(
+    credentials: tuple[scan_launcher.TestCredential, ...],
+) -> None:
+    assert scan_launcher.recover_test_credentials(_composed(credentials)) == credentials
+
+
+def test_recover_ignores_operator_notes() -> None:
+    credentials = (_cred(),)
+    text = _composed(credentials, extra="- role=evil username=x password=leak\nmore notes")
+    assert scan_launcher.recover_test_credentials(text) == credentials
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        _cred(role="user username=bob"),
+        _cred(username="alice password=oops"),
+        _cred(password="line1\nline2"),
+    ],
+)
+def test_launch_rejects_credentials_that_would_not_round_trip(
+    ws_settings: Settings, credential: scan_launcher.TestCredential
+) -> None:
+    with pytest.raises(InvalidRequestError) as excinfo:
+        scan_launcher.build_launch_plan(
+            ws_settings, _spec(test_credentials=(credential,)), _credentials(), environ={}
+        )
+    assert excinfo.value.params["field"] == "credentials"
+    assert not (ws_settings.console_ephemeral_home_root / f"scan-{_SCAN_ID}").exists()
+
+
+_HEADER = "## Test accounts (use only these; do not touch other accounts)"
+
+
+def test_recover_refuses_an_unparseable_line_without_echoing_it() -> None:
+    text = f"body\n\n{_HEADER}\n- role=user username=alice password={_PASSWORD}\n- oops\n"
+    with pytest.raises(ValueError) as excinfo:
+        scan_launcher.recover_test_credentials(text)
+    assert _PASSWORD not in str(excinfo.value)
+
+
+def test_recover_refuses_a_header_with_no_accounts() -> None:
+    with pytest.raises(ValueError):
+        scan_launcher.recover_test_credentials(f"body\n\n{_HEADER}\n\n## Next\n")

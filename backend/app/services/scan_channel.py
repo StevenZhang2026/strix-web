@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -131,6 +131,7 @@ class ScanChannel:
         persist: ScanPersist,
         redact: Callable[[str], str],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        start_epoch: int,
     ) -> None:
         self._scan_id = scan_id
         self._cwd = cwd
@@ -147,7 +148,9 @@ class ScanChannel:
         self._tailer: LogTailer | None = None
         # `None` = 还没读过（≠ 四个文件都不存在），所以第一轮一定不会被跳过。
         self._gate: StatGate | None = None
-        self._projection = ProjectionState.empty()
+        # 首次投影仍是空 order（全量走 `added`，不算重同步），只是 epoch 从调用方给的起：
+        # 续跑若从 0 起，首帧 `(epoch 0, seq 0)` 必撞上一轮在 `scan_events` 里的主键。
+        self._projection = replace(ProjectionState.empty(), epoch=start_epoch)
         self._frames = FrameState.empty()
         # epoch=-1 表示"还没发过任何帧"，所以第一帧的 seq 是 0（同 ImagePuller）。
         self._sequencer = Sequencer(epoch=-1)
@@ -320,8 +323,11 @@ class ChannelRegistry:
         self._redact = redact
         self._live: dict[str, tuple[ScanChannel, asyncio.Task[None]]] = {}
 
-    def open(self, scan_id: str, cwd: Path) -> ScanChannel:
+    def open(self, scan_id: str, cwd: Path, *, start_epoch: int) -> ScanChannel:
         """建 channel 并立刻起它的轮询任务。
+
+        `start_epoch` 由调用方从 `scan_events` 算好传进来：首次扫描库里没有这个 scan 的行，
+        所以是 0；续跑要比已有的最大 epoch 大，否则首帧撞 `(scan_id, epoch, seq)` 主键。
 
         重复 `open` 同一个 scan_id 是**编程错误**（不是用户输入），所以抛 `RuntimeError`
         而不是加一个错误码：静默替换掉旧的那个 = 泄漏一个还在跑的任务，正是本类要挡的事。
@@ -339,6 +345,7 @@ class ChannelRegistry:
             mirror=mirror,
             persist=ScanPersist(self._db, scan_id),
             redact=self._redact,
+            start_epoch=start_epoch,
         )
         # 任务必须有人拿着强引用：`create_task` 的返回值没人持有时事件循环可以把它 GC 掉
         # （同 `main.py` 的 `scan_tasks`）。

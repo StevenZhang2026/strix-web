@@ -226,6 +226,21 @@ class ScanOutcome:
     strix_run_name: str | None
 
 
+def _run_record_stamp(cwd: Path, profile: StrixProfile) -> tuple[int, int, int] | None:
+    """`run.json` 的 `(inode, mtime_ns, size)`；run 目录或文件不存在就是 `None`。
+
+    三元组而不只是 mtime：Strix 整体重写这个文件，inode 或大小任一变了都算"写过"。
+    """
+    run = discover_run(cwd, profile)
+    if run is None:
+        return None
+    try:
+        st = os.stat(run.run_dir / profile.run_record_name)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 class ScanProcess:
     """一次扫描的子进程。真正持有状态，所以是 class。
 
@@ -244,6 +259,7 @@ class ScanProcess:
         profile: StrixProfile,
         rules: tuple[tuple[re.Pattern[str], str], ...],
         on_finish: Callable[[str], None],
+        run_record_baseline: tuple[int, int, int] | None,
     ) -> None:
         self.scan_id = scan_id
         self.pid = proc.pid
@@ -255,6 +271,8 @@ class ScanProcess:
         self._profile = profile
         self._rules = rules
         self._on_finish = on_finish
+        # 只有续跑才有值：exec 之前 `run.json` 的指纹（见 `_collect`）。
+        self._run_record_baseline = run_record_baseline
         self._stopped_by: str | None = None
         self._tail = bytearray()
         self._monitor: asyncio.Task[ScanOutcome] = asyncio.create_task(self._run_monitor())
@@ -350,6 +368,15 @@ class ScanProcess:
         run_status: str | None = None
         if self.run is not None:
             run_status = await asyncio.to_thread(read_run_status, self.run.run_dir, self._profile)
+        if self._run_record_baseline is not None and (
+            await asyncio.to_thread(_run_record_stamp, self._plan.cwd, self._profile)
+            == self._run_record_baseline
+        ):
+            # 续跑时 Strix 先验活 LLM（`interface/main.py:406`，失败即 `sys.exit(1)`），
+            # 到 `run_cli` 里（`interface/cli.py:103-106`）才第一次改写 run.json。文件没动过
+            # = 这一轮没写下任何状态，那个 `stopped` 是上一轮的，按"没有记录"归因。
+            logger.info("续跑期间 run.json 未被改写，旧状态不计", extra={"scan_id": self.scan_id})
+            run_status = None
 
         # 退出时才一次性解码：按块解码会把多字节字符切两半。
         stdout_tail = bytes(self._tail).decode("utf-8", errors="replace")
@@ -449,13 +476,18 @@ class ScanSupervisor:
         # 里被**同步**调用，所以实现方只许 set 一个 Event，不许阻塞。
         self._on_scan_finished = on_scan_finished
 
-    async def start(self, scan_id: str, plan: LaunchPlan) -> ScanProcess:
+    async def start(self, scan_id: str, plan: LaunchPlan, *, resume: bool = False) -> ScanProcess:
         """起子进程。**`env=plan.env` 是整份替换**，绝不 `os.environ | plan.env` ——
         T9 的 `_PASSTHROUGH_ENV` 白名单就是靠这个成立的。
 
         `stderr=STDOUT` 合流：Rich 面板走 stdout、Python traceback 走 stderr，而归因要靠
         两者的先后顺序。`start_new_session=True` 让 pgid == pid，停止时能打整组。
+
+        `resume=True`：exec **之前**记下 cwd 里旧 `run.json` 的指纹，退出时没变就不信它。
         """
+        baseline = (
+            await asyncio.to_thread(_run_record_stamp, plan.cwd, self._profile) if resume else None
+        )
         proc = await asyncio.create_subprocess_exec(
             *plan.argv,
             cwd=plan.cwd,
@@ -474,6 +506,7 @@ class ScanSupervisor:
             profile=self._profile,
             rules=self._rules,
             on_finish=self._forget,
+            run_record_baseline=baseline,
         )
         self._processes[scan_id] = process
         logger.info(

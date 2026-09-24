@@ -615,6 +615,8 @@ async def create_scan(request: Request, payload: CreateScanRequest) -> ScanAccep
                     # 显式传 cwd 而不是从 `process` 上取：`ScanProcess` 把 plan 存成私有的
                     # `self._plan`，为这一个值去开放一个属性比多传一个参数贵。
                     cwd=plan.cwd,
+                    # 首次扫描：`scan_events` 里还没有这个 scan 的行，epoch 从 0 起。
+                    start_epoch=0,
                     scan_secrets=scan_secrets,
                     vault=vault,
                     vault_handle=payload.vault_handle,
@@ -799,6 +801,7 @@ async def _run_to_completion(
     entry_actor: str | None,
     entry_client_ip: str | None,
     entry_user_agent: str | None,
+    start_epoch: int,
 ) -> None:
     """`running` → 等结果 → 终态 → 审计 → 关 channel → 放掉凭据。
 
@@ -811,7 +814,7 @@ async def _run_to_completion(
         # 起 channel 是 `try` 的第一件事（比 `mark_running` 还早）：越早开，越早捞到 Strix
         # 写下的第一批产物。"开"与"关"落在同一个函数的 try/finally 两端 —— 中间任何一行
         # 抛异常都仍然会关。
-        channels.open(scan_id, cwd)
+        channels.open(scan_id, cwd, start_epoch=start_epoch)
 
         started_at = audit.iso_utc(datetime.now(UTC))
 
