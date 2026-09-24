@@ -1272,6 +1272,10 @@ def test_resume_relaunches_the_same_scan_with_the_recovered_password(
     )
     assert len(resumed) == 1
     assert json.loads(resumed[0]["detail_json"])["spent_usd"] == 0.5
+    plan = supervisor.plans[-1]
+    assert "--instruction-file" in plan.argv
+    text = plan.instruction_path.read_text(encoding="utf-8")
+    assert _TEST_PASSWORD in text and "## Resumed scan" in text
 
 
 class _EpochRecordingChannels(OrderRecordingChannels):

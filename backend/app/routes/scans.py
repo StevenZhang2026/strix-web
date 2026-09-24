@@ -839,6 +839,7 @@ async def resume_scan(
                 spent_usd=scan["cost_usd"],
                 max_turns=scan["max_turns"],
                 reasoning_effort=scan["reasoning_effort"],
+                instruction=instruction,
             )
             try:
                 plan = await asyncio.to_thread(

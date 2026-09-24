@@ -16,7 +16,12 @@ from app.errors import assert_scan_failure_code
 RESUMABLE_STATUSES: Final = frozenset({"stopped", "interrupted"})
 RESUMABLE_ERROR_CODES: Final = frozenset(
     assert_scan_failure_code(code)  # 拼错码时导入即炸，而不是静默永不匹配
-    for code in ("scan_incomplete", "stopped_by_operator", "interrupted_by_restart")
+    for code in (
+        "scan_incomplete",
+        "stopped_by_operator",
+        "interrupted_by_restart",
+        "coverage_incomplete",
+    )
 )
 RESUME_REFUSAL_REASONS: Final = ("not_resumable", "strix_version_changed", "no_checkpoint")
 """全部 reason。T31b5 的 `zh-CN.json` 覆盖测试拿它对表。"""

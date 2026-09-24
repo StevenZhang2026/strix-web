@@ -26,6 +26,7 @@ const RESUMABLE_ERROR_CODES = new Set([
   "scan_incomplete",
   "stopped_by_operator",
   "interrupted_by_restart",
+  "coverage_incomplete",
 ]);
 
 type Connection = "connecting" | "live" | "reconnecting" | "ended" | "not_found";

@@ -112,6 +112,8 @@ class ResumeSpec:
     spent_usd: float
     max_turns: int
     reasoning_effort: str | None
+    # `run.json` 读回的原指令。它可能含测试账号口令，所以只进 tmpfs 上的 `instruction.txt`。
+    instruction: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,8 +134,7 @@ class LaunchPlan:
 
     `env` 含明文凭据 —— **绝不整体进日志/DB**；要记就记 `env_var_names`。
     `instruction_sha256` 是正文的唯一留痕：正文随 tmpfs 一起消失。
-    两个 instruction 字段为 `None` = 续跑：指令由 Strix 从 `run.json` 读回，
-    DB 里那一行保留首次的摘要（T31b 不覆写它）。
+    续跑时是续跑指令的摘要；DB 里那一行仍保留首次的摘要（路由不覆写）。
     """
 
     argv: tuple[str, ...]
@@ -143,8 +144,8 @@ class LaunchPlan:
     cwd: Path
     home: Path
     config_path: Path
-    instruction_path: Path | None
-    instruction_sha256: str | None
+    instruction_path: Path
+    instruction_sha256: str
 
 
 def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
@@ -155,6 +156,9 @@ def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
     if not spec.targets:
         raise InvalidRequestError(field="targets")
     _validate_limits(spec, budget_ceiling_usd)
+    # 否则续跑剥旧节时会从操作者这段开始剪，连 `SHARED_TAIL` 的安全规则一起剪掉。
+    if spec.extra_instruction and _RESUME_HEADER in spec.extra_instruction:
+        raise InvalidRequestError(field="extra_instruction")
     # 这是"续跑能把口令找回来"的结构性保证：续跑时脱敏只能靠从指令原文解析回来的口令，
     # 往返不成立的账号在首次就拒，而不是等续跑时才发现漏脱敏。
     for credential in spec.test_credentials:
@@ -242,12 +246,14 @@ def build_resume_argv(
     spec: ResumeSpec,
     *,
     config_path: Path,
+    instruction_path: Path,
     budget_ceiling_usd: float,
 ) -> tuple[str, ...]:
     """纯函数。校验挂在这里的理由同 `build_argv`：构造 argv 是唯一的入口。
 
-    没有 `-t`（Strix 拒绝 `--resume` 与 `-t` 同时出现）、没有 `--instruction-file`
-    （指令它从 `run.json` 读回）。`-m` 必须显式发：Strix 只在 `-m` 等于默认值 `deep` 时
+    没有 `-t`（Strix 拒绝 `--resume` 与 `-t` 同时出现）。带 `--instruction-file`：不给指令时
+    Strix 只回放旧指令、root 快收尾就直接 `finish_scan`，见 `compose_resume_instruction`。
+    `-m` 必须显式发：Strix 只在 `-m` 等于默认值 `deep` 时
     才换成持久化的模式，不发的话"原来就是 deep"和"没说"分不开。
     """
     _validate_resume(spec, budget_ceiling_usd)
@@ -262,6 +268,8 @@ def build_resume_argv(
         _format_usd(spec.max_budget_usd),
         "--max-turns",
         str(spec.max_turns),
+        "--instruction-file",
+        str(instruction_path),
         "--config",
         str(config_path),
     )
@@ -319,6 +327,8 @@ _TEST_ACCOUNTS_HEADER = "## Test accounts (use only these; do not touch other ac
 _ROLE_PREFIX = "- role="
 _USERNAME_SEP = " username="
 _PASSWORD_SEP = " password="  # noqa: S105  # 是行格式里的分隔符，不是口令
+_RESUME_HEADER = "## Resumed scan"
+_RESUME_MARKER = f"\n\n{_RESUME_HEADER}\n"
 
 
 def _credential_line(credential: TestCredential) -> str:
@@ -383,6 +393,30 @@ def compose_instruction(template: ScanTemplate, spec: LaunchSpec) -> str:
         lines += ["", "## Additional notes from the operator", spec.extra_instruction]
     lines.append(SHARED_TAIL)
     return "\n".join(lines)
+
+
+def compose_resume_instruction(original: str, *, spent_usd: float, budget_usd: float) -> str:
+    """纯函数。续跑指令 = 原指令原文 + 追加一节"补测缺口"。
+
+    必须带原文：Strix 收到新指令就整份覆写 `run.json.instruction`，只写追加节的话测试账号段
+    就丢了，下一次续跑解析不回口令、旧对话重放时口令明文进 DB。
+    先剥掉上一次追加的那节再拼：连续续跑不叠加、只留最新的预算数字。
+    `partition` 取**第一次**出现是安全的：`_validate` 拒了含 `_RESUME_HEADER` 的操作者补充，
+    口令字段又已禁 `\n`，所以原文里不可能先出现这个标记。
+    不加尾随换行：Strix 读文件时 `.strip()`，读回的必须就是写下的，否则下一次剥离对不上。
+    不拼 `coverage.json` 的 gap 正文：那是 LLM 写的文本（可能含口令），root 自己能读到。
+    """
+    base = original.partition(_RESUME_MARKER)[0]
+    body = (
+        "This scan was stopped earlier and is now being resumed. The total budget is now"
+        f" ${_format_usd(budget_usd)} USD, of which ${_format_usd(spent_usd)} USD was already"
+        " spent.\n"
+        "Sub-agents that were stopped earlier will not restart.\n"
+        "Before calling finish_scan: call list_coverage to see which surfaces are still untested"
+        " or need follow-up, create new sub-agents to test those gaps, and wait for them to"
+        " finish."
+    )
+    return base + _RESUME_MARKER + body
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -514,16 +548,23 @@ def build_resume_plan(
     先校验再建目录，理由同 `build_launch_plan`。
     """
     _validate_resume(spec, settings.console_max_budget_ceiling_usd)
-    _root, home, config_path = _prepare_home(settings, spec.scan_id)
+    root, home, config_path = _prepare_home(settings, spec.scan_id)
     cwd = settings.scans_dir / spec.scan_id
     # `tmp` 上次被 `cleanup_scan_tmpdir` 删了，而 `TMPDIR` 指向它，所以重建。
     # 刻意不带 `parents=True`：cwd 已被留存清理删掉时必须抛 `FileNotFoundError`，
     # 不许把一个没有产物的 scan 目录凭空建出来（T31b 准入时先查，这里是结构性兜底）。
     (cwd / "tmp").mkdir(exist_ok=True)
     (cwd / "tmp").chmod(0o700)
+    # 写在 cwd/tmp 之后：cwd 已被清理时先抛，不留口令文件。
+    instruction_text = compose_resume_instruction(
+        spec.instruction, spent_usd=spec.spent_usd, budget_usd=spec.max_budget_usd
+    )
+    instruction_path = root / "instruction.txt"
+    _write_private(instruction_path, instruction_text)
     argv = build_resume_argv(
         spec,
         config_path=config_path,
+        instruction_path=instruction_path,
         budget_ceiling_usd=settings.console_max_budget_ceiling_usd,
     )
     env = build_env(credentials, spec, home=home, cwd=cwd, environ=environ)
@@ -535,6 +576,6 @@ def build_resume_plan(
         cwd=cwd,
         home=home,
         config_path=config_path,
-        instruction_path=None,
-        instruction_sha256=None,
+        instruction_path=instruction_path,
+        instruction_sha256=hashlib.sha256(instruction_text.encode("utf-8")).hexdigest(),
     )

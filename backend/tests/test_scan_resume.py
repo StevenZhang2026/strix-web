@@ -28,6 +28,7 @@ def _facts(**overrides: object) -> ResumeFacts:
     [
         ("stopped", "scan_incomplete"),
         ("stopped", "stopped_by_operator"),
+        ("stopped", "coverage_incomplete"),
         ("interrupted", "interrupted_by_restart"),
         ("interrupted", "scan_incomplete"),
     ],

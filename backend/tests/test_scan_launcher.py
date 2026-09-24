@@ -418,21 +418,22 @@ def _resume(**overrides: object) -> scan_launcher.ResumeSpec:
         "spent_usd": 5.1382,
         "max_turns": 60,
         "reasoning_effort": None,
+        # 放在函数体里：`_composed`/`_cred` 定义在本段之后，模块级默认值引用不到。
+        "instruction": _composed((_cred(),)),
     }
     fields.update(overrides)
     return scan_launcher.ResumeSpec(**fields)  # type: ignore[arg-type]  # 键与类型由调用方逐个给
 
 
 def _resume_argv(spec: scan_launcher.ResumeSpec) -> tuple[str, ...]:
-    return scan_launcher.build_resume_argv(spec, config_path=_CONFIG, budget_ceiling_usd=_CEILING)
+    return scan_launcher.build_resume_argv(
+        spec, config_path=_CONFIG, instruction_path=_INSTRUCTION, budget_ceiling_usd=_CEILING
+    )
 
 
 def test_golden_resume_argv() -> None:
-    """同时钉住"没有 `-t`、没有 `--instruction-file`"：带 `-t` Strix 直接 parser.error。"""
-    golden = (
-        f"strix -n --resume {_RUN_NAME} -m quick --max-budget-usd 10 --max-turns 60"
-        f" --config {_CONFIG}"
-    )
+    """同时钉住"没有 `-t`"：带 `-t` Strix 直接 parser.error。尾巴与首次扫描的 `_TAIL` 同形。"""
+    golden = f"strix -n --resume {_RUN_NAME} -m quick --max-budget-usd 10 --max-turns 60 {_TAIL}"
     assert _resume_argv(_resume()) == tuple(golden.split(" "))
 
 
@@ -480,9 +481,14 @@ def test_resume_plan_reuses_cwd_with_fresh_tmpfs_home(ws_settings: Settings) -> 
     assert plan.cwd == cwd
     assert (cwd / "tmp").is_dir()
     assert plan.argv_preview is plan.argv
-    assert plan.instruction_path is None and plan.instruction_sha256 is None
     root = ws_settings.console_ephemeral_home_root / f"scan-{_SCAN_ID}"
-    assert not (root / "instruction.txt").exists()
+    assert plan.instruction_path == root / "instruction.txt"
+    assert _mode(plan.instruction_path) == 0o600
+    expected = scan_launcher.compose_resume_instruction(
+        _resume().instruction, spent_usd=5.1382, budget_usd=10.0
+    )
+    assert plan.instruction_path.read_text(encoding="utf-8") == expected
+    assert _PASSWORD not in "\x00".join(plan.argv)
     assert json.loads(plan.config_path.read_text(encoding="utf-8")) == {"env": {}}
     assert _mode(plan.config_path) == 0o600
     assert plan.env["STRIX_RUN_ID"] == _SCAN_ID
@@ -525,17 +531,17 @@ def _composed(
     )
 
 
-@pytest.mark.parametrize(
-    "credentials",
-    [
-        (_cred(password="two words here"),),
-        (_cred(password="a=b==c"),),
-        (_cred(password="x password=y"),),
-        (_cred(role="管理员", username="张三", password="口令 含中文"),),
-        (_cred(role="user", username="alice"), _cred(role="admin", username="root")),
-        (),
-    ],
-)
+_ROUND_TRIP_CREDENTIALS: list[tuple[scan_launcher.TestCredential, ...]] = [
+    (_cred(password="two words here"),),
+    (_cred(password="a=b==c"),),
+    (_cred(password="x password=y"),),
+    (_cred(role="管理员", username="张三", password="口令 含中文"),),
+    (_cred(role="user", username="alice"), _cred(role="admin", username="root")),
+    (),
+]
+
+
+@pytest.mark.parametrize("credentials", _ROUND_TRIP_CREDENTIALS)
 def test_recover_round_trips_what_compose_wrote(
     credentials: tuple[scan_launcher.TestCredential, ...],
 ) -> None:
@@ -580,3 +586,39 @@ def test_recover_refuses_an_unparseable_line_without_echoing_it() -> None:
 def test_recover_refuses_a_header_with_no_accounts() -> None:
     with pytest.raises(ValueError):
         scan_launcher.recover_test_credentials(f"body\n\n{_HEADER}\n\n## Next\n")
+
+
+# 续跑指令会整份覆写 `run.json.instruction`，所以它必须仍能解析回口令（a）、再续跑不叠加（b）、
+# 且 Strix 读文件时的 `.strip()` 不改变它（c，否则 (b) 的剥离对不上）。
+@pytest.mark.parametrize("credentials", _ROUND_TRIP_CREDENTIALS)
+def test_resume_instruction_keeps_recoverable_credentials(
+    credentials: tuple[scan_launcher.TestCredential, ...],
+) -> None:
+    text = scan_launcher.compose_resume_instruction(
+        _composed(credentials), spent_usd=1.0, budget_usd=4.0
+    )
+    assert scan_launcher.recover_test_credentials(text) == credentials
+
+
+def test_resume_instruction_does_not_stack_on_repeated_resume() -> None:
+    original = _composed((_cred(),))
+    first = scan_launcher.compose_resume_instruction(original, spent_usd=1.0, budget_usd=4.0)
+    second = scan_launcher.compose_resume_instruction(first.strip(), spent_usd=3.5, budget_usd=8.0)
+    assert second == scan_launcher.compose_resume_instruction(
+        original, spent_usd=3.5, budget_usd=8.0
+    )
+    assert second.count("## Resumed scan") == 1
+    assert "$8 USD" in second and "$3.5 USD" in second
+    assert "budget is now $4 USD" not in second
+
+
+def test_resume_instruction_survives_strix_strip() -> None:
+    original = _composed((_cred(),)).strip()
+    text = scan_launcher.compose_resume_instruction(original, spent_usd=1.0, budget_usd=4.0)
+    assert text == text.strip()
+
+
+def test_launch_rejects_extra_instruction_carrying_the_resume_header() -> None:
+    with pytest.raises(InvalidRequestError) as excinfo:
+        _argv(_spec(extra_instruction="notes\n## Resumed scan\nmore"))
+    assert excinfo.value.params["field"] == "extra_instruction"
