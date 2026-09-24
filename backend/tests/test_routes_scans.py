@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -126,12 +127,14 @@ class FakeSupervisor:
     def __init__(self) -> None:
         self.processes: dict[str, FakeProcess] = {}
         self.plans: list[LaunchPlan] = []
+        self.resumes: list[bool] = []
         self.start_error: Exception | None = None
 
-    async def start(self, scan_id: str, plan: LaunchPlan) -> FakeProcess:
+    async def start(self, scan_id: str, plan: LaunchPlan, *, resume: bool = False) -> FakeProcess:
         if self.start_error is not None:
             raise self.start_error
         self.plans.append(plan)
+        self.resumes.append(resume)
         process = FakeProcess(scan_id)
         self.processes[scan_id] = process
         return process
@@ -554,6 +557,8 @@ def test_a_failure_to_spawn_marks_the_row_failed(
     ]
     # 没起起来就不许留下登记的口令（`finally` 那一路）。
     assert app.state.scan_secrets.count() == 0
+    # tmpfs 上带口令明文的 `instruction.txt` 也不许留下。
+    assert not (settings.console_ephemeral_home_root / f"scan-{row['id']}").exists()
 
 
 # =============================================================================
@@ -940,18 +945,19 @@ def test_lifespan_shutdown_closes_the_channels_while_the_database_is_still_open(
 # =============================================================================
 # 17 读取端：`GET /api/scans` 与 `GET /api/scans/{id}`（T16e）
 # =============================================================================
-# 这 15 个列名一个都不许出现在读取端的响应里。前 8 个是泄漏面（`vault_handle` 是 KeyVault
-# 的句柄，`cwd`／`run_dir` 是宿主绝对路径），后 7 个没有消费者 —— "以后可能用得上"就不写。
+# 这 14 个列名一个都不许出现在读取端的响应里。前 8 个是泄漏面（`vault_handle` 是 KeyVault
+# 的句柄，`cwd`／`run_dir` 是宿主绝对路径），后 6 个没有消费者 —— "以后可能用得上"就不写。
+# （`auth_shape` 在 T31b5 移出：它是形状名不是凭据，续跑重新索要凭据要按它来。）
 _FORBIDDEN_COLUMNS = (
     "vault_handle argv_json env_var_names_json instruction_sha256 cwd run_dir strix_run_name "
-    "pid api_base auth_shape phase scope_mode resume_available strix_version sandbox_image"
+    "pid api_base phase scope_mode resume_available strix_version sandbox_image"
 ).split()
 
 
 def test_the_read_endpoints_expose_no_credential_surface(
     client: TestClient, app: FastAPI, settings: Settings
 ) -> None:
-    """列表与详情的**正文全文**里不许有 Key／测试口令／vault 句柄，也不许有那 15 个列名。
+    """列表与详情的**正文全文**里不许有 Key／测试口令／vault 句柄，也不许有那 14 个列名。
 
     `test_no_secret_reaches_the_db_the_audit_or_the_response` 盯的是 POST 的响应与库／审计，
     这条盯的是两个只读端点：SELECT 里多点一列、响应模型里多一个字段，这条就红。
@@ -989,7 +995,7 @@ _SUMMARY_KEYS = frozenset(
     "exit_code exit_meaning error_code".split()
 )
 _DETAIL_KEYS = _SUMMARY_KEYS | frozenset(
-    "error_message max_turns reasoning_effort provider strix_llm current_epoch "
+    "error_message max_turns reasoning_effort provider auth_shape strix_llm current_epoch "
     "authorization_id".split()
 )
 
@@ -1190,3 +1196,223 @@ def test_the_detail_reads_the_conclusion_the_background_task_wrote(
     assert scan["exit_code"] == row["exit_code"] == 0
     assert scan["exit_meaning"] == row["exit_meaning"] == "no_vulnerabilities_found"
     assert scan["targets"] == ["https://example.com"]
+
+
+# =============================================================================
+# 续跑（T31b5）：`POST /api/scans/{id}/resume`
+# =============================================================================
+_RESUME_CREDENTIALS = [{"role": "user", "username": "alice", "password": _TEST_PASSWORD}]
+
+
+def _resumable_scan(client: TestClient, app: FastAPI, settings: Settings) -> str:
+    """起一次带测试账号的扫描，造出 run.json + 进度存档，再让它以 `stopped` 收尾。
+
+    run.json 的 `instruction` 取自那次真的 `build_launch_plan` 写下的文件（替身不删 tmpfs）：
+    续跑要从它把口令解析回来，手写一份就测不到"两边格式真的对得上"。
+    """
+    scan_id = str(_launch(client, app, credentials=_RESUME_CREDENTIALS)["scan_id"])
+    supervisor = app.state.supervisor
+    instruction_path = supervisor.plans[-1].instruction_path
+    assert instruction_path is not None
+    run_dir = settings.scans_dir / scan_id / "strix_runs" / "run-1"
+    (run_dir / ".state").mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps({"instruction": instruction_path.read_text(), "status": "stopped"})
+    )
+    (run_dir / ".state" / "agents.json").write_text("{}")
+    supervisor.get(scan_id).finish(
+        _outcome(
+            status="stopped",
+            exit_code=0,
+            exit_meaning="no_vulnerabilities_found",
+            error_code="scan_incomplete",
+            run_status="stopped",
+            strix_run_name="run-1",
+            run_dir=run_dir,
+        )
+    )
+    _wait_for_status(settings, scan_id, "stopped")
+    # 等 finally 跑完（forget 口令）：之后断言的"口令在册"只能来自续跑那次 register。
+    _wait_until(lambda: not app.state.scan_tasks)
+    return scan_id
+
+
+def _resume(client: TestClient, scan_id: str, handle: str) -> httpx.Response:
+    return client.post(
+        f"/api/scans/{scan_id}/resume", json={"vault_handle": handle, "max_budget_usd": 5.0}
+    )
+
+
+def test_resume_relaunches_the_same_scan_with_the_recovered_password(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    scan_id = _resumable_scan(client, app, settings)
+    with writable_conn(settings) as conn:
+        conn.execute("UPDATE scans SET cost_usd = 0.5 WHERE id = ?", (scan_id,))
+    assert app.state.scan_secrets.count() == 0
+    handle = _store_credentials(app)
+
+    response = _resume(client, scan_id, handle)
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "starting"
+    supervisor = app.state.supervisor
+    assert supervisor.resumes[-1] is True
+    assert "--resume" in supervisor.plans[-1].argv
+    assert "run-1" in supervisor.plans[-1].argv
+    row = _rows(settings, "SELECT * FROM scans WHERE id = ?", (scan_id,))[0]
+    assert row["vault_handle"] == handle
+    assert row["max_budget_usd"] == 5.0
+    assert row["error_code"] is None
+    assert _TEST_PASSWORD in app.state.scan_secrets.secret_values()
+    resumed = _rows(
+        settings,
+        "SELECT detail_json FROM audit_log WHERE event = 'scan.resumed' AND scan_id = ?",
+        (scan_id,),
+    )
+    assert len(resumed) == 1
+    assert json.loads(resumed[0]["detail_json"])["spent_usd"] == 0.5
+
+
+class _EpochRecordingChannels(OrderRecordingChannels):
+    """只记 `open` 收到的 `start_epoch`。"""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.epochs: list[int] = []
+
+    def open(self, scan_id: str, cwd: Path, *, start_epoch: int) -> None:
+        self.epochs.append(start_epoch)
+
+
+def test_resume_starts_the_channel_one_epoch_past_the_mirror(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    scan_id = _resumable_scan(client, app, settings)
+    with writable_conn(settings) as conn:
+        conn.execute(
+            "INSERT INTO scan_events (scan_id, epoch, seq, kind, fingerprint, data_json) "
+            "VALUES (?, 2, 0, 'chat', 'fp-1', '{}')",
+            (scan_id,),
+        )
+    channels = _EpochRecordingChannels()
+    app.state.channels = channels
+
+    assert _resume(client, scan_id, _store_credentials(app)).status_code == 202
+
+    _wait_until(lambda: channels.epochs == [3])
+
+
+def test_resume_rechecks_dns(
+    client: TestClient, app: FastAPI, settings: Settings, resolutions: dict[str, Resolution]
+) -> None:
+    """**安全**：续跑也是一次对目标的真实攻击，DNS 变了就不许起。"""
+    scan_id = _resumable_scan(client, app, settings)
+    resolutions["example.com"] = Resolution(addresses=("203.0.113.5",), error=None)
+
+    response = _resume(client, scan_id, _store_credentials(app))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "dns_changed"
+    assert len(app.state.supervisor.plans) == 1
+    assert _rows(settings, "SELECT status FROM scans WHERE id = ?", (scan_id,))[0][0] == "stopped"
+    audited = _rows(settings, "SELECT scan_id FROM audit_log WHERE event = 'target.dns_changed'")
+    assert [row["scan_id"] for row in audited] == [scan_id]
+    assert app.state.scan_secrets.count() == 0
+
+
+def test_a_resume_that_cannot_spawn_leaves_no_tmpfs_behind(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """**安全**：起不了进程时 tmpfs 上的 HOME（Strix 会往里写明文 Key）与口令都要清掉。"""
+    scan_id = _resumable_scan(client, app, settings)
+    app.state.supervisor.start_error = OSError("fork 不出来")
+
+    with pytest.raises(OSError):
+        _resume(client, scan_id, _store_credentials(app))
+
+    assert not (settings.console_ephemeral_home_root / f"scan-{scan_id}").exists()
+    assert app.state.scan_secrets.count() == 0
+    assert _rows(settings, "SELECT status FROM scans WHERE id = ?", (scan_id,))[0][0] == "failed"
+
+
+@pytest.mark.parametrize("max_concurrent", [2])
+def test_a_running_scan_is_not_resumable_and_keeps_its_home(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """槽位给 2：否则并发闸先拦下，测不到"拒绝路径不许清掉正在跑的那次扫描的 HOME"。"""
+    scan_id = str(_launch(client, app)["scan_id"])
+    home = settings.console_ephemeral_home_root / f"scan-{scan_id}"
+    assert home.exists()
+
+    response = _resume(client, scan_id, _store_credentials(app))
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "resume_unavailable",
+        "trace_id": response.json()["trace_id"],
+        "params": {"reason": "not_resumable"},
+    }
+    assert home.exists()
+
+
+@pytest.mark.parametrize("change", ["unknown_handle", "different_shape"])
+def test_resume_requires_matching_credentials(
+    client: TestClient, app: FastAPI, settings: Settings, change: str
+) -> None:
+    scan_id = _resumable_scan(client, app, settings)
+    handle = _store_credentials(app)
+    if change == "unknown_handle":
+        handle = "not-a-handle"
+    else:
+        with writable_conn(settings) as conn:
+            conn.execute("UPDATE scans SET auth_shape = 'bearer' WHERE id = ?", (scan_id,))
+    expected_shape = "single" if change == "unknown_handle" else "bearer"
+
+    response = _resume(client, scan_id, handle)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "key_required"
+    assert response.json()["params"] == {"provider": "anthropic", "auth_shape": expected_shape}
+    assert len(app.state.supervisor.plans) == 1
+
+
+@pytest.mark.parametrize(
+    ("damage", "status", "code"),
+    [("no_checkpoint", 409, "resume_unavailable"), ("purged", 404, "artifacts_purged")],
+)
+def test_resume_refusals(
+    client: TestClient, app: FastAPI, settings: Settings, damage: str, status: int, code: str
+) -> None:
+    """`purged` 那格刻意**同时**删了存档：被清理的 scan 报 `artifacts_purged`，不是
+    `no_checkpoint` —— 两步的先后被交换，这一格就红。"""
+    scan_id = _resumable_scan(client, app, settings)
+    (settings.scans_dir / scan_id / "strix_runs" / "run-1" / ".state" / "agents.json").unlink()
+    if damage == "purged":
+        with writable_conn(settings) as conn:
+            conn.execute(
+                "INSERT INTO audit_log (at, event, scan_id, detail_json) VALUES (?, ?, ?, '{}')",
+                ("2026-09-24T00:00:00.000Z", "scan.purged", scan_id),
+            )
+
+    response = _resume(client, scan_id, _store_credentials(app))
+
+    assert response.status_code == status
+    assert response.json()["code"] == code
+    if damage == "no_checkpoint":
+        assert response.json()["params"] == {"reason": "no_checkpoint"}
+
+
+def test_resume_finds_the_run_on_disk_when_the_row_has_no_run_name(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """`docker kill` 的残行没走到 `mark_finished`，`strix_run_name` 是 NULL：现场找目录名。"""
+    scan_id = _resumable_scan(client, app, settings)
+    with writable_conn(settings) as conn:
+        conn.execute("UPDATE scans SET strix_run_name = NULL WHERE id = ?", (scan_id,))
+
+    assert _resume(client, scan_id, _store_credentials(app)).status_code == 202
+
+    assert "run-1" in app.state.supervisor.plans[-1].argv
+    row = _rows(settings, "SELECT strix_run_name FROM scans WHERE id = ?", (scan_id,))[0]
+    assert row["strix_run_name"] == "run-1"

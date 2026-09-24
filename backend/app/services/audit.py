@@ -57,6 +57,7 @@ EVENT_AUTHORIZATION_AFFIRMED = "authorization.affirmed"
 EVENT_SCAN_LAUNCHED = "scan.launched"
 EVENT_SCAN_STOPPED = "scan.stopped"
 EVENT_SCAN_FINISHED = "scan.finished"
+EVENT_SCAN_RESUMED = "scan.resumed"
 EVENT_IMAGE_PULL_STARTED = "image.pull_started"
 EVENT_SCAN_PURGED = "scan.purged"
 """事件名。**字面串只出现在这里**，路由层 import 它们。

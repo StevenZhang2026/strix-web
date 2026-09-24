@@ -54,6 +54,7 @@ from app.services.run_projector import (
     NOTICE_SCREENSHOT_ELIDED,
     NOTICE_STREAM_RESYNCED,
 )
+from app.services.scan_resume import RESUME_REFUSAL_REASONS
 from app.services.system_status import ALL_BLOCKER_CODES
 from app.services.target_guard import (
     GuardRequirement,
@@ -315,6 +316,24 @@ def test_loopback_note_names_the_rewrite_target(messages: dict[str, Any]) -> Non
         f"{_GUARD_TREE}.notes.{note_code} 没有点名 host.docker.internal，"
         "用户会以为测的是沙箱容器内部的服务。"
     )
+
+
+# 续跑的拒绝原因（`resumeRefusal.*`，T31b5）：`resume_unavailable` 卡片下面那一行。
+# 码的权威源是 `services/scan_resume.RESUME_REFUSAL_REASONS`，不是 `errors.py`（它们是
+# `params.reason` 的取值，不是 HTTP 码）；形状同 `targetGuard.*`：一条一句纯字符串。
+def test_every_resume_refusal_reason_has_copy(messages: dict[str, Any]) -> None:
+    copy = messages["resumeRefusal"]
+    missing = set(RESUME_REFUSAL_REASONS) - set(copy)
+    assert not missing, (
+        f"这些 reason 没有中文文案，去 zh-CN.json 的 resumeRefusal 里加：{sorted(missing)}"
+    )
+    for reason, value in copy.items():
+        assert isinstance(value, str) and value.strip(), f"resumeRefusal.{reason} 缺失或为空"
+
+
+def test_no_orphan_resume_refusal_copy(messages: dict[str, Any]) -> None:
+    orphans = set(messages["resumeRefusal"]) - set(RESUME_REFUSAL_REASONS)
+    assert not orphans, f"resumeRefusal 里这些 reason 后端已经不存在了：{sorted(orphans)}"
 
 
 # =============================================================================

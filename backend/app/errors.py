@@ -234,6 +234,17 @@ class ConcurrencyLimitError(ConsoleError):
     status = 409
 
 
+class ResumeUnavailableError(ConsoleError):
+    """这次扫描不能续跑。`params.reason` 的取值域是 `scan_resume.RESUME_REFUSAL_REASONS`。
+
+    判定在 `services/scan_resume.py`（纯函数 `resume_refusal`），路由只负责收集事实与映射；
+    reason 的中文在 `zh-CN.json` 的 `resumeRefusal.*`，不在这张卡片里。
+    """
+
+    code = "resume_unavailable"
+    status = 409
+
+
 class DockerUnavailableError(ConsoleError):
     """起扫描前的 docker 预检失败（sock 不通 / daemon 没响应）。
 
@@ -323,6 +334,7 @@ ALL_ERRORS: tuple[type[ConsoleError], ...] = (
     KeyVerifyFailedError,
     UnexpectedSecretKeyError,
     ConcurrencyLimitError,
+    ResumeUnavailableError,
     DockerUnavailableError,
     UnauthenticatedError,
     InvalidCredentialsError,

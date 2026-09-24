@@ -387,6 +387,11 @@
       "action": "等当前扫描结束，或者先把它停掉。",
       "params": ["limit", "running_scan_id"]
     },
+    "resume_unavailable": {
+      "title": "这次扫描不能继续",
+      "detail": "继续扫描要接着上次的进度存档往下跑，而这一次的条件不满足，具体原因见下面一行。",
+      "action": "按原因提示处理；不能继续的，回到首页用同样的目标重新发起一次扫描。"
+    },
     "docker_unavailable": {
       "title": "连不上 Docker",
       "detail": "起扫描前的预检没通过：Docker 守护进程没有响应。",
@@ -502,6 +507,12 @@
       "detail": "模型名必须是「供应商/模型」的形状。裸名会被默认路由到 OpenAI，扫描在起飞前就退出了，什么都没跑，所以这次没有任何结论。",
       "action": "回到模型设置改成带供应商前缀的名字（Bedrock 的 API key 形状要写成 bedrock/invoke/<模型>），再重新发起扫描。"
     }
+  },
+
+  "resumeRefusal": {
+    "not_resumable": "只有因费用或轮次用完、被手动停止、或控制台重启而中断，且当前没在运行的扫描才能继续。",
+    "strix_version_changed": "Strix 升级过，上次留下的产物不保证与新版本兼容，请重新发起扫描。",
+    "no_checkpoint": "找不到上次的进度存档（或存档里的测试账号读不回来），请重新发起扫描。"
   },
 
   "targetGuard": {

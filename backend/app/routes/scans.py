@@ -1,4 +1,5 @@
-"""`POST /api/scans`（起扫描）、`POST /api/scans/{id}/stop`（停扫描）与两个读取端点。
+"""`POST /api/scans`（起扫描）、`POST /api/scans/{id}/resume`（续跑）、
+`POST /api/scans/{id}/stop`（停扫描）与两个读取端点。
 
 这是把 T6–T12b 那一串零件真正接上线的地方：护栏判定、白名单、DNS 重解析、准入、
 argv 构造、凭据登记、并发闸、落库、审计。**本文件自己不做任何判定** —— 判定都在
@@ -36,6 +37,19 @@ argv 构造、凭据登记、并发闸、落库、审计。**本文件自己不�
 否则脱敏集合里还没有它。配对的 `forget` 由 `launched` 标志 + `finally` 保证 ——
 起不起来都不会把口令留在进程里。
 
+# 续跑的顺序（只列与起扫描**不同**的几步；同一把锁、同一个 scan_id、同一个 cwd）
+
+     2  一次读：scans 行 + authorizations 行 + 有没有 `scan.purged`  → 404 not_found
+     3  有 `scan.purged`                               → 404 artifacts_purged
+        （排在准入判定之前：目录被清掉了，放后面会先被报成 no_checkpoint）
+     4  收集事实 → `resume_refusal()`                  → 409 resume_unavailable{reason}
+     7  从 run.json.instruction 解析回测试账号口令     → 409 resume_unavailable{no_checkpoint}
+     9  重跑准入：**声明侧取授权行**，DNS 与白名单取现场、"今天"取今天
+    10  build_resume_plan()（新总额必须 > 已花费）
+    11  一个事务：条件 UPDATE 回 starting + 取起始 epoch → 行不在可续状态就 409
+
+vault 那一步多一条：`provider`／`auth_shape`／`strix_llm` 必须与行一致，否则 key_required。
+
 # 停止端点不 await 那 20 秒宽限
 
 `ScanProcess.stop()` 里有 SIGTERM → 宽限 → SIGKILL。在请求里等它会顶到 nginx 的
@@ -67,6 +81,7 @@ from app.errors import (
     InvalidRequestError,
     KeyRequiredError,
     NotFoundError,
+    ResumeUnavailableError,
     assert_scan_failure_code,
     error_for_code,
 )
@@ -76,6 +91,7 @@ from app.services import audit
 from app.services.allowlist import AllowlistEntry, AllowlistSnapshot, AllowlistStore
 from app.services.dns_resolver import Resolution, Resolver
 from app.services.key_vault import CredentialSet, KeyVault
+from app.services.run_discovery import discover_run, read_run_instruction
 from app.services.scan_admission import (
     AdmissionRejected,
     AdmissionRequest,
@@ -84,12 +100,23 @@ from app.services.scan_admission import (
     evaluate_admission,
 )
 from app.services.scan_channel import ChannelRegistry
-from app.services.scan_launcher import LaunchPlan, LaunchSpec, TestCredential, build_launch_plan
+from app.services.scan_launcher import (
+    LaunchPlan,
+    LaunchSpec,
+    ResumeSpec,
+    TestCredential,
+    build_launch_plan,
+    build_resume_plan,
+    cleanup_workspace,
+    recover_test_credentials,
+)
+from app.services.scan_resume import ResumeFacts, resume_refusal
 from app.services.scan_secrets import ScanSecretRegistry
 from app.services.scan_supervisor import ScanProcess, ScanSupervisor
 from app.services.scan_templates import template_for
 from app.services.target_guard import OperatorOptIn, TargetRejected, normalize_target
 from app.settings import Settings
+from app.strix_profile import StrixProfile, profile_for
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +150,7 @@ _SUMMARY_COLUMNS = (
     "agent_count, event_count, exit_code, exit_meaning, error_code"
 )
 _DETAIL_EXTRA_COLUMNS = (
-    "error_message, max_turns, reasoning_effort, provider, strix_llm, current_epoch, "
+    "error_message, max_turns, reasoning_effort, provider, auth_shape, strix_llm, current_epoch, "
     "authorization_id"
 )
 # `ORDER BY created_at DESC, id DESC`（不是只按 `created_at`）：它是毫秒精度的字符串，同一
@@ -133,6 +160,16 @@ _SELECT_SCAN = f"SELECT {_SUMMARY_COLUMNS}, {_DETAIL_EXTRA_COLUMNS} FROM scans W
 _SELECT_SCAN_AGENTS = (
     "SELECT agent_id, name, parent_id, status, created_at, updated_at, error_message "
     "FROM scan_agents WHERE scan_id = ? ORDER BY created_at, agent_id"
+)
+# 续跑要读的列。`vault_handle`／`argv_json` 不读：它们是上一次的，这次全部重建。
+_SELECT_RESUME_SCAN = (
+    "SELECT status, error_code, strix_version, strix_run_name, provider, auth_shape, strix_llm, "
+    "scan_mode, max_turns, reasoning_effort, cost_usd, max_budget_usd, authorization_id "
+    "FROM scans WHERE id = ?"
+)
+_SELECT_RESUME_AUTHORIZATION = (
+    "SELECT targets_json, resolved_ips_json, typed_confirmation, overrides_json "
+    "FROM authorizations WHERE id = ?"
 )
 # `ORDER BY first_seen_at, finding_id` = 当初推 `vuln.add` 帧的顺序。
 _SELECT_SCAN_FINDINGS = (
@@ -244,6 +281,14 @@ class ScanAcceptedResponse(BoundaryModel):
     budget_usd: float
 
 
+class ResumeScanRequest(BoundaryModel):
+    """`POST /api/scans/{id}/resume` 的请求体。"""
+
+    vault_handle: str
+    max_budget_usd: float = Field(gt=0)
+    """**新总额，不是增量**：必须大于已花费（`build_resume_plan` 校验），同 `--max-budget-usd`。"""
+
+
 class StopScanRequest(BoundaryModel):
     mode: Literal["graceful", "force"]
     """垃圾值 → 422。刻意用 `Literal` 而不是 str + 手写校验：多一个取值就多一种
@@ -282,7 +327,7 @@ class ScanSummary(BoundaryModel):
 
 
 class ScanDetail(ScanSummary):
-    """详情页的那一行 = 列表的 19 键 + 这 7 键。"""
+    """详情页的那一行 = 列表的 19 键 + 这 8 键。"""
 
     error_message: str | None
     max_turns: int | None
@@ -290,6 +335,9 @@ class ScanDetail(ScanSummary):
 
     reasoning_effort: str | None
     provider: str
+    auth_shape: str
+    """形状名（如 `single`），不是凭据。续跑遇到 key_required 时前端按它重新索要凭据。"""
+
     strix_llm: str
     current_epoch: int
     authorization_id: str
@@ -650,6 +698,8 @@ async def create_scan(request: Request, payload: CreateScanRequest) -> ScanAccep
             if not launched:
                 scan_secrets.forget(scan_id)
                 vault.release(payload.vault_handle)
+                # tmpfs 上的 `instruction.txt` 带口令明文。scan_id 是本请求新生成的，删不到别人。
+                await asyncio.to_thread(cleanup_workspace, settings, scan_id)
 
     # 锁外、事务外：这一条审计不该延长临界区，也不该让"审计写失败"回滚掉已经起来的扫描。
     await _audit(
@@ -658,6 +708,237 @@ async def create_scan(request: Request, payload: CreateScanRequest) -> ScanAccep
         detail=launched_detail,
         scan_id=scan_id,
         authorization_id=authorization_id,
+    )
+    return accepted
+
+
+@router.post("/{scan_id}/resume", status_code=202, response_model=ScanAcceptedResponse)
+async def resume_scan(
+    request: Request, scan_id: str, payload: ResumeScanRequest
+) -> ScanAcceptedResponse:
+    """在同一个 scan_id、同一个 cwd 上续跑（Strix `--resume`）。顺序见模块 docstring。"""
+    settings = _settings(request)
+    supervisor = _supervisor(request)
+    scan_secrets = _scan_secrets(request)
+    vault = _vault(request)
+    db = _db(request)
+    strix_version = str(request.app.state.strix_version)
+    profile = profile_for(strix_version)
+    cwd = settings.scans_dir / scan_id
+
+    def load(conn: sqlite3.Connection) -> tuple[sqlite3.Row | None, sqlite3.Row | None, bool]:
+        """三条 SELECT 一个事务：别让"行是这样、授权是那样"来自两个时刻。"""
+        scan = conn.execute(_SELECT_RESUME_SCAN, (scan_id,)).fetchone()
+        if scan is None:
+            return None, None, False
+        authorization = conn.execute(
+            _SELECT_RESUME_AUTHORIZATION, (scan["authorization_id"],)
+        ).fetchone()
+        purged = conn.execute(
+            "SELECT 1 FROM audit_log WHERE scan_id = ? AND event = ? LIMIT 1",
+            (scan_id, audit.EVENT_SCAN_PURGED),
+        ).fetchone()
+        return scan, authorization, purged is not None
+
+    lock: asyncio.Lock = request.app.state.scan_launch_lock
+    async with lock:
+        active = supervisor.active_scan_ids()
+        limit = settings.console_max_concurrent_scans
+        if len(active) >= limit:
+            raise ConcurrencyLimitError(limit=limit, active=len(active))
+
+        scan, authorization, purged = await db.run(load)
+        if scan is None or authorization is None:
+            # 授权行缺席在结构上不可能（`authorization_id` NOT NULL + 外键），并进 404 只为类型收窄。
+            raise NotFoundError()
+        if purged:
+            raise ArtifactsPurgedError()
+
+        run_name, has_checkpoint = await asyncio.to_thread(
+            _checkpoint_facts, cwd, scan["strix_run_name"], profile
+        )
+        refusal = resume_refusal(
+            ResumeFacts(
+                status=scan["status"],
+                error_code=scan["error_code"],
+                strix_version=scan["strix_version"],
+                current_strix_version=strix_version,
+                is_running=scan_id in supervisor.active_scan_ids(),
+                run_name=run_name,
+                has_checkpoint=has_checkpoint,
+            )
+        )
+        if refusal is not None or run_name is None:
+            raise ResumeUnavailableError(reason=refusal or "no_checkpoint")
+
+        credentials = vault.acquire(payload.vault_handle)
+        if credentials is None:
+            raise KeyRequiredError(provider=scan["provider"], auth_shape=scan["auth_shape"])
+        if (credentials.provider, credentials.auth_shape, credentials.strix_llm) != (
+            scan["provider"],
+            scan["auth_shape"],
+            scan["strix_llm"],
+        ):
+            # 换了模型或供应商，上次的对话与费用口径就接不上了（用户拍板：三者全等才放行）。
+            vault.release(payload.vault_handle)
+            raise KeyRequiredError(provider=scan["provider"], auth_shape=scan["auth_shape"])
+
+        launched = False
+        # `try` **绝不许**往前挪到判定之前：`finally` 的 `cleanup_workspace` 删的是
+        # `scan-<id>/`，而 `not_resumable` 可能正是因为它**正在跑** —— 挪前了就会把那次
+        # 扫描的 HOME 删掉。从这里起的理由同 `create_scan`：acquire 之后哪一行抛都要 release。
+        try:
+            run_dir = cwd / profile.runs_dir_name / run_name
+            instruction = await asyncio.to_thread(read_run_instruction, run_dir, profile)
+            if instruction is None:
+                raise ResumeUnavailableError(reason="no_checkpoint")
+            try:
+                test_credentials = recover_test_credentials(instruction)
+            except ValueError:
+                raise ResumeUnavailableError(reason="no_checkpoint") from None
+            # 位置同 `create_scan` 第 5 步：Strix 续跑会重推旧对话，里面有口令明文 ——
+            # 脱敏集合里没有它，口令就明文进 `scan_events` 与 WS。
+            scan_secrets.register(scan_id, test_credentials)
+
+            targets: list[dict[str, str]] = json.loads(authorization["targets_json"])
+            raw_targets = [item["raw"] for item in targets]
+            resolved_ips: dict[str, list[str]] = json.loads(authorization["resolved_ips_json"])
+            overrides: dict[str, bool] = json.loads(authorization["overrides_json"])
+            resolutions = await _resolve_hosts(raw_targets, _resolver(request))
+            snapshot = await asyncio.to_thread(_store(request).current)
+            outcome = evaluate_admission(
+                AdmissionRequest(
+                    raw_targets=tuple(raw_targets),
+                    typed_confirmation=authorization["typed_confirmation"],
+                    opt_in=OperatorOptIn(
+                        loopback=overrides["allow_loopback"],
+                        private=overrides["allow_private"],
+                    ),
+                    declared_ips={host: tuple(ips) for host, ips in resolved_ips.items()},
+                    resolutions=resolutions,
+                    allowlist=snapshot,
+                    today=datetime.now(UTC).date(),
+                )
+            )
+            if isinstance(outcome, AdmissionRejected):
+                event, detail = audit_for(outcome)
+                await _audit(
+                    request,
+                    event=event,
+                    detail=detail,
+                    scan_id=scan_id,
+                    authorization_id=scan["authorization_id"],
+                )
+                raise error_for_code(outcome.code)(**dict(outcome.params))
+
+            spec = ResumeSpec(
+                scan_id=scan_id,
+                strix_run_name=run_name,
+                scan_mode=scan["scan_mode"],
+                max_budget_usd=payload.max_budget_usd,
+                spent_usd=scan["cost_usd"],
+                max_turns=scan["max_turns"],
+                reasoning_effort=scan["reasoning_effort"],
+            )
+            try:
+                plan = await asyncio.to_thread(
+                    build_resume_plan, settings, spec, credentials, environ=os.environ
+                )
+            except FileNotFoundError:
+                # cwd 在判定之后被删了（留存清理与本请求赛跑）。
+                raise ArtifactsPurgedError() from None
+
+            def claim(conn: sqlite3.Connection) -> int | None:
+                """条件 UPDATE + 取起始 epoch，一个事务。
+
+                `WHERE status IN (...)` 是第二道闸：判定到这里之间行若被别人改过，就不续。
+                epoch 以 `scan_events` 为准、不读 `scans.current_epoch`（同 `event_replay`）。
+                `instruction_sha256` 不动：它是首次指令的摘要。
+                """
+                cursor = conn.execute(
+                    "UPDATE scans SET status = 'starting', finished_at = NULL, exit_code = NULL, "
+                    "exit_meaning = NULL, error_code = NULL, error_message = NULL, "
+                    "strix_run_name = ?, vault_handle = ?, max_budget_usd = ?, argv_json = ?, "
+                    "env_var_names_json = ? WHERE id = ? AND status IN ('stopped', 'interrupted')",
+                    (
+                        run_name,
+                        payload.vault_handle,
+                        payload.max_budget_usd,
+                        json.dumps(list(plan.argv_preview)),
+                        json.dumps(list(plan.env_var_names)),
+                        scan_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return None
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(epoch), -1) + 1 FROM scan_events WHERE scan_id = ?",
+                    (scan_id,),
+                ).fetchone()
+                return int(row[0])
+
+            start_epoch = await db.run(claim)
+            if start_epoch is None:
+                raise ResumeUnavailableError(reason="not_resumable")
+
+            try:
+                process = await supervisor.start(scan_id, plan, resume=True)
+            except OSError:
+                await _mark_failed_to_start(db, scan_id)
+                raise
+
+            # 交接点，理由同 `create_scan`。
+            launched = True
+            task = asyncio.create_task(
+                _run_to_completion(
+                    db=db,
+                    audit_dir=settings.audit_dir,
+                    process=process,
+                    channels=_channels(request),
+                    cwd=plan.cwd,
+                    start_epoch=start_epoch,
+                    scan_secrets=scan_secrets,
+                    vault=vault,
+                    vault_handle=payload.vault_handle,
+                    entry_actor=actor(request),
+                    entry_client_ip=client_ip(request),
+                    entry_user_agent=request.headers.get("user-agent"),
+                )
+            )
+            tasks = _scan_tasks(request)
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+            accepted = ScanAcceptedResponse(
+                scan_id=scan_id,
+                status="starting",
+                ws=f"/ws/scans/{scan_id}",
+                argv_preview=list(plan.argv_preview),
+                budget_usd=payload.max_budget_usd,
+            )
+            resumed_detail: dict[str, audit.AuditDetailValue] = {
+                "argv": list(plan.argv_preview),
+                "env_var_names": list(plan.env_var_names),
+                "pid": process.pid,
+                "cwd": str(plan.cwd),
+                "max_budget_usd": payload.max_budget_usd,
+                "previous_max_budget_usd": scan["max_budget_usd"],
+                "spent_usd": scan["cost_usd"],
+                "previous_error_code": scan["error_code"],
+            }
+        finally:
+            if not launched:
+                scan_secrets.forget(scan_id)
+                vault.release(payload.vault_handle)
+                # 走到这里时判定已放行（不在跑），所以删的只会是本请求刚建的 HOME。
+                await asyncio.to_thread(cleanup_workspace, settings, scan_id)
+
+    await _audit(
+        request,
+        event=audit.EVENT_SCAN_RESUMED,
+        detail=resumed_detail,
+        scan_id=scan_id,
+        authorization_id=scan["authorization_id"],
     )
     return accepted
 
@@ -907,7 +1188,7 @@ async def _mark_failed_to_start(db: Database, scan_id: str) -> None:
 
 
 # =============================================================================
-# 私有助手（都是无 IO 的纯函数，除了 `_resolve_hosts`）
+# 私有助手（都是无 IO 的纯函数，除了 `_resolve_hosts` 与 `_checkpoint_facts`）
 # =============================================================================
 async def _resolve_hosts(raw_targets: list[str], resolver: Resolver) -> dict[str, Resolution]:
     """把每个**主机名**目标重解析一遍。字面 IP 不进这张表（它没有 DNS 这一步）。
@@ -927,6 +1208,22 @@ async def _resolve_hosts(raw_targets: list[str], resolver: Resolver) -> dict[str
     unique = tuple(dict.fromkeys(hosts))
     outcomes = await asyncio.gather(*(resolver(host) for host in unique))
     return dict(zip(unique, outcomes, strict=True))
+
+
+def _checkpoint_facts(
+    cwd: Path, run_name: str | None, profile: StrixProfile
+) -> tuple[str | None, bool]:
+    """续跑判定要的两件磁盘事实：run name 与进度存档在不在。
+
+    `strix_run_name` 列为 NULL 时（docker kill 的残行没走到 `mark_finished`）现找一次。
+    """
+    if run_name is None:
+        discovered = discover_run(cwd, profile)
+        run_name = None if discovered is None else discovered.run_name
+    if run_name is None:
+        return None, False
+    checkpoint = cwd / profile.runs_dir_name / run_name / profile.agents_record_rel_path
+    return run_name, checkpoint.is_file()
 
 
 def _summary_of(row: sqlite3.Row) -> ScanSummary:
@@ -959,13 +1256,14 @@ def _summary_of(row: sqlite3.Row) -> ScanSummary:
 
 
 def _detail_of(row: sqlite3.Row) -> ScanDetail:
-    """同一行 → 详情那 26 个键。前 19 个借 `_summary_of`，**列表与详情不许各写一遍**。"""
+    """同一行 → 详情那 27 个键。前 19 个借 `_summary_of`，**列表与详情不许各写一遍**。"""
     return ScanDetail(
         **_summary_of(row).model_dump(),
         error_message=row["error_message"],
         max_turns=row["max_turns"],
         reasoning_effort=row["reasoning_effort"],
         provider=row["provider"],
+        auth_shape=row["auth_shape"],
         strix_llm=row["strix_llm"],
         current_epoch=row["current_epoch"],
         authorization_id=row["authorization_id"],
