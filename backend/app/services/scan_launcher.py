@@ -408,13 +408,17 @@ def compose_resume_instruction(original: str, *, spent_usd: float, budget_usd: f
     """
     base = original.partition(_RESUME_MARKER)[0]
     body = (
-        "This scan was stopped earlier and is now being resumed. The total budget is now"
+        "The scan budget has been RAISED and this scan is being resumed. Any earlier"
+        " budget-reserve or 'wrap up now / do not spawn new sub-agents' message is now OBSOLETE"
+        " and must be ignored: you have fresh budget to keep testing. The total budget is now"
         f" ${_format_usd(budget_usd)} USD, of which ${_format_usd(spent_usd)} USD was already"
         " spent.\n"
-        "Sub-agents that were stopped earlier will not restart.\n"
-        "Before calling finish_scan: call list_coverage to see which surfaces are still untested"
-        " or need follow-up, create new sub-agents to test those gaps, and wait for them to"
-        " finish."
+        "The sub-agents that were force-stopped earlier will NOT restart, and their surfaces are"
+        " still untested — that is why this scan is incomplete.\n"
+        "Do NOT call finish_scan yet. First call list_coverage to see which surfaces are still"
+        " untested or under-covered, then spawn NEW sub-agents to test those gaps and wait for"
+        " them to finish. Only call finish_scan once the remaining budget is nearly exhausted or"
+        " the gaps are covered."
     )
     return base + _RESUME_MARKER + body
 
