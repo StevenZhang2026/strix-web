@@ -39,9 +39,15 @@ SWEEP_INTERVAL_S = 86400.0
 TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "stopped", "failed", "interrupted"})
 
 # 要删行的明细表。**顺序无关，但清单本身是契约**：
-# `report_translations`（T21 的 002 迁移才建）现在还不存在，写进来会 `no such table`；
+# `report_translations` 是翻译缓存，随扫描明细一起删；
 # `scans` / `authorizations` / `audit_log` 则是永不删的。
-PURGED_TABLES: tuple[str, ...] = ("scan_events", "scan_media", "scan_agents", "scan_findings")
+PURGED_TABLES: tuple[str, ...] = (
+    "scan_events",
+    "scan_media",
+    "scan_agents",
+    "scan_findings",
+    "report_translations",
+)
 
 # `skipped` 的机器码。中文文案是前端的事。
 SKIP_TMP_DIR_PRESENT = "tmp_dir_present"

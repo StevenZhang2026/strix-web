@@ -134,10 +134,15 @@ def test_scan_dir_for_returns_the_resolved_direct_child(scans_dir: Path) -> None
     assert scan_dir_for(scans_dir, "scan-1") == scans_dir.resolve() / "scan-1"
 
 
-def test_purged_tables_is_exactly_the_four_detail_tables() -> None:
-    """`scans` / `authorizations` / `audit_log` 永不在内；`report_translations`
-    是 T21 的 002 迁移才建的表，现在把它写进来会直接 `no such table`。"""
-    assert PURGED_TABLES == ("scan_events", "scan_media", "scan_agents", "scan_findings")
+def test_purged_tables_is_exactly_the_five_detail_tables() -> None:
+    """`scans` / `authorizations` / `audit_log` 永不在内。"""
+    assert PURGED_TABLES == (
+        "scan_events",
+        "scan_media",
+        "scan_agents",
+        "scan_findings",
+        "report_translations",
+    )
 
 
 # =============================================================================
@@ -157,7 +162,7 @@ def seed_scan(
     status: str = "completed",
     finished_at: str | None = ANCIENT,
 ) -> None:
-    """一行 `scans` + 4 张明细表各一行。
+    """一行 `scans` + 5 张明细表各一行。
 
     `insert_scan`（conftest）只会写 `queued` 且不写 `finished_at`，而留存判定读的正是
     这两列 —— 所以补一条 UPDATE。**不改 conftest**：那是本批次之后统一提取的事。
@@ -187,10 +192,15 @@ def seed_scan(
         " VALUES (?, ?, 'image/png', 12, 'media/x.png', ?)",
         (scan_id, "b" * 64, ANCIENT),
     )
+    conn.execute(
+        "INSERT INTO report_translations (scan_id, finding_id, input_hash, model, lang,"
+        " payload_json, created_at) VALUES (?, 'f-1', ?, 'm', 'zh-CN', '{}', ?)",
+        (scan_id, "a" * 64, ANCIENT),
+    )
 
 
 def detail_rows(conn: sqlite3.Connection, scan_id: str) -> dict[str, int]:
-    """4 张明细表里属于这次扫描的行数。表名来自模块常量，不是入参。"""
+    """5 张明细表里属于这次扫描的行数。表名来自模块常量，不是入参。"""
     return {
         table: conn.execute(
             f"SELECT count(*) FROM {table} WHERE scan_id = ?",  # noqa: S608
