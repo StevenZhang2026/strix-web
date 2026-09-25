@@ -6,15 +6,24 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.routes import downloads
 from app.services import audit
 from app.settings import Settings
-from tests.conftest import insert_authorization, insert_scan, make_run_dir, writable_conn
+from tests.conftest import (
+    EXEC_OK,
+    FINDING_OK,
+    insert_authorization,
+    insert_scan,
+    make_run_dir,
+    writable_conn,
+)
 
 EXPORT_MD = "/api/scans/scan-1/export/md"
 
@@ -113,5 +122,78 @@ def test_raw_zip_returns_scan_dir(client: TestClient, settings: Settings) -> Non
 def test_raw_zip_rejects_unfinished_scan(client: TestClient, settings: Settings) -> None:
     _seed(settings, status="running")
     response = client.get("/api/scans/scan-1/raw.zip")
+    assert response.status_code == 409
+    assert response.json()["code"] == "scan_not_finished"
+
+
+def _seed_report(settings: Settings, *, cost_second: float | None = 0.02) -> None:
+    _seed(settings)
+    at = "2026-09-08T00:00:00.000Z"
+    stale = json.dumps({**json.loads(FINDING_OK), "title_zh": "过期译文-不该出现"})
+    old_exec = json.dumps({**json.loads(EXEC_OK), "summary_zh": "旧总述-不该出现"})
+    with writable_conn(settings) as conn:
+        for fid, title, raw in (
+            ("f0", "t0-原文", {"title": "t0", "evidence": "EVIDENCE-f0-原样"}),
+            ("f1", "XSS 反射-原文", {"title": "t1"}),
+        ):
+            conn.execute(
+                "INSERT INTO scan_findings (scan_id, finding_id, severity, title, first_seen_at, "
+                "raw_json, input_hash) VALUES (?,?,?,?,?,?,?)",
+                (
+                    "scan-1",
+                    fid,
+                    "high",
+                    title,
+                    at,
+                    json.dumps(raw, ensure_ascii=False, sort_keys=True),
+                    fid.ljust(64, "0"),
+                ),
+            )
+        # 旧总述写在前（created_at 更早）：两条路由都必须取最新那行。
+        for fid, input_hash, payload, cost, created in (
+            ("f0", "f0".ljust(64, "0"), FINDING_OK, 0.01, at),
+            ("f1", "x" * 64, stale, 0.5, at),
+            ("__executive__", "d" * 64, old_exec, 0.5, "2026-09-07T00:00:00.000Z"),
+            ("__executive__", "e" * 64, EXEC_OK, cost_second, at),
+        ):
+            conn.execute(
+                "INSERT INTO report_translations (scan_id, finding_id, input_hash, model, lang, "
+                "payload_json, cost_usd, usage_prompt, usage_completion, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                ("scan-1", fid, input_hash, "m", "zh-CN", payload, cost, 1, 1, created),
+            )
+
+
+def test_report_print_renders_translated_html(client: TestClient, settings: Settings) -> None:
+    _seed_report(settings)
+    response = client.get("/api/scans/scan-1/report/print")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-security-policy"] == downloads.REPORT_CSP
+    body = response.text
+    for expected in (
+        "订单接口可越权查看他人订单",
+        "XSS 反射-原文",
+        "EVIDENCE-f0-原样",
+        "发现一处高危越权。",
+        "$0.0300",
+    ):
+        assert expected in body
+    assert "过期译文-不该出现" not in body
+    assert "旧总述-不该出现" not in body
+
+
+def test_report_print_cost_unknown_when_any_row_is_null(
+    client: TestClient, settings: Settings
+) -> None:
+    _seed_report(settings, cost_second=None)
+    body = client.get("/api/scans/scan-1/report/print").text
+    assert "无法计算" in body
+    assert "$0.0" not in body
+
+
+def test_report_print_rejects_unfinished_scan(client: TestClient, settings: Settings) -> None:
+    _seed(settings, status="running")
+    response = client.get("/api/scans/scan-1/report/print")
     assert response.status_code == 409
     assert response.json()["code"] == "scan_not_finished"

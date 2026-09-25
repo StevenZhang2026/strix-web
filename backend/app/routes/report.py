@@ -254,43 +254,54 @@ async def translate_report(
     return ReportAcceptedResponse(status="running")
 
 
+@dataclass(frozen=True, slots=True)
+class LatestTranslations:
+    # finding_id → 最新一行（只含 input_hash 与当前 scan_findings 一致的）
+    findings: dict[str, sqlite3.Row]
+    executive: sqlite3.Row | None
+
+
+def latest_translations(conn: sqlite3.Connection, scan_id: str) -> LatestTranslations:
+    """打印版报告（`downloads.py`）与本文件 GET 共用，保证两边看到的是同一份译文。"""
+    rows = conn.execute(
+        "SELECT t.finding_id, t.model, t.payload_json, t.cost_usd FROM report_translations t "
+        "JOIN scan_findings f ON f.scan_id = t.scan_id AND f.finding_id = t.finding_id "
+        "AND f.input_hash = t.input_hash "
+        "WHERE t.scan_id = ? AND t.lang = ? ORDER BY t.finding_id, t.created_at, t.rowid",
+        (scan_id, report_zh.LANG_ZH),
+    ).fetchall()
+    executive = conn.execute(
+        "SELECT model, payload_json, cost_usd FROM report_translations "
+        "WHERE scan_id = ? AND lang = ? AND finding_id = ? "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (scan_id, report_zh.LANG_ZH, report_zh.EXECUTIVE_ID),
+    ).fetchone()
+    # 同一 finding_id 多行（换过模型）：按 created_at, rowid 升序，后写的覆盖先写的。
+    findings: dict[str, sqlite3.Row] = {row["finding_id"]: row for row in rows}
+    return LatestTranslations(findings=findings, executive=executive)
+
+
 @router.get("/{scan_id}/report/zh")
 async def get_report(scan_id: str, request: Request) -> ReportZhResponse:
     db = _db(request)
 
-    def load(
-        conn: sqlite3.Connection,
-    ) -> tuple[bool, bool, list[sqlite3.Row], sqlite3.Row | None]:
+    def load(conn: sqlite3.Connection) -> tuple[bool, bool, LatestTranslations | None]:
         exists = conn.execute("SELECT 1 FROM scans WHERE id = ?", (scan_id,)).fetchone()
         if exists is None:
-            return False, False, [], None
-        findings = conn.execute(
-            "SELECT t.finding_id, t.model, t.payload_json FROM report_translations t "
-            "JOIN scan_findings f ON f.scan_id = t.scan_id AND f.finding_id = t.finding_id "
-            "AND f.input_hash = t.input_hash "
-            "WHERE t.scan_id = ? AND t.lang = ? ORDER BY t.finding_id, t.created_at, t.rowid",
-            (scan_id, report_zh.LANG_ZH),
-        ).fetchall()
-        executive = conn.execute(
-            "SELECT model, payload_json FROM report_translations "
-            "WHERE scan_id = ? AND lang = ? AND finding_id = ? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (scan_id, report_zh.LANG_ZH, report_zh.EXECUTIVE_ID),
-        ).fetchone()
-        return True, audit.is_scan_purged(conn, scan_id), findings, executive
+            return False, False, None
+        return True, audit.is_scan_purged(conn, scan_id), latest_translations(conn, scan_id)
 
-    exists, purged, finding_rows, executive_row = await db.run(load)
-    if not exists:
+    exists, purged, latest = await db.run(load)
+    if not exists or latest is None:
         raise NotFoundError()
     if purged:
         raise ArtifactsPurgedError()
 
-    # 同一 finding_id 多行（换过模型）：按 created_at, rowid 升序，后写的覆盖先写的。
-    latest: dict[str, sqlite3.Row] = {row["finding_id"]: row for row in finding_rows}
     findings_zh = [
         FindingZhView(finding_id=fid, model=row["model"], **json.loads(row["payload_json"]))
-        for fid, row in sorted(latest.items())
+        for fid, row in sorted(latest.findings.items())
     ]
+    executive_row = latest.executive
     executive_zh = (
         None
         if executive_row is None
