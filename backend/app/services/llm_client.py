@@ -345,6 +345,73 @@ async def verify(credentials: CredentialSet) -> VerifyOutcome:
     return VerifyOutcome(ok=True, latency_ms=_elapsed_ms(started))
 
 
+# 翻译（T21b）一次调用的上限。验活那 8 秒是给 1 个 token 的；一条发现改写成十个字段的
+# 中文要几百个 token，慢的模型要几十秒。
+COMPLETE_TIMEOUT_SECONDS = 120
+
+
+@dataclass(frozen=True, slots=True)
+class Completion:
+    """一次模型调用的产出。`cost_usd` 为 `None` = 算不出（价目表里没这个模型），**不是 0**。"""
+
+    text: str
+    usage_prompt: int | None
+    usage_completion: int | None
+    cost_usd: float | None
+
+
+class CompletionFailed(Exception):
+    """模型调用失败。**只带 `classify_failure()` 的码**，理由同 `verify()` 那段注释。"""
+
+    def __init__(self, failure_kind: str) -> None:
+        super().__init__(failure_kind)
+        self.failure_kind = failure_kind
+
+
+# 注入点，形状同 `Verifier`：单测禁止碰真实网络。
+Completer = Callable[[CredentialSet, list[dict[str, str]], int], Awaitable[Completion]]
+
+
+async def complete(
+    credentials: CredentialSet, messages: list[dict[str, str]], max_tokens: int
+) -> Completion:
+    """用用户自己的凭据发一次对话请求。路由、kwargs、import 方式与 `verify()` 完全一致。"""
+    litellm = await asyncio.to_thread(importlib.import_module, "litellm")
+    spec = spec_for(credentials.provider, credentials.auth_shape)
+    if spec is None:
+        raise ValueError(f"未知的 provider/auth_shape 组合：{credentials.provider}")
+    completion_kwargs = _completion_kwargs(credentials)
+
+    failure_kind: str | None = None
+    try:
+        response = await litellm.acompletion(
+            model=model_for(spec, credentials.strix_llm),
+            messages=messages,
+            max_tokens=max_tokens,
+            timeout=COMPLETE_TIMEOUT_SECONDS,
+            **completion_kwargs,
+        )
+    except Exception as exc:  # 捕获面开到最宽的理由同 `verify()`
+        failure_kind = classify_failure(exc)
+    if failure_kind is not None:
+        # `raise` 写在 `except` 块**外面**：在块里抛（哪怕 `from None`）新异常的
+        # `__context__` 仍然挂着原异常 —— 它的正文与 traceback 帧里的 kwargs 就是凭据，
+        # 任何一个把异常链打印出来的上层都会把它带出去。
+        raise CompletionFailed(failure_kind)
+
+    usage = getattr(response, "usage", None)
+    try:
+        cost: float | None = float(litellm.completion_cost(completion_response=response))
+    except Exception:  # 价目表缺这个模型时 litellm 抛的类型不是契约；算不出就是 None
+        cost = None
+    return Completion(
+        text=response.choices[0].message.content or "",
+        usage_prompt=getattr(usage, "prompt_tokens", None),
+        usage_completion=getattr(usage, "completion_tokens", None),
+        cost_usd=cost,
+    )
+
+
 def _completion_kwargs(credentials: CredentialSet) -> dict[str, str]:
     """一组凭据 → litellm 的 kwargs。**这里不设任何环境变量**，理由见模块 docstring。
 

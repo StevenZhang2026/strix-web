@@ -1,6 +1,6 @@
-"""`classify_failure()` —— 验活失败的归因码。
+"""`classify_failure()` —— 验活失败的归因码；`complete()` —— 翻译用的那次模型调用。
 
-这个文件只测那一个纯函数。`verify()` 本身的行为（400 `key_verify_failed`、正文里没有
+前半只测 `classify_failure()` 那个纯函数。`verify()` 本身的行为（400 `key_verify_failed`、正文里没有
 任何原因描述）在 `test_keys.py` 测过，不在这里重复（`agent-rules.md` §十.4）。
 
 **这里守的不变式只有一条**：归因码的取值范围是「白名单里的固定串」∪「异常类名」，
@@ -10,9 +10,15 @@
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+import sys
+from types import SimpleNamespace
 
-from app.services.llm_client import classify_failure
+import pytest
+from pydantic import SecretStr
+
+from app.services.key_vault import CredentialSet
+from app.services.llm_client import CompletionFailed, classify_failure, complete
 
 
 @pytest.mark.parametrize(
@@ -55,3 +61,67 @@ def test_the_exception_message_never_leaks_into_the_code() -> None:
     secret = "sk-abcdef0123456789"
     assert secret not in classify_failure(RuntimeError(f"auth failed for {secret}"))
     assert secret not in classify_failure(RuntimeError(f"Invalid AWS region format: {secret}"))
+
+
+# =============================================================================
+# complete()：litellm 由 `sys.modules` 里的替身顶上（`import_module` 先查那里），不碰网络。
+# =============================================================================
+_SECRET = "sk-abcdef0123456789"
+_CREDENTIALS = CredentialSet(
+    provider="anthropic",
+    auth_shape="single",
+    strix_llm="anthropic/claude-sonnet-4-5",
+    api_base=None,
+    secrets={"LLM_API_KEY": SecretStr(_SECRET)},
+    params={},
+)
+_MESSAGES = [{"role": "user", "content": "hi"}]
+
+
+def _fake_litellm(acompletion: object, completion_cost: object) -> SimpleNamespace:
+    return SimpleNamespace(acompletion=acompletion, completion_cost=completion_cost)
+
+
+def test_complete_failure_carries_no_trace_of_the_original_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**`complete()` 的不变式。** 异常正文与 traceback 帧都带着凭据 —— 抛出去的
+    `CompletionFailed` 不许经 args、`__cause__`、`__context__` 任何一条路连回原异常。
+    `__context__` 那一格是这条测试存在的理由：在 `except` 块里抛，`from None` 也清不掉它。
+    """
+
+    async def acompletion(**kwargs: object) -> object:
+        raise RuntimeError(f"auth failed, request was {kwargs}")
+
+    monkeypatch.setitem(sys.modules, "litellm", _fake_litellm(acompletion, None))
+    with pytest.raises(CompletionFailed) as caught:
+        asyncio.run(complete(_CREDENTIALS, _MESSAGES, 100))
+    exc = caught.value
+    assert exc.failure_kind == "unclassified:RuntimeError"
+    assert _SECRET not in repr(exc.args)
+    assert exc.__cause__ is None
+    assert exc.__context__ is None
+
+
+def test_complete_returns_text_usage_and_none_when_cost_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """正路：kwargs 走 `_completion_kwargs`；价目表算不出时费用是 `None` 而不是 0。"""
+    seen: dict[str, object] = {}
+
+    async def acompletion(**kwargs: object) -> object:
+        seen.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"a": 1}'))],
+            usage=SimpleNamespace(prompt_tokens=12, completion_tokens=3),
+        )
+
+    def completion_cost(**_: object) -> float:
+        raise ValueError("model not in cost map")
+
+    monkeypatch.setitem(sys.modules, "litellm", _fake_litellm(acompletion, completion_cost))
+    result = asyncio.run(complete(_CREDENTIALS, _MESSAGES, 100))
+    assert (result.text, result.usage_prompt, result.usage_completion) == ('{"a": 1}', 12, 3)
+    assert result.cost_usd is None
+    assert seen["api_key"] == _SECRET
+    assert seen["max_tokens"] == 100
