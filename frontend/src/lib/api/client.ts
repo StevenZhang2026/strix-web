@@ -709,6 +709,17 @@ export interface ScanDetailResponse {
   readonly findings: readonly Readonly<Record<string, unknown>>[];
 }
 
+export interface ScanListResponse {
+  readonly scans: readonly ScanSummary[];
+  /** ⟺ 后端真取到了上限（500）那么多行。 */
+  readonly truncated: boolean;
+}
+
+/** `GET /api/scans`。恒 200，按创建时间倒序，空库回空表。 */
+export function fetchScans(signal?: AbortSignal): Promise<ScanListResponse> {
+  return apiFetch<ScanListResponse>("/api/scans", signal === undefined ? {} : { signal });
+}
+
 /**
  * `GET /api/scans/{id}`。未知 id → `ApiError(404, "not_found")`。
  *

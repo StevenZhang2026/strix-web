@@ -1,0 +1,68 @@
+/* 扫描记录表。只用 `globals.css` 的 token；无阴影、无渐变、无胶囊徽章。 */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-3);
+  color: var(--ink);
+}
+.table th {
+  font-size: var(--fs-2);
+  font-weight: normal;
+  color: var(--ink-mute);
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: bottom;
+}
+.table td {
+  padding: var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* 整行可点：链接在第一格，`::after` 把它的点击区铺满整行（`tr` 是定位参照）。 */
+.row {
+  position: relative;
+}
+.row:hover {
+  background: var(--sheet-sunk);
+}
+.rowLink {
+  color: var(--ink);
+  text-decoration: none;
+}
+.rowLink::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.rowLink:focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.target {
+  font-family: var(--mono);
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 四个发现数：严重 / 高 / 中 / 低 各占一个等宽小格，表头与行对齐。 */
+.counts {
+  display: grid;
+  grid-template-columns: repeat(4, 3em);
+  justify-content: end;
+}
+.sev1 { color: var(--sev1); }
+.sev2 { color: var(--sev2); }
+.sev3 { color: var(--sev3); }
+.sev4 { color: var(--sev4); }
+.zero { color: var(--ink-mute); }
+
+.note {
+  margin: var(--s3) 0 0;
+  font-size: var(--fs-3);
+  color: var(--ink-mute);
+}

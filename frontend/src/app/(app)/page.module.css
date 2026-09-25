@@ -1,4 +1,4 @@
-/* 首页。逐值照抄样张 ① 的 `.two` / `.docket` / `.terms` / `.actions` / `.empty`。 */
+/* 首页。逐值照抄样张 ① 的 `.two` / `.docket` / `.terms` / `.actions`。 */
 
 /* 主栏 + 侧栏。侧栏定宽 320px：它装的是状态与凭据，宽度不该随窗口变 ——
    一个会伸缩的状态面板会让人以为它在变化。 */
@@ -196,12 +196,6 @@
 }
 
 /* ------------------------------------------------------------------ 侧栏 */
-.empty {
-  font-size: var(--fs-3);
-  color: var(--ink-mute);
-  max-width: 26em;
-}
-
 /* `.credentialsNote` / `.panelActions` 随 T7c 删掉了：那一片已经整块换成
    `components/credentials/CredentialsPanel.tsx`，样式跟着搬进它自己的
    module.css（值没有改）。`grep -n` 确认过全仓无其它引用。 */

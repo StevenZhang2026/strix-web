@@ -1,4 +1,5 @@
 import { CredentialsPanel } from "@/components/credentials/CredentialsPanel";
+import { RecentScans } from "@/components/scans/RecentScans";
 import { ReadyRows } from "@/components/system/ReadyRows";
 import { ButtonLink } from "@/components/ui/ButtonLink";
 import { type DocketField } from "@/components/ui/Field";
@@ -156,7 +157,7 @@ export default function HomePage() {
         </Panel>
 
         <Panel title={t("home.recentTitle")}>
-          <p className={styles.empty}>{t("home.recentEmpty")}</p>
+          <RecentScans />
         </Panel>
       </aside>
     </div>

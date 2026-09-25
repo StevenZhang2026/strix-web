@@ -1,0 +1,47 @@
+/* 首页侧栏的最近扫描。侧栏只有 320px：目标一行放不下就省略号。 */
+.list {
+  list-style: none;
+  margin: 0 0 var(--s3);
+  padding: 0;
+}
+.item {
+  display: flex;
+  gap: var(--s3);
+  justify-content: space-between;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-3);
+  color: var(--ink);
+  text-decoration: none;
+}
+.item:hover {
+  background: var(--sheet-sunk);
+}
+.target {
+  font-family: var(--mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status {
+  flex: none;
+  color: var(--ink-mute);
+}
+
+.note {
+  font-size: var(--fs-3);
+  color: var(--ink-mute);
+  max-width: 26em;
+}
+
+/* 照抄 `components/credentials/CredentialsPanel.module.css` 的 `.link`。 */
+.link {
+  font-size: var(--fs-3);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link:hover {
+  color: var(--ink-2);
+}

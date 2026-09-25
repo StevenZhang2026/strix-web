@@ -257,6 +257,17 @@
     "stream_lagged": "页面跟不上实时进度，正在从断开的位置重新接上。"
   },
 
+  "scans": {
+    "colCreated": "创建时间",
+    "colTarget": "测试目标",
+    "colStatus": "状态",
+    "colFindings": "发现",
+    "colCost": "费用 / 上限",
+    "empty": "还没有扫描记录。",
+    "truncatedNote": "只列出了最近 500 条扫描。",
+    "viewAll": "查看全部扫描记录"
+  },
+
   "status": {
     "starting": "准备中",
     "running": "进行中",

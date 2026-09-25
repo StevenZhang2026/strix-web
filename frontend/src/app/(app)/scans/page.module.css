@@ -1,0 +1,3 @@
+/* 扫描记录页的外壳。只用 `globals.css` 的 token，零 `box-shadow`（全站硬约束）。 */
+.page { padding: var(--s6) 0; }
+.pageTitle { margin: 0 0 var(--s4); font-size: var(--fs-5); color: var(--ink); }
