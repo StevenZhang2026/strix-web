@@ -4,6 +4,11 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
+### 最新之后（2026-09-25 晚）：**T21 开工，T21a 已收货提交；下一步写 T21b（Translator 服务）交底**
+
+- 方案、三条拍板、T21a 收货与交给 T21b 的两件都在 §派发清单 T21 行；方案原文 `~/Documents/claude/dispatch/T21/plan.md`（T21b／T21c 规格在里面）。
+- T21b 交底要贴：`llm_client._completion_kwargs`／`model_for`／`verify` 的异常纪律（`llm_client.py:285-374`）、`report_zh` 的公开签名、`scan_findings` 与 `report_translations` DDL、`read_run_dir` 取 `run_dir` 的方式、`conftest` 的 `db`／`insert_scan`。
+
 ### 最新（2026-09-25）：**断点续扫真的能补测了 —— T32d 记为"接受的限制"那条已被推翻**
 
 - **⚠️ 先读这条：`T32d`／上一段里"被强停的子 agent 永不重启、续跑不会补测、Strix 语义非我方可控、
