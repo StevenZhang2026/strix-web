@@ -1268,3 +1268,48 @@ git 12 次），压缩 2 次。**每一次往返都要重读一整份接近上�
 **实测**：2026-09-16，T12c 全流程（三个主会话 + 一个横跨两目录的子 agent transcript）；
 2026-09-17，T13／T25／T26 三条并发 + T11b 回看。都用 `scripts/agent_budget.sh` 复算
 （峰值 token 与金额是用量数字，只许留在未跟踪的 `local-env.md`）。
+
+## 42. headless 续跑只复活 `running`/`waiting` 的子 agent —— 光靠指令措辞永远派不动它们
+
+断点续扫连着失败三次，前两次都归错了因（以为是 prompt 写得不够狠），第三次读源码才找到真开关。
+
+1. **真因是盘上那个状态字符串，不是指令。** `core/execution.py::respawn_subagents` 里
+   `if not interactive and status not in {"running", "waiting"}: continue` —— headless（`-n`，
+   `interactive=False`）下只复活这两个状态的**非根** agent，`stopped` / `completed` / `crashed`
+   / `failed` / `budget_paused` 一律跳过。而 `core/agents.py::restore` 是
+   `self.statuses = dict(snap.get("statuses", {}))`，**原样拷、零归一化** —— 所以
+   `.state/agents.json` 里那个字符串就是"复活与否"的开关，改它即可，不需要 TTY。
+   respawn 的重建体只用持久化的 `name`/`skills`/`task` 调 `factory(...)` + `_start_child_runner`，
+   headless 下走得通（已实测：3 个子 agent 全部复活，`agent_browser` 技能四份同时加载）。
+2. **前两次真跑失败的直接原因是 `create_agent` 的去重指引。** 它的 docstring 要求
+   "**Before spawning, call view_agent_graph** to confirm no existing agent already covers this
+   scope"。被强停的那几个 agent 正顶着待补测范围的名字，于是 root 把补测清单读成"这些都有人管了"
+   然后直接收尾。**9 项清单换来 0 个新 agent**，两种措辞（含 `agent_name` 的、只含 `risk_area` 的）
+   都一样。→ **root 级 prompting 攻不动这个结构限制**，别再往措辞上加钱。
+3. **复活了还不够：root 会亲手把它们掐死。** 手工把 3 个子 agent 翻成 `running` 后，它们确实
+   复活并开始探测（`agents.db` 里最后几条是真的 `exec_command`，打的是 `http://juice-shop:3000`），
+   但 root 在 **45 秒内** `list_reports → stop_agent ×3 → finish_scan`，把它们截断在探测中途 ——
+   子 agent 的 session 停在 `function_call_output`，**没有 `agent_finish`、没有任何 coverage 记录**。
+   花了钱、coverage 一条没加（那次 $1.68 vs 只跑 root 的 $0.33）。
+   → 复活与"拦住 root 动手"必须一起做：续跑指令在复活时第一要求是 `wait_for_agents`、
+   并**明令禁止 `stop_agent`**；没复活时才退回"作废 stopped agent、去建新的"那套。两段措辞互斥。
+4. **同时必须清三个过期预算 flag，否则复活是白干。** `restore` 也读回 `budget_stopped` /
+   `reserve_stopped` / `budget_paused`（`core/agents.py:546-548`），而
+   `wait_for_message`（`agents.py:348-352`）里
+   `if self._budget_stopped or reserve_exit or pending_ready: return True`
+   （`reserve_exit = self._reserve_stopped and self.parent_of.get(agent_id) is not None`）
+   —— 子 agent 一醒就被唤醒**只为走收尾**。续跑的前提正是预算被抬高，这三个标志因此一律过期。
+   **⚠️ 这条是差点漏掉的**：手工验证那次它们恰好都是 `false`，所以复活"看起来能用"。
+   按这个假象写产品代码，凡是因预算储备停下的扫描（最常见的那类）都会静默复活失败。
+5. **落点**：`backend/app/services/agent_checkpoint.py`（纯判定 `revive_snapshot` + 原子写回
+   `revive_checkpoint`，零 `strix` import）；改写**必须在 supervisor 起进程之前**做 ——
+   Strix 一启动就把这个文件读进 `restore()`，之后再改无效。`test_agent_checkpoint.py` 末尾四条
+   **读真实 strix 源码文本**钉住上面 1、4 的字面量（不 `import strix.core.*`：那会把 agents SDK
+   与 litellm 拖进 web 进程）。升级 `strix-agent` 时这几条红了，就是提醒复活逻辑要重验。
+
+**触发条件**：动断点续扫／续跑指令措辞；改 `.state/agents.json`；"续跑跑完了但 coverage 没增加"；
+"root 不肯派子 agent"；升级 `strix-agent`（条 1、4 的字面量是预警线）；怀疑某个 flag 让 agent 提前收尾。
+
+**实测**：2026-09-25，juice-shop 靶场连着四次真跑（两次纯指令措辞 → 0 新 agent；一次手工翻状态
+→ 3 个复活但被 root 掐死、0 coverage；源码核对 `respawn_subagents`/`restore`/`wait_for_message`
+三处均在装了 `strix-agent==1.6.2` 的测试镜像里逐字核过）。费用数字见未跟踪的 `local-env.md`。

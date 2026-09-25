@@ -655,6 +655,53 @@ def test_resume_instruction_voids_the_stopped_agents_in_the_graph() -> None:
     assert "not a duplicate" in section.lower()
 
 
+def test_resume_instruction_orders_root_to_wait_for_the_revived_agents() -> None:
+    """复活了子 agent 时，第一要求必须是 `wait_for_agents`，且**明令禁止** `stop_agent`。
+
+    这是 2026-09-25 第三次真跑的直接教训：手工把 3 个子 agent 从 `stopped` 翻成 `running`
+    后它们确实复活并开始探测（`exec_command` 在跑），但 root 在 45 秒内
+    `list_reports → stop_agent ×3 → finish_scan`，把它们掐死在探测中途 —— 花了钱、
+    coverage 一条没加。光复活不够，还得拦住 root 动手。
+    """
+    text = scan_launcher.compose_resume_instruction(
+        _composed(()),
+        spent_usd=1.0,
+        budget_usd=4.0,
+        gaps=("xss",),
+        revived=("auth", "access", "xss"),
+    )
+    section = text.partition("## Resumed scan")[2]
+    assert "wait_for_agents" in section
+    assert "do NOT call stop_agent" in section
+    assert "RESTARTED" in section
+    # 复活了就不能再说"图里 stopped 的都是死的" —— 那句此刻是假话。
+    assert "DEAD" not in section
+    assert "3 sub-agent(s)" in section
+
+
+def test_resume_instruction_voids_stopped_agents_only_when_nothing_was_revived() -> None:
+    """没复活成功（旧产物/读坏/没有可复活的孩子）时才退回"作废 stopped agent"那套。
+
+    两段措辞互斥：同时出现就是在叫 root 既等它们、又把它们当死的重建。
+    """
+    text = scan_launcher.compose_resume_instruction(
+        _composed(()), spent_usd=1.0, budget_usd=4.0, gaps=("xss",), revived=()
+    )
+    section = text.partition("## Resumed scan")[2]
+    assert "DEAD" in section
+    assert "wait_for_agents" in section  # 建完新 agent 还是要等
+    assert "do NOT call stop_agent" not in section
+
+
+def test_resume_instruction_with_revived_agents_keeps_credentials_and_shape() -> None:
+    text = scan_launcher.compose_resume_instruction(
+        _composed((_cred(),)), spent_usd=1.0, budget_usd=4.0, revived=("auth",)
+    )
+    assert scan_launcher.recover_test_credentials(text) == (_cred(),)
+    assert text == text.strip()
+    assert text.count("## Resumed scan") == 1
+
+
 def test_resume_instruction_without_gaps_has_no_checklist() -> None:
     """没有 gap（旧产物/读坏）时退回到"自己 list_coverage"那句，不编造清单。"""
     original = _composed((_cred(),))

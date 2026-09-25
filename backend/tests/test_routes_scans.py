@@ -1299,6 +1299,53 @@ def test_resume_inlines_the_coverage_gaps_but_never_their_detail(
     assert "PROSE-SENTINEL" not in text
 
 
+def test_resume_revives_the_stopped_subagents_on_disk_and_says_so(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """续跑真的改写了 `.state/agents.json`，且续跑指令跟着换成"等它们"那套。
+
+    这条钉的是**顺序**：改写必须发生在 supervisor 起进程之前，否则 Strix 已经把旧状态
+    读进 `AgentCoordinator.restore()` 了。断言落在"盘上的状态"与"指令正文"两处，因为
+    这两个才是子 agent 会不会真的复活并干活的全部输入。
+    """
+    scan_id = _resumable_scan(client, app, settings)
+    agents_path = settings.scans_dir / scan_id / "strix_runs" / "run-1" / ".state" / "agents.json"
+    agents_path.write_text(
+        json.dumps(
+            {
+                "statuses": {"root": "completed", "auth": "stopped", "xss": "stopped"},
+                "parent_of": {"root": None, "auth": "root", "xss": "root"},
+                "names": {"root": "Root", "auth": "Auth Agent", "xss": "XSS Agent"},
+                "reserve_stopped": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = _resume(client, scan_id, _store_credentials(app))
+
+    assert response.status_code == 202, response.text
+    written = json.loads(agents_path.read_text(encoding="utf-8"))
+    assert written["statuses"] == {"root": "completed", "auth": "running", "xss": "running"}
+    assert written["reserve_stopped"] is False
+    text = app.state.supervisor.plans[-1].instruction_path.read_text(encoding="utf-8")
+    assert "wait_for_agents" in text
+    assert "do NOT call stop_agent" in text
+
+
+def test_resume_without_a_revivable_graph_keeps_the_stopped_agents_wording(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """`_resumable_scan` 写的是 `{}` —— 没东西可复活时指令必须退回"作废 stopped agent"。"""
+    scan_id = _resumable_scan(client, app, settings)
+
+    assert _resume(client, scan_id, _store_credentials(app)).status_code == 202
+
+    text = app.state.supervisor.plans[-1].instruction_path.read_text(encoding="utf-8")
+    assert "DEAD" in text
+    assert "do NOT call stop_agent" not in text
+
+
 class _EpochRecordingChannels(OrderRecordingChannels):
     """只记 `open` 收到的 `start_epoch`。"""
 

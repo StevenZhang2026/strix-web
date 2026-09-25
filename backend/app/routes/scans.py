@@ -88,6 +88,7 @@ from app.errors import (
 from app.models import BoundaryModel
 from app.routes._context import actor, client_ip
 from app.services import audit
+from app.services.agent_checkpoint import revive_checkpoint
 from app.services.allowlist import AllowlistEntry, AllowlistSnapshot, AllowlistStore
 from app.services.dns_resolver import Resolution, Resolver
 from app.services.key_vault import CredentialSet, KeyVault
@@ -795,6 +796,10 @@ async def resume_scan(
             # 上次 coverage 标出的未覆盖面：非空则续跑指令排成编号任务清单，让 root 更可能
             # 逐面派新子 agent。只含受控词表标签（无 `detail`），读不到就是空、不影响续跑。
             coverage_gaps = await asyncio.to_thread(read_coverage_gaps, run_dir, profile)
+            # 复活上次被中断的子 agent（改写 `.state/agents.json`）。**必须在 supervisor
+            # 起进程之前**：Strix 一启动就把这个文件读进 `AgentCoordinator.restore()`，
+            # 之后再改无效。安全在锁内：`resume_refusal` 已确认这个 scan 没在跑。
+            revived_agents = await asyncio.to_thread(revive_checkpoint, run_dir, profile)
             try:
                 test_credentials = recover_test_credentials(instruction)
             except ValueError:
@@ -844,6 +849,7 @@ async def resume_scan(
                 reasoning_effort=scan["reasoning_effort"],
                 instruction=instruction,
                 coverage_gaps=coverage_gaps,
+                revived_agents=revived_agents,
             )
             try:
                 plan = await asyncio.to_thread(

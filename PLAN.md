@@ -1,10 +1,47 @@
 # Strix Web 控制台 — 实施计划
 
-## 交接（2026-09-18）
+## 交接（2026-09-25）
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-24）：**T32 全系列落地（a/b/c 提交、d 真跑得出限制）；下一步 T17d 或 T30a**
+### 最新（2026-09-25）：**断点续扫真的能补测了 —— T32d 记为"接受的限制"那条已被推翻**
+
+- **⚠️ 先读这条：`T32d`／上一段里"被强停的子 agent 永不重启、续跑不会补测、Strix 语义非我方可控、
+  用户拍板接受并如实文档"——已被 2026-09-25 推翻。** 那个结论只对"不动盘上状态"成立。
+  真开关是 `.state/agents.json` 里的状态字符串（详见 `pitfalls` 条 42，出处逐字核过）：
+  `respawn_subagents` 只跳过状态不在 `{"running","waiting"}` 的非根 agent，而 `restore()`
+  **原样拷状态、零归一化** → 把子 agent 从 `stopped` 翻成 `running`，headless 续跑就会重建它们。
+  不需要 TTY。**已实测复活成功**（3 个子 agent 全起、真的在 `exec_command` 探测）。
+- **两条必须一起做，少一条就白干**（这也是 2026-09-25 三次真跑失败的全部原因）：
+  ① **翻状态**：`stopped`／`budget_paused` 的**非根**子 agent → `running`，并把
+  `budget_stopped`／`reserve_stopped`／`budget_paused` 三个**过期**预算 flag 清成 False ——
+  `wait_for_message`（`agents.py:348-352`）在这些 flag 下把子 agent 唤醒**只为走收尾**。
+  ⚠️ 手工验证那次这三个 flag 恰好是 false，差点把"复活能用"这个假象写进产品代码：
+  **凡是因预算储备停下的扫描（最常见那类）不清 flag 就静默复活失败**。
+  ② **拦住 root**：复活后 root 干的是 `list_reports → stop_agent ×3 → finish_scan`，
+  **45 秒内**把刚复活的三个孩子掐死在探测中途（花了钱、coverage 一条没加）。所以续跑指令在
+  复活时第一要求是 `wait_for_agents` 且**明令禁止 `stop_agent`**；没复活时才退回原来"作废
+  stopped agent、去建新的"那套 —— **两段措辞互斥**，复活后再说"图里 stopped 的都是死的"就是假话。
+- **root 级 prompting 攻不动这个结构限制，别再往措辞上加钱**：`create_agent` 的 docstring 要求
+  先 `view_agent_graph` 去重，而被强停的 agent 正顶着待补测范围的名字 → 两次真跑、两种措辞
+  （含 `agent_name` 的、只含 `risk_area` 的）都是 **9 项清单换 0 个新 agent**。
+- **✅ 本轮已落地（主会话直接做，未派子 agent）**：新 `backend/app/services/agent_checkpoint.py`
+  （纯判定 `revive_snapshot` + 原子写回 `revive_checkpoint`，**零 `strix` import**）；
+  `ResumeSpec.revived_agents` + `compose_resume_instruction(revived=…)` 两段互斥措辞；
+  路由在 `build_resume_plan` **之前**调 `revive_checkpoint` —— **顺序是硬要求**，Strix 一启动
+  就把这个文件读进 `restore()`，之后再改无效。`make test` **1342 passed / 0 skipped**、
+  `make lint-api` 绿、**7 处 mutation 全对**（每条只红该红的那几格）。
+  `test_agent_checkpoint.py` 末尾四条**读真实 strix 源码文本**钉住上面那几处字面量（不
+  `import strix.core.*`）—— 升级 `strix-agent` 时它们红了就是提醒复活逻辑要重验。
+- **下一步（待用户放行）：拿真靶场再跑一次续跑**，验的是"复活 + 不被掐死"合起来**真的产出
+  coverage 条目**（这是唯一还没被证明的一环：复活已证、掐死已证、"不掐死就会记 coverage"未证）。
+  素材：`fc1dce74…`（juice-shop，root `completed` + 3 子 agent `stopped`，`agents.json` 有
+  我手工改状态时留的 `.bak-1790307422`，在 `${DATA}` 里、不在仓库）。真跑前 `up -d --build api`。
+- **顺带要改的文档**：T30a 的 `docs/SECURITY-zh.md`／UI 文案里"被提前停掉的子任务不会恢复"
+  这类如实声明**现在不再如实**，等上面真跑验完再改（别提前改成承诺）。
+- 其余待办不变：**T17d** `/scans` 列表页（交底还没写）；T30a 文档。
+
+### 上一段（2026-09-24）：**T32 全系列落地（a/b/c 提交、d 真跑得出限制）；下一步 T17d 或 T30a**
 
 - **✅ T32c** 预算建议下限 $4 软提示（发起页 + 续跑页，只提示不拦），主会话直接落地，commit `4b32ed5`。
 - **✅ T32d 真跑（sigv4 access key，juice-shop）得出关键限制**：续跑机制全通（判定「结论不完整」、指令注入、预算抬升都对），**但 root 在"子 agent 于 spawn 阶段被预算掐死"的扫描上续跑后不会重新派子 agent 补测** —— Strix 非交互续跑语义，非我方代码可控。加强 `compose_resume_instruction` 措辞（已改，测试绿，随本轮提交）无效。**用户拍板接受、如实文档**：写进 T30a 的 `docs/SECURITY-zh.md` 清单 ④（已加进 PLAN），UI 不得把续跑说成"能补全覆盖"（现有文案「被提前停掉的子任务不会恢复」已如实）。详见派发清单 T32d 行。**T32 系列到此收尾。**
@@ -1749,7 +1786,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T32a | **coverage 判定**：`run_status=="completed"` 且 `coverage.json.completeness.complete is not True`（含缺失/读坏）→ `status="stopped"`＋新码 `coverage_incomplete`；`strix_profile` 加 `coverage_record_name`、`run_discovery.read_coverage_complete`（不抛）、`resolve_attribution` 加参；码进 `errors.py`＋`zh-CN.json`（`LivePanel.tsx` 可续码表交底时挪到 T32b）。历史行不回溯 | T31 | `strix_profile.py` `run_discovery.py` `scan_supervisor.py` `errors.py` `zh-CN.json` + 测试 | ✅ 2026-09-24 收货（1293 passed，3 mutation 全对）。**2**（TDD 第一层，发布阻断同条 24）。方案 `~/Documents/claude/dispatch/T32/plan.md`。**收货 mutation**：删 coverage 判断 → 只红那格 |
 | T32b | **续跑指令＋准入**：`compose_resume_instruction(original, *, spent_usd, budget_usd)` 纯函数（剥旧 `## Resumed scan` 节 + 追加固定英文模板，**不拼 gap 正文**）→ tmpfs `instruction.txt`(0600) + 续跑 argv 加 `--instruction-file`；`RESUMABLE_ERROR_CODES` 加 `coverage_incomplete`。理由 N1：新指令会覆写 `run.json.instruction`（`cli_args.py:428`），只写补测提示会丢账号段 → 下次续跑口令明文进 DB | T32a | `scan_launcher.py` `scan_resume.py` `routes/scans.py`（一处传参）`LivePanel.tsx`（可续码表加 `coverage_incomplete`，从 T32a 挪来）+ 测试 | ✅ 2026-09-24 收货（1303 passed，4 mutation 全对）。**2**。不变式：`recover(compose_resume(x)) == recover(x)` 且多次续跑不叠加；黄金续跑 argv。**收货 mutation**：不剥旧节 → 只红叠加格 |
 | T32c | **预算软提示**：前端常量 $4；发起页 `< 4`、续跑页 `新总额−已花费 < 4` 显示提示，仍可提交 | T32b | `StepBudget.tsx` `ResumePanel.tsx` `zh-CN.json` | 前端小改，0 mutation；**✅ 2026-09-24 主会话直接落地**，lint/test 绿，人眼待看 |
-| T32d | **真跑验收**：bearer 小预算 juice-shop → `coverage_incomplete`/`scan_incomplete` → 续跑 → root **新派**子 agent 并发出探测（验 N3：completed 的 root 续跑会动） | T32c | — | **自** ✅ 2026-09-24 **部分通过 + 得出限制**：sigv4 access key、$2 首段（3 子 agent 全在 90% reserve 线被掐、0 探测）→ 判定「结论不完整」页面文案正确（T32a 通）→ 续跑抬到 $4/$6、日志确认 `injected new instruction`（T32b 通）→ **但 root 两次续跑（原措辞 + 加强措辞）都直接 `finish_scan`、不新派子 agent**（N3 = 否，Strix 续跑语义所致）。加强措辞反而让第二次 root 跳过 `list_coverage` 直接总结。**用户拍板（2026-09-24）接受此限制、如实文档**（见 T30a 行 `docs/SECURITY-zh.md` 清单 ④）；`compose_resume_instruction` 的强指令措辞保留（干净起点下可能略好、无害）。**预算软提示（T32c）真跑页面已见** |
+| T32d | **真跑验收**：bearer 小预算 juice-shop → `coverage_incomplete`/`scan_incomplete` → 续跑 → root **新派**子 agent 并发出探测（验 N3：completed 的 root 续跑会动） | T32c | — | **自** ✅ 2026-09-24 **部分通过 + 得出限制**：sigv4 access key、$2 首段（3 子 agent 全在 90% reserve 线被掐、0 探测）→ 判定「结论不完整」页面文案正确（T32a 通）→ 续跑抬到 $4/$6、日志确认 `injected new instruction`（T32b 通）→ **但 root 两次续跑（原措辞 + 加强措辞）都直接 `finish_scan`、不新派子 agent**（N3 = 否，Strix 续跑语义所致）。加强措辞反而让第二次 root 跳过 `list_coverage` 直接总结。**用户拍板（2026-09-24）接受此限制、如实文档**（见 T30a 行 `docs/SECURITY-zh.md` 清单 ④）；`compose_resume_instruction` 的强指令措辞保留（干净起点下可能略好、无害）。**预算软提示（T32c）真跑页面已见** **⚠️ 2026-09-25 推翻**：其中「子 agent 不可复活、续跑不会补测」只对不动盘上状态成立 —— 改 `agents.json` 状态字符串即可复活，见 §交接 与 `pitfalls` 条 42。 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索；③ **测试账号口令明文留在 `run.json` 的 `instruction` 字段**（Strix 为续跑写的，2026-09-24 用户拍板接受）—— 要写清：它在 `${DATA}` 上活到该扫描被留存清理为止，而清理默认关闭 |<br>**④ 续跑的能力边界（2026-09-24 T32d 两次真跑实测）**：续跑能抬预算、能带记忆恢复 root、能注入新指令，但**在"子 agent 于 spawn 阶段就被预算 reserve 掐死"的扫描上，root 续跑后不会重新派子 agent 补测** —— 它已进入"扫描结束"心智，读到注入指令也只会再总结一遍就 `finish_scan`（是 Strix 非交互续跑语义，非我方代码可控；`compose_resume_instruction` 已尽力用强指令引导，无效）。文档与 UI 不得把续跑说成"能补全覆盖"；续跑对**因预算/中断在测试中途停下、子 agent 尚存活**的扫描才真正有用。UI 现有文案「被提前停掉的子任务不会恢复」已如实，勿加"续跑可补测"这类承诺 |
 | T30b | `make verify-e2e`（**28 条**）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |

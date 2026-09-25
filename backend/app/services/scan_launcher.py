@@ -117,6 +117,9 @@ class ResumeSpec:
     # `read_coverage_gaps` 提取的受控词表面标签（无 `detail` 散文）；空则续跑指令退回
     # "自己 list_coverage"。默认空，理由同上：读不到 coverage 不该让续跑无法构造。
     coverage_gaps: tuple[str, ...] = ()
+    # `agent_checkpoint.revive_checkpoint` 真的在盘上复活了的子 agent id。只影响续跑指令
+    # 的措辞（复活了就叫 root 先 `wait_for_agents`、禁止 `stop_agent`），不进 argv/env。
+    revived_agents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,7 +402,12 @@ def compose_instruction(template: ScanTemplate, spec: LaunchSpec) -> str:
 
 
 def compose_resume_instruction(
-    original: str, *, spent_usd: float, budget_usd: float, gaps: Sequence[str] = ()
+    original: str,
+    *,
+    spent_usd: float,
+    budget_usd: float,
+    gaps: Sequence[str] = (),
+    revived: Sequence[str] = (),
 ) -> str:
     """纯函数。续跑指令 = 原指令原文 + 追加一节"补测缺口"。
 
@@ -414,10 +422,12 @@ def compose_resume_instruction(
     散文）。非空就排成编号清单，每项倒回下划线 —— 那正是 `create_agent(skills=[…])` 收的
     字面量，root 照抄即可。空（旧产物或读坏）就退回"自己 list_coverage"那句，绝不编造清单。
 
-    **作废图里的 `stopped` agent 那两句是承重的，不是修辞**：`create_agent` 的文档要求 root
-    "先 `view_agent_graph` 确认没有现存 agent 覆盖此范围"，而被强停的那几个 agent 正顶着这些
-    范围的名字。不正面顶掉那条去重指引，root 会把清单读成"都有人管了"然后收尾（2026-09-25
-    实测：0 个新 agent）。这仍是提高概率、不是保证 —— 派不派最终由模型决定。
+    `revived` 是 `agent_checkpoint.revive_checkpoint` **真的在盘上复活了**的子 agent。
+    **措辞必须跟着它变**：复活之后"图里 stopped 的都是死的"就成了假话。而 root 上一次真跑
+    干的正是 `list_reports → stop_agent ×3 → finish_scan` —— 把刚复活的三个孩子掐死在探测
+    中途，coverage 一条没加（2026-09-25 实测）。所以复活时第一要求是 `wait_for_agents` 且
+    明令禁止 `stop_agent`；没复活时才退回"作废 stopped agent、去建新的"那套。
+    两段都只是提高概率、不是保证 —— 派不派、停不停最终由模型决定。
     """
     base = original.partition(_RESUME_MARKER)[0]
     head = (
@@ -426,32 +436,42 @@ def compose_resume_instruction(
         " and must be ignored: you have fresh budget to keep testing. The total budget is now"
         f" ${_format_usd(budget_usd)} USD, of which ${_format_usd(spent_usd)} USD was already"
         " spent.\n"
-        "The sub-agents that were force-stopped earlier will NOT restart, and their surfaces are"
-        " still untested — that is why this scan is incomplete.\n"
         "Do NOT call finish_scan yet."
     )
+    if revived:
+        agents_part = (
+            f" The {len(revived)} sub-agent(s) that were interrupted earlier have been RESTARTED"
+            " and are running again right now. They are carrying out exactly the untested work"
+            " that made this scan incomplete, so do NOT call stop_agent on any of them and do NOT"
+            " treat them as duplicates.\n"
+            "Your FIRST action must be wait_for_agents: let every running sub-agent finish its"
+            " work and record its coverage before you do anything else."
+        )
+    else:
+        agents_part = (
+            " Every sub-agent shown as stopped in view_agent_graph is DEAD: it will never run"
+            " again and covers nothing, whatever its name says. A new agent for the same scope is"
+            " NOT a duplicate — spawning it is required."
+        )
     if gaps:
         checklist = "\n".join(
             f"{index}. {label.replace(' ', '_')}" for index, label in enumerate(gaps, start=1)
         )
-        tail = (
-            " Every sub-agent shown as stopped in view_agent_graph is DEAD: it will never run"
-            " again and covers nothing, whatever its name says. A new agent for the same scope is"
-            " NOT a duplicate — spawning it is required.\n"
-            "The coverage report shows these risk classes were never tested. For EACH one, call"
-            " create_agent with skills=[<that name>] and a task naming the target, then call"
-            " wait_for_agents:\n"
+        gaps_part = (
+            "\nThe coverage report shows these risk classes were never tested. For EACH one"
+            " that is STILL untested after that, call create_agent with skills=[<that name>]"
+            " and a task naming the target, then call wait_for_agents:\n"
             f"{checklist}\n"
             "Only call finish_scan once every class above has a completed agent or the remaining"
             " budget is nearly exhausted."
         )
     else:
-        tail = (
-            " First call list_coverage to see which surfaces are still untested or under-covered,"
-            " then spawn NEW sub-agents to test those gaps and wait for them to finish. Only call"
+        gaps_part = (
+            "\nCall list_coverage to see which surfaces are still untested or under-covered, then"
+            " spawn NEW sub-agents to test those gaps and wait for them to finish. Only call"
             " finish_scan once the remaining budget is nearly exhausted or the gaps are covered."
         )
-    return base + _RESUME_MARKER + head + tail
+    return base + _RESUME_MARKER + head + agents_part + gaps_part
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -596,6 +616,7 @@ def build_resume_plan(
         spent_usd=spec.spent_usd,
         budget_usd=spec.max_budget_usd,
         gaps=spec.coverage_gaps,
+        revived=spec.revived_agents,
     )
     instruction_path = root / "instruction.txt"
     _write_private(instruction_path, instruction_text)
