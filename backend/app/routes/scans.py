@@ -91,7 +91,7 @@ from app.services import audit
 from app.services.allowlist import AllowlistEntry, AllowlistSnapshot, AllowlistStore
 from app.services.dns_resolver import Resolution, Resolver
 from app.services.key_vault import CredentialSet, KeyVault
-from app.services.run_discovery import discover_run, read_run_instruction
+from app.services.run_discovery import discover_run, read_coverage_gaps, read_run_instruction
 from app.services.scan_admission import (
     AdmissionRejected,
     AdmissionRequest,
@@ -792,6 +792,9 @@ async def resume_scan(
             instruction = await asyncio.to_thread(read_run_instruction, run_dir, profile)
             if instruction is None:
                 raise ResumeUnavailableError(reason="no_checkpoint")
+            # 上次 coverage 标出的未覆盖面：非空则续跑指令排成编号任务清单，让 root 更可能
+            # 逐面派新子 agent。只含受控词表标签（无 `detail`），读不到就是空、不影响续跑。
+            coverage_gaps = await asyncio.to_thread(read_coverage_gaps, run_dir, profile)
             try:
                 test_credentials = recover_test_credentials(instruction)
             except ValueError:
@@ -840,6 +843,7 @@ async def resume_scan(
                 max_turns=scan["max_turns"],
                 reasoning_effort=scan["reasoning_effort"],
                 instruction=instruction,
+                coverage_gaps=coverage_gaps,
             )
             try:
                 plan = await asyncio.to_thread(

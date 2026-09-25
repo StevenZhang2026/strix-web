@@ -14,6 +14,7 @@ import pytest
 from app.services.run_discovery import (
     discover_run,
     read_coverage_complete,
+    read_coverage_gaps,
     read_run_instruction,
     read_run_status,
 )
@@ -136,3 +137,63 @@ def test_coverage_complete_only_on_literal_true(
     elif isinstance(raw, str):
         (run_dir / "coverage.json").write_text(raw, encoding="utf-8")
     assert read_coverage_complete(run_dir, PROFILE) is expected
+
+
+def test_coverage_gaps_extracts_safe_surface_labels(tmp_path: Path) -> None:
+    """两类 gap 的受控词表字段都取，去重、保序。"""
+    run_dir = make_run_dir(tmp_path)
+    make_coverage_json(
+        run_dir,
+        complete=False,
+        gaps=[
+            {"kind": "unrecorded_risk_class", "risk_area": "sql injection", "detail": "prose"},
+            {"kind": "unrecorded_risk_class", "risk_area": "xss", "detail": "prose"},
+            {"kind": "agent_recorded_no_coverage", "agent_name": "idor-tester", "detail": "p"},
+            {"kind": "unrecorded_risk_class", "risk_area": "sql injection", "detail": "dup"},
+        ],
+    )
+    assert read_coverage_gaps(run_dir, PROFILE) == ("sql injection", "xss", "idor-tester")
+
+
+def test_coverage_gaps_never_leak_the_detail_prose(tmp_path: Path) -> None:
+    """`detail` 是 LLM 散文、可能含口令 —— 绝不进返回值。"""
+    run_dir = make_run_dir(tmp_path)
+    make_coverage_json(
+        run_dir,
+        complete=False,
+        gaps=[{"kind": "unrecorded_risk_class", "risk_area": "ssrf", "detail": "hunter2 secret"}],
+    )
+    labels = read_coverage_gaps(run_dir, PROFILE)
+    assert labels == ("ssrf",)
+    assert all("hunter2" not in label for label in labels)
+
+
+@pytest.mark.parametrize(
+    ("gaps", "expected"),
+    [
+        pytest.param(None, (), id="no-gaps-key"),
+        pytest.param([], (), id="empty-gaps"),
+        pytest.param("nope", (), id="gaps-not-a-list"),
+        pytest.param([{"kind": "x"}, "junk", 3], (), id="entries-without-usable-fields"),
+        pytest.param(
+            [{"kind": "unrecorded_risk_class", "risk_area": "  csrf  "}], ("csrf",), id="stripped"
+        ),
+        pytest.param(
+            [{"kind": "unrecorded_risk_class", "risk_area": ""}], (), id="empty-label-skipped"
+        ),
+        pytest.param(
+            [{"kind": "unrecorded_risk_class", "risk_area": 42}], (), id="non-string-skipped"
+        ),
+    ],
+)
+def test_coverage_gaps_tolerates_missing_and_malformed(
+    tmp_path: Path, gaps: object, expected: tuple[str, ...]
+) -> None:
+    run_dir = make_run_dir(tmp_path)
+    make_coverage_json(run_dir, complete=False, gaps=gaps)
+    assert read_coverage_gaps(run_dir, PROFILE) == expected
+
+
+def test_coverage_gaps_returns_empty_when_file_missing(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    assert read_coverage_gaps(run_dir, PROFILE) == ()

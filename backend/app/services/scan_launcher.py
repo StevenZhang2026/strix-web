@@ -26,7 +26,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -114,6 +114,9 @@ class ResumeSpec:
     reasoning_effort: str | None
     # `run.json` 读回的原指令。它可能含测试账号口令，所以只进 tmpfs 上的 `instruction.txt`。
     instruction: str
+    # `read_coverage_gaps` 提取的受控词表面标签（无 `detail` 散文）；空则续跑指令退回
+    # "自己 list_coverage"。默认空，理由同上：读不到 coverage 不该让续跑无法构造。
+    coverage_gaps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +398,9 @@ def compose_instruction(template: ScanTemplate, spec: LaunchSpec) -> str:
     return "\n".join(lines)
 
 
-def compose_resume_instruction(original: str, *, spent_usd: float, budget_usd: float) -> str:
+def compose_resume_instruction(
+    original: str, *, spent_usd: float, budget_usd: float, gaps: Sequence[str] = ()
+) -> str:
     """纯函数。续跑指令 = 原指令原文 + 追加一节"补测缺口"。
 
     必须带原文：Strix 收到新指令就整份覆写 `run.json.instruction`，只写追加节的话测试账号段
@@ -404,10 +409,14 @@ def compose_resume_instruction(original: str, *, spent_usd: float, budget_usd: f
     `partition` 取**第一次**出现是安全的：`_validate` 拒了含 `_RESUME_HEADER` 的操作者补充，
     口令字段又已禁 `\n`，所以原文里不可能先出现这个标记。
     不加尾随换行：Strix 读文件时 `.strip()`，读回的必须就是写下的，否则下一次剥离对不上。
-    不拼 `coverage.json` 的 gap 正文：那是 LLM 写的文本（可能含口令），root 自己能读到。
+
+    `gaps` 是 `read_coverage_gaps` 提取的**受控词表面标签**（`risk_area`／`agent_name`，
+    绝无 `detail` 散文）。非空就把它们排成编号任务清单，让 root 更可能"每个缺口派一个新
+    子 agent"而不是自己一把梭 —— 这是可靠性改善、不是保证（最终由 LLM 决定）。空（旧产物
+    或读坏）就退回"自己 list_coverage"那句，绝不编造清单。
     """
     base = original.partition(_RESUME_MARKER)[0]
-    body = (
+    head = (
         "The scan budget has been RAISED and this scan is being resumed. Any earlier"
         " budget-reserve or 'wrap up now / do not spawn new sub-agents' message is now OBSOLETE"
         " and must be ignored: you have fresh budget to keep testing. The total budget is now"
@@ -415,12 +424,24 @@ def compose_resume_instruction(original: str, *, spent_usd: float, budget_usd: f
         " spent.\n"
         "The sub-agents that were force-stopped earlier will NOT restart, and their surfaces are"
         " still untested — that is why this scan is incomplete.\n"
-        "Do NOT call finish_scan yet. First call list_coverage to see which surfaces are still"
-        " untested or under-covered, then spawn NEW sub-agents to test those gaps and wait for"
-        " them to finish. Only call finish_scan once the remaining budget is nearly exhausted or"
-        " the gaps are covered."
+        "Do NOT call finish_scan yet."
     )
-    return base + _RESUME_MARKER + body
+    if gaps:
+        checklist = "\n".join(f"{index}. {label}" for index, label in enumerate(gaps, start=1))
+        tail = (
+            " The coverage report flags these surfaces as still untested or under-covered."
+            " Spawn ONE dedicated sub-agent for EACH of them and wait for it to finish:\n"
+            f"{checklist}\n"
+            "Only call finish_scan once the remaining budget is nearly exhausted or every"
+            " surface above is covered."
+        )
+    else:
+        tail = (
+            " First call list_coverage to see which surfaces are still untested or under-covered,"
+            " then spawn NEW sub-agents to test those gaps and wait for them to finish. Only call"
+            " finish_scan once the remaining budget is nearly exhausted or the gaps are covered."
+        )
+    return base + _RESUME_MARKER + head + tail
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -561,7 +582,10 @@ def build_resume_plan(
     (cwd / "tmp").chmod(0o700)
     # 写在 cwd/tmp 之后：cwd 已被清理时先抛，不留口令文件。
     instruction_text = compose_resume_instruction(
-        spec.instruction, spent_usd=spec.spent_usd, budget_usd=spec.max_budget_usd
+        spec.instruction,
+        spent_usd=spec.spent_usd,
+        budget_usd=spec.max_budget_usd,
+        gaps=spec.coverage_gaps,
     )
     instruction_path = root / "instruction.txt"
     _write_private(instruction_path, instruction_text)

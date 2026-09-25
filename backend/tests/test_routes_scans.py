@@ -51,6 +51,7 @@ from tests.conftest import (
     FakeClock,
     insert_authorization,
     insert_scan,
+    make_coverage_json,
     make_entry,
     writable_conn,
 )
@@ -1276,6 +1277,26 @@ def test_resume_relaunches_the_same_scan_with_the_recovered_password(
     assert "--instruction-file" in plan.argv
     text = plan.instruction_path.read_text(encoding="utf-8")
     assert _TEST_PASSWORD in text and "## Resumed scan" in text
+
+
+def test_resume_inlines_the_coverage_gaps_but_never_their_detail(
+    client: TestClient, app: FastAPI, settings: Settings
+) -> None:
+    """路由真把 `coverage.json` 的面标签交给了续跑指令；`detail` 散文不跟着进来。"""
+    scan_id = _resumable_scan(client, app, settings)
+    run_dir = settings.scans_dir / scan_id / "strix_runs" / "run-1"
+    make_coverage_json(
+        run_dir,
+        complete=False,
+        gaps=[{"kind": "unrecorded_risk_class", "risk_area": "idor", "detail": "PROSE-SENTINEL"}],
+    )
+
+    response = _resume(client, scan_id, _store_credentials(app))
+
+    assert response.status_code == 202, response.text
+    text = app.state.supervisor.plans[-1].instruction_path.read_text(encoding="utf-8")
+    assert "1. idor" in text
+    assert "PROSE-SENTINEL" not in text
 
 
 class _EpochRecordingChannels(OrderRecordingChannels):

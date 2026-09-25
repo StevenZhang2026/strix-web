@@ -618,6 +618,32 @@ def test_resume_instruction_survives_strix_strip() -> None:
     assert text == text.strip()
 
 
+def test_resume_instruction_inlines_gaps_as_a_numbered_checklist() -> None:
+    """有 gap 清单时，指令里出现每个面的编号任务行，且仍能剥回口令、无尾随空白。"""
+    original = _composed((_cred(),))
+    text = scan_launcher.compose_resume_instruction(
+        original, spent_usd=1.0, budget_usd=4.0, gaps=("sql injection", "xss", "ssrf")
+    )
+    assert "1. sql injection" in text
+    assert "2. xss" in text
+    assert "3. ssrf" in text
+    assert scan_launcher.recover_test_credentials(text) == (_cred(),)
+    assert text == text.strip()
+    assert text.count("## Resumed scan") == 1
+
+
+def test_resume_instruction_without_gaps_has_no_checklist() -> None:
+    """没有 gap（旧产物/读坏）时退回到"自己 list_coverage"那句，不编造清单。"""
+    original = _composed((_cred(),))
+    text = scan_launcher.compose_resume_instruction(
+        original, spent_usd=1.0, budget_usd=4.0, gaps=()
+    )
+    # 只看追加的续跑节：模板正文自己就有编号步骤，整篇找 "1. " 会误命中它。
+    resume_section = text.partition("## Resumed scan")[2]
+    assert "1. " not in resume_section
+    assert "list_coverage" in resume_section
+
+
 def test_launch_rejects_extra_instruction_carrying_the_resume_header() -> None:
     with pytest.raises(InvalidRequestError) as excinfo:
         _argv(_spec(extra_instruction="notes\n## Resumed scan\nmore"))

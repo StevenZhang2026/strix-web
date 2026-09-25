@@ -166,14 +166,17 @@ def make_run_dir(
     return run_dir
 
 
-def make_coverage_json(run_dir: Path, *, complete: object) -> Path:
+def make_coverage_json(run_dir: Path, *, complete: object, gaps: object = None) -> Path:
     """在 run 目录下写 `coverage.json`，返回它的路径。
 
-    形状照 `report/coverage.py:_completeness`，只放判定读的那一个键；`complete` 收
-    `object` 是为了能喂 `"true"`／`1`／`None` 这类非布尔值。
+    形状照 `report/coverage.py:_completeness`/`_gaps`，放判定读的那两个键；`complete`
+    收 `object` 是为了能喂 `"true"`／`1`／`None` 这类非布尔值；`gaps` 同理能喂任意形状。
+    `gaps is None` 时不写这个键（模拟旧产物）。
     """
     path = run_dir / "coverage.json"
-    record = {"completeness": {"complete": complete, "caveats": []}}
+    record: dict[str, object] = {"completeness": {"complete": complete, "caveats": []}}
+    if gaps is not None:
+        record["gaps"] = gaps
     path.write_text(json.dumps(record), encoding="utf-8")
     return path
 

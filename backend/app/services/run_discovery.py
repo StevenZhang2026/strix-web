@@ -132,3 +132,46 @@ def read_coverage_complete(run_dir: Path, profile: StrixProfile) -> bool:
     if not isinstance(completeness, dict):
         return False
     return completeness.get("complete") is True
+
+
+def read_coverage_gaps(run_dir: Path, profile: StrixProfile) -> tuple[str, ...]:
+    """`coverage.json` 的 `gaps` 里可安全内联的「面」标签，去重、保序。**不抛**。
+
+    只取受控词表字段：`unrecorded_risk_class` 的 `risk_area`（`sql injection`／`xss`…，
+    等于 Strix 的 skill 名）与 `agent_recorded_no_coverage` 的 `agent_name`（我们／Strix
+    生成的名字）。**绝不取 `detail`** —— 那是 LLM 写的散文，可能含测试账号口令，内联进
+    续跑指令就会明文落回 `run.json`（`compose_resume_instruction` 上方 N1）。
+
+    缺失／读坏／形状不对 → `()`：续跑指令据此退回"自己 list_coverage"那句，不因此失败
+    （与 `read_coverage_complete` 同一种"没有证据就返回空"的克制）。
+    """
+    record_path = run_dir / profile.coverage_record_name
+    try:
+        raw = record_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ()
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(record, dict):
+        return ()
+    gaps = record.get("gaps")
+    if not isinstance(gaps, list):
+        return ()
+    labels: list[str] = []
+    seen: set[str] = set()
+    for gap in gaps:
+        if not isinstance(gap, dict):
+            continue
+        label = gap.get("risk_area")
+        if not isinstance(label, str):
+            label = gap.get("agent_name")
+        if not isinstance(label, str):
+            continue
+        label = label.strip()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return tuple(labels)
