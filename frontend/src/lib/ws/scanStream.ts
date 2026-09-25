@@ -150,8 +150,9 @@ export function useScanStream(scanId: string, generation: number): void {
         }
         store().apply(parsed);
 
-        if (parsed.type === "done") {
+        if (parsed.type === "done" || parsed.type === "vuln.add") {
           // 规则 10：done 不带结论，让页面去 REST 拿；不必等 close。
+          // vuln.add 帧内容仍丢弃，只当刷新信号；不在前端维护第二份发现列表。
           void queryClient.invalidateQueries({ queryKey: ["scan", scanId] });
         }
       };

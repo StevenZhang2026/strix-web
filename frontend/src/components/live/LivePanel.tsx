@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ErrorNotice } from "@/components/errors/ErrorNotice";
+import { FindingsCount, FindingsPanel } from "@/components/findings/FindingsPanel";
 import { ReportPanel } from "@/components/report/ReportPanel";
 import { StatusDot, type DotTone } from "@/components/ui/StatusDot";
 import { ApiError, fetchScan, stopScan } from "@/lib/api/client";
@@ -71,7 +72,7 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
     queryFn: ({ signal }) => fetchScan(scanId, signal),
   });
   const [stop, setStop] = useState<StopState>({ kind: "idle" });
-  const [tab, setTab] = useState<"live" | "report">("live");
+  const [tab, setTab] = useState<"live" | "findings" | "report">("live");
 
   if (live.connection === "not_found") {
     return <ErrorNotice code="not_found" />;
@@ -128,6 +129,16 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "findings"}
+          className={tab === "findings" ? `${styles.tab} ${styles.active}` : styles.tab}
+          onClick={() => setTab("findings")}
+        >
+          {t("scan.tabFindings")}
+          {data !== undefined ? <FindingsCount count={data.findings.length} /> : null}
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "report"}
           className={tab === "report" ? `${styles.tab} ${styles.active}` : styles.tab}
           disabled={!canReport}
@@ -137,7 +148,10 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
         </button>
       </div>
 
-      {tab === "report" && canReport ? (
+      {tab === "findings" ? (
+        // 进行中与否用 `canStop` 同判据：决定空态说"还没有"还是"没有记录到"。
+        <FindingsPanel findings={data?.findings} inProgress={canStop} />
+      ) : tab === "report" && canReport ? (
         <ReportPanel scanId={scanId} />
       ) : (
         <>

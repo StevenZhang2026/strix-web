@@ -1,0 +1,44 @@
+/* 「发现」tab。只用 token，零 `box-shadow`；风格照 `report/ReportPanel.module.css`。 */
+.root { display: flex; flex-direction: column; gap: var(--s4); }
+.hint { margin: 0; max-width: var(--measure); font-size: var(--fs-2); color: var(--ink-mute); }
+.list { display: flex; flex-direction: column; gap: var(--s2); margin: 0; padding: 0; list-style: none; }
+.item { border: 1px solid var(--rule); background: var(--sheet); }
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  cursor: pointer;
+}
+.title { font-weight: 600; color: var(--ink); }
+.endpoint { font-family: var(--mono); font-size: var(--fs-2); color: var(--ink-2); overflow-wrap: anywhere; }
+.meta { font-size: var(--fs-2); color: var(--ink-mute); }
+.badge {
+  padding: 0 var(--s2);
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--sheet);
+  background: var(--ink-mute);
+  border-radius: var(--r-act);
+}
+/* 徽标色只从固定表取：原始严重度值不进 className（不可信内容）。 */
+.sevCritical { background: var(--sev1); }
+.sevHigh { background: var(--sev2); }
+.sevMedium { background: var(--sev3); }
+.sevLow { background: var(--sev4); color: var(--ink); }
+.body { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s3); border-top: 1px solid var(--rule); }
+.section { display: flex; flex-direction: column; gap: var(--s1); }
+.label { margin: 0; font-size: var(--fs-2); font-weight: 600; color: var(--ink-2); }
+.text { margin: 0; max-width: var(--measure); white-space: pre-wrap; overflow-wrap: anywhere; }
+.code {
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: var(--fs-2);
+  white-space: pre;
+  background: var(--sheet-sunk);
+  border: 1px solid var(--rule);
+}
+.count { margin-left: var(--s1); font-size: var(--fs-2); color: var(--ink-mute); }

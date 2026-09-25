@@ -557,6 +557,25 @@
     "submit": "继续这次扫描"
   },
 
+  "findings": {
+    "hint": "这里是扫描器原文；给管理层看的中文版在「中文报告」。",
+    "emptyRunning": "还没有发现，扫描继续时会自动出现。",
+    "emptyDone": "这次扫描没有记录到发现。",
+    "cvss": "CVSS",
+    "field": {
+      "description": "描述",
+      "impact": "影响",
+      "technicalAnalysis": "技术分析",
+      "pocDescription": "复现说明",
+      "pocScriptCode": "复现脚本",
+      "evidence": "证据",
+      "remediationSteps": "修复步骤",
+      "codeLocations": "代码位置",
+      "confidence": "置信度",
+      "assumptions": "前提假设",
+      "counterevidence": "反证"
+    }
+  },
   "report": {
     "generate": "生成中文报告",
     "fill": "补全中文报告",
