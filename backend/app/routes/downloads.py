@@ -1,9 +1,10 @@
-"""`GET /api/scans/{id}/export/{kind}`、`/raw.zip`（T23＋T24）与 `/report/print`（T22b）。
+"""`GET /api/scans/{id}/export/{kind}`、`/raw.zip`（T23＋T24）与 `/report/{print,docx}`（T22b、T27b）。
 
 export 把 Strix 在 run 目录根下写好的 md / csv / sarif 原样下发；raw.zip 把整个扫描 cwd
 打包（排除规则见 `services/raw_export.py`）。两者前置判定与中文报告 POST 同序同义：
 行不在 → 404；purged → `artifacts_purged`；未到终态 → `scan_not_finished`；无 run_dir → 404。
 report/print 是自包含 HTML 报告；CSP 只放行内联样式与 data: 图片，页面零 JS。
+report/docx 与它同一份取数、同一份措辞（`exporter_html` 的公共件），只是换成 Word 包下载。
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from app.db import Database
 from app.errors import ArtifactsPurgedError, NotFoundError, ScanNotFinishedError
 from app.routes.report import LatestTranslations, latest_translations
 from app.services import audit, raw_export
+from app.services.exporter_docx import render_report_docx
 from app.services.exporter_html import ReportFinding, ReportScan, render_report_html
 from app.services.report_zh import ExecutiveZh, FindingZh
 from app.services.retention import TERMINAL_STATUSES
@@ -109,8 +111,10 @@ async def raw_zip(scan_id: str, request: Request) -> Response:
     )
 
 
-@router.get("/{scan_id}/report/print")
-async def report_print(scan_id: str, request: Request) -> Response:
+ReportInputs = tuple[ReportScan, list[ReportFinding], ExecutiveZh | None, float | None]
+
+
+async def _report_inputs(request: Request, scan_id: str) -> ReportInputs:
     await _finished_scan(request, scan_id)
 
     def load(conn: sqlite3.Connection) -> tuple[sqlite3.Row, list[sqlite3.Row], LatestTranslations]:
@@ -167,8 +171,25 @@ async def report_print(scan_id: str, request: Request) -> Response:
         cost_rows.append(latest.executive)
     costs = [row["cost_usd"] for row in cost_rows]
     report_cost = None if any(c is None for c in costs) else float(sum(costs))
+    return scan, findings, executive, report_cost
+
+
+@router.get("/{scan_id}/report/print")
+async def report_print(scan_id: str, request: Request) -> Response:
+    inputs = await _report_inputs(request, scan_id)
     return Response(
-        content=render_report_html(scan, findings, executive, report_cost),
+        content=render_report_html(*inputs),
         media_type="text/html; charset=utf-8",
         headers={"Content-Security-Policy": REPORT_CSP},
+    )
+
+
+@router.get("/{scan_id}/report/docx")
+async def report_docx(scan_id: str, request: Request) -> Response:
+    inputs = await _report_inputs(request, scan_id)
+    body = await asyncio.to_thread(render_report_docx, *inputs)
+    return Response(
+        content=body,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="strix-{scan_id}-report.docx"'},
     )

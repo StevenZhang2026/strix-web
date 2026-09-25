@@ -4,7 +4,12 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-25 深夜）：**T27a 与 T20 并行派发中**（后端／前端，文件不重叠）
+### 最新（2026-09-25 深夜）：**T27a（`75f749b`）、T20（`243f2fa`）收货提交；T27b 已提交，T27 整行完成**
+
+- T27a 收货：M1 只红 I1 29 格、M2 只红 I2 往返那条；子 agent 13 次调用 ≈66k、0 压缩。T20 收货：整读无缺陷、人眼通过；10 次调用 ≈42k、0 压缩。`make test` 1535 → T27b 后 1537 passed / 0 skipped。
+- T27b：`downloads.py` 把 print 的取数提成 `_report_inputs`，新 `GET report/docx`（attachment，`to_thread` 渲染）；测试加 docx 正路一条、「未终态 409」参数化到 print／docx；前端 `reportDocxPath` + ReportPanel「下载 Word 版」链接（`report.downloadDocx`）。用户 2026-09-25 放行提交。**下一步：T19（模板 3，方案主会话写）**。
+
+### 上一段：T27a 与 T20 并行派发
 
 - **T27 拆成 T27a／T27b**：T27a（模板 2）`exporter_docx.render_report_docx` 纯函数 + 把 `exporter_html.py` 的结论句／排序／各段标题／证据取法提成公开函数两边共用（`test_exporter_html.py` 必须一行不改全绿）；交底 `~/Documents/claude/dispatch/T27a/prompt.md`，预算 ≤30 次、峰值 <90k、0 压缩。**两条不变式 → 收货 mutation 2 处**：M1 去掉非法 XML 字符替换（只红 I1 含 `\x01`／`\ud800` 的格）、M2 换行不转 `<w:br/>`（只红 I2）。**T27b**（路由 `GET report/docx` + ReportPanel 下载按钮 + 文案）**串在 T20 之后**（都改 `zh-CN.json`），接线层、主会话可自己做。
 - **T20 方案用户确认（2026-09-25）**：`~/Documents/claude/dispatch/T20/plan.md`；交底 `…/T20/prompt.md`（模板 3 实现，≈250 行，预算 ≤30 次、峰值 <80k）。要点：tab「发现」进行中也可点、只显示原文、`<details>` 就地展开、`vuln.add` 只当 `invalidateQueries(["scan", id])` 的信号（store 仍丢弃，09-23 决定的轻微修改，用户已认）。**收货**：纯前端 0 mutation；`make lint`＋`make test`＋整读＋人眼看一次（juice-shop 扫描）。

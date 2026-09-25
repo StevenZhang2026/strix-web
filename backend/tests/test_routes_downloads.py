@@ -192,8 +192,26 @@ def test_report_print_cost_unknown_when_any_row_is_null(
     assert "$0.0" not in body
 
 
-def test_report_print_rejects_unfinished_scan(client: TestClient, settings: Settings) -> None:
+def test_report_docx_is_word_attachment_with_same_content(
+    client: TestClient, settings: Settings
+) -> None:
+    _seed_report(settings)
+    response = client.get("/api/scans/scan-1/report/docx")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert "attachment" in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        document = zf.read("word/document.xml").decode()
+    for expected in ("订单接口可越权查看他人订单", "EVIDENCE-f0-原样", "$0.0300"):
+        assert expected in document
+    assert "过期译文-不该出现" not in document
+
+
+@pytest.mark.parametrize("kind", ["print", "docx"])
+def test_report_rejects_unfinished_scan(client: TestClient, settings: Settings, kind: str) -> None:
     _seed(settings, status="running")
-    response = client.get("/api/scans/scan-1/report/print")
+    response = client.get(f"/api/scans/scan-1/report/{kind}")
     assert response.status_code == 409
     assert response.json()["code"] == "scan_not_finished"

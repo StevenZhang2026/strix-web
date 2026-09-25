@@ -801,3 +801,8 @@ export function startReportZh(
 export function reportPrintPath(scanId: string): string {
   return `/api/scans/${encodeURIComponent(scanId)}/report/print`;
 }
+
+/** Word 版报告：同一份取数与措辞，`Content-Disposition: attachment` 直接下载。 */
+export function reportDocxPath(scanId: string): string {
+  return `/api/scans/${encodeURIComponent(scanId)}/report/docx`;
+}

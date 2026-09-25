@@ -583,6 +583,7 @@
     "regenerateHint": "会把所有条目重新译一遍，全部重新计费。",
     "running": "正在生成…",
     "openPrint": "新标签页打开（可存 PDF）",
+    "downloadDocx": "下载 Word 版",
     "printHint": "新标签页打开后按 ⌘P／Ctrl+P 存为 PDF。",
     "credentialsNote": "生成中文报告需要一份模型凭据（任选一家，与扫描用的无关）。",
     "modelNote": "报告用这份凭据的模型生成。",

@@ -6,7 +6,13 @@ import { useState } from "react";
 import { CredentialForm, CredentialSummary } from "@/components/credentials/CredentialForm";
 import { ErrorNotice } from "@/components/errors/ErrorNotice";
 import { Button } from "@/components/ui/Button";
-import { ApiError, fetchReportZh, reportPrintPath, startReportZh } from "@/lib/api/client";
+import {
+  ApiError,
+  fetchReportZh,
+  reportDocxPath,
+  reportPrintPath,
+  startReportZh,
+} from "@/lib/api/client";
 import { formatUsd } from "@/lib/format";
 import { t } from "@/lib/messages";
 import { useKeysStore } from "@/lib/stores/keys";
@@ -107,6 +113,9 @@ export function ReportPanel({ scanId }: { readonly scanId: string }) {
             rel="noopener noreferrer"
           >
             {t("report.openPrint")}
+          </a>
+          <a className={styles.link} href={reportDocxPath(scanId)} download>
+            {t("report.downloadDocx")}
           </a>
         </div>
         {hasAny ? <p className={styles.hint}>{t("report.regenerateHint")}</p> : null}
