@@ -161,6 +161,15 @@ def prepare(entry: AuditEntry) -> PreparedAudit:
     )
 
 
+def is_scan_purged(conn: sqlite3.Connection, scan_id: str) -> bool:
+    """这次扫描的产物是否已被保留期清理删掉（有 `scan.purged` 审计行即是）。同步，同 `insert`。"""
+    row = conn.execute(
+        "SELECT 1 FROM audit_log WHERE scan_id = ? AND event = ? LIMIT 1",
+        (scan_id, EVENT_SCAN_PURGED),
+    ).fetchone()
+    return row is not None
+
+
 def insert(conn: sqlite3.Connection, prepared: PreparedAudit) -> None:
     """写表。**同步**，供调用方在自己的 `db.run()` 回调里调（那就是同一个事务）。"""
     entry = prepared.entry

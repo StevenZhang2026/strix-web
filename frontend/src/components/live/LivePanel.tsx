@@ -12,6 +12,7 @@ import { useScanStream } from "@/lib/ws/scanStream";
 
 import { AgentTree } from "./AgentTree";
 import { CostMeter } from "./CostMeter";
+import { DownloadBar } from "./DownloadBar";
 import { EventFeed } from "./EventFeed";
 import styles from "./LivePanel.module.css";
 import { NoticeBar } from "./NoticeBar";
@@ -22,6 +23,8 @@ import { Terminal } from "./Terminal";
 
 // 只决定按钮显不显示，真判定在后端 `services/scan_resume.py`，两边取值必须一致。
 const RESUMABLE_STATUSES = new Set(["stopped", "interrupted"]);
+// 与后端 `services/retention.py` 的 `TERMINAL_STATUSES` 取值一致，只决定下载条显不显示。
+const FINISHED_STATUSES = new Set(["completed", "stopped", "failed", "interrupted"]);
 const RESUMABLE_ERROR_CODES = new Set([
   "scan_incomplete",
   "stopped_by_operator",
@@ -142,6 +145,9 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
           }}
         />
       )}
+      {scan !== undefined && FINISHED_STATUSES.has(scan.status) && !canStop ? (
+        <DownloadBar scanId={scanId} />
+      ) : null}
 
       <div className={styles.grid}>
         <AgentTree agents={agents} />

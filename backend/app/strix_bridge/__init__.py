@@ -5,6 +5,6 @@
 `strix.llm.*` —— 那几个会把 agents SDK、litellm 以及 `configure_sdk_model_defaults` 对
 `os.environ` 的改写拖进 web 进程（模块级全局可变状态 → 跨用户污染 API Key）。
 
-T29 用 import-linter 把这条边界钉成 CI 闸门。在那之前它是靠 review 守的，所以本包不放
-任何业务逻辑：只有"读上游产物、翻成我们自己的 dataclass"这一件事。
+这条边界由 `tests/test_strix_contract.py` 用 AST 扫描钉成闸门（T29；未引 import-linter）。
+本包不放任何业务逻辑：只有"读上游产物、翻成我们自己的 dataclass"这一件事。
 """

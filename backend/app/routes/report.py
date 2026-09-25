@@ -137,14 +137,6 @@ def _exc_types(exc: BaseException) -> list[str]:
     return [type(exc).__name__]
 
 
-def _purged(conn: sqlite3.Connection, scan_id: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM audit_log WHERE scan_id = ? AND event = ? LIMIT 1",
-        (scan_id, audit.EVENT_SCAN_PURGED),
-    ).fetchone()
-    return row is not None
-
-
 @dataclass(frozen=True, slots=True)
 class _AuditContext:
     actor: str | None
@@ -216,7 +208,7 @@ async def translate_report(
         scan = conn.execute(
             "SELECT status, run_dir, provider, auth_shape FROM scans WHERE id = ?", (scan_id,)
         ).fetchone()
-        return scan, _purged(conn, scan_id)
+        return scan, audit.is_scan_purged(conn, scan_id)
 
     scan, purged = await db.run(load)
     if scan is None:
@@ -285,7 +277,7 @@ async def get_report(scan_id: str, request: Request) -> ReportZhResponse:
             "ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (scan_id, report_zh.LANG_ZH, report_zh.EXECUTIVE_ID),
         ).fetchone()
-        return True, _purged(conn, scan_id), findings, executive
+        return True, audit.is_scan_purged(conn, scan_id), findings, executive
 
     exists, purged, finding_rows, executive_row = await db.run(load)
     if not exists:

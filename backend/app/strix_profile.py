@@ -1,7 +1,7 @@
 """`strix-agent` 的**上游事实**：目录名、记录文件名、状态取值域、退出码、归因规则表。
 
 放在 `app/` 顶层而不是 `app/strix_bridge/`：后者的定义是"唯一允许 import `strix.*` 的
-地方"（import-linter 强制），而本模块**零 `strix` import** —— 它是一张照着源码抄下来的
+地方"（`tests/test_strix_contract.py` 强制），而本模块**零 `strix` import** —— 它是一张照着源码抄下来的
 对照表，不是桥。让它进 `strix_bridge/` 会稀释那条边界的含义。
 
 为什么按版本索引：pin 是精确的（`strix-agent==1.6.2`），但升级是允许的（跟 minor），
@@ -41,6 +41,10 @@ class StrixProfile:
     agents_record_rel_path: str
     agents_db_rel_path: str
     vulnerabilities_rel_path: str
+    # 三个直通导出的文件名（都在 run 目录根下），T23 原样下发，不经我们改写。
+    report_markdown_name: str
+    vulnerabilities_csv_name: str
+    sarif_name: str
     # 日志文件名。它**不在** stat 门里（日志几乎一直在长，盯它等于让门永不生效），但同样是
     # 一个会随上游版本变的名字 —— 所以归属地是这张表，不是某个模块的常量。
     log_file_name: str
@@ -101,6 +105,9 @@ _P_1_6_2 = StrixProfile(
     agents_record_rel_path=".state/agents.json",
     agents_db_rel_path=".state/agents.db",
     vulnerabilities_rel_path="vulnerabilities.json",
+    report_markdown_name="penetration_test_report.md",  # report/writer.py:140
+    vulnerabilities_csv_name="vulnerabilities.csv",  # report/writer.py:169
+    sarif_name="findings.sarif",  # report/sarif.py:343
     log_file_name="strix.log",  # telemetry/logging.py 的 FileHandler 写在 run 目录根下
     # `core/agents.py:25` 的 7 个，**外加 `interrupted`** —— 后者不在那个枚举里，是
     # `interface/cli.py:135` 的信号处理器经 `report_state.cleanup(status="interrupted")`

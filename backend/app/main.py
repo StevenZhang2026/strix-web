@@ -90,6 +90,7 @@ from app.logging_setup import Redactor, configure_logging, trace_id_var
 from app.routes import allowlist as allowlist_routes
 from app.routes import audit as audit_routes
 from app.routes import auth as auth_routes
+from app.routes import downloads as downloads_routes
 from app.routes import health as health_routes
 from app.routes import keys as keys_routes
 from app.routes import providers as providers_routes
@@ -603,6 +604,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 所以这条路由的安全性也依赖于**永远不装 CORSMiddleware**（CLAUDE.md §安全不变式）。
     app.include_router(scans_routes.router)
     app.include_router(report_routes.router)
+    app.include_router(downloads_routes.router)
     # T16b。`/ws/scans/{id}`（扫描帧的直播出口）同样刻意**不在** `/api/scans` 前缀下 ——
     # 挂到上面那个 router 上会静默变成 `/api/scans/ws/scans/{id}`，而 nginx 的四条 WS
     # upgrade 指令在 `location /ws/` 下。见 `routes/stream.py` 里 `ws_router` 的注释。

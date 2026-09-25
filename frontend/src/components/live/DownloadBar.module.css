@@ -1,0 +1,23 @@
+/* 终态下载条。只用 token，零 `box-shadow`；`.label`／`.hint` 照 `ResumePanel.module.css`。 */
+.root { display: flex; flex-direction: column; gap: var(--s2); }
+.links { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+
+.label {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+
+.link {
+  padding: var(--s2) var(--s3);
+  font-size: var(--fs-3);
+  color: var(--ink);
+  text-decoration: none;
+  background: var(--sheet);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-act);
+}
+
+.link:hover { border-color: var(--ink-2); }
+.hint { margin: 0; max-width: var(--measure); font-size: var(--fs-2); color: var(--ink-mute); }

@@ -194,6 +194,12 @@
   },
 
   "scan": {
+    "downloadsTitle": "下载",
+    "downloadReportMd": "报告（Markdown）",
+    "downloadCsv": "漏洞清单（CSV）",
+    "downloadSarif": "SARIF",
+    "downloadRawZip": "原始产物（zip）",
+    "downloadRawZipHint": "zip 含完整日志与扫描指令（包括你填写的测试账号），请妥善保管。",
     "stampTarget": "测试目标",
     "stampResolved": "解析到",
     "stampAuthorization": "授权依据",
