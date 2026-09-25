@@ -135,12 +135,18 @@ def read_coverage_complete(run_dir: Path, profile: StrixProfile) -> bool:
 
 
 def read_coverage_gaps(run_dir: Path, profile: StrixProfile) -> tuple[str, ...]:
-    """`coverage.json` 的 `gaps` 里可安全内联的「面」标签，去重、保序。**不抛**。
+    """`coverage.json` 里**从未被记录过的风险类**，去重、保序。**不抛**。
 
-    只取受控词表字段：`unrecorded_risk_class` 的 `risk_area`（`sql injection`／`xss`…，
-    等于 Strix 的 skill 名）与 `agent_recorded_no_coverage` 的 `agent_name`（我们／Strix
-    生成的名字）。**绝不取 `detail`** —— 那是 LLM 写的散文，可能含测试账号口令，内联进
-    续跑指令就会明文落回 `run.json`（`compose_resume_instruction` 上方 N1）。
+    只取 `risk_area`。它不是自由文本：`report/coverage.py:257` 用 `skill.replace("_", " ")`
+    生成它，所以每个值都是一个 Strix 技能名 —— 倒回下划线就能直接喂 `create_agent(skills=…)`
+    （那一步在 `compose_resume_instruction` 里做）。
+
+    **`agent_name` 一律不取**（曾取过，2026-09-25 实测后删掉）：那是已被强停的 agent 的名字，
+    而 `create_agent` 的文档要求 root"先 `view_agent_graph` 确认没有现存 agent 覆盖此范围"。
+    把这些名字塞进补测清单，root 只会判定"已经有人覆盖"然后直接收尾 —— 实测 9 项清单换来
+    0 个新 agent。
+    **绝不取 `detail`** —— 那是 LLM 写的散文，可能含测试账号口令，内联进续跑指令就会明文
+    落回 `run.json`。
 
     缺失／读坏／形状不对 → `()`：续跑指令据此退回"自己 list_coverage"那句，不因此失败
     （与 `read_coverage_complete` 同一种"没有证据就返回空"的克制）。
@@ -165,8 +171,6 @@ def read_coverage_gaps(run_dir: Path, profile: StrixProfile) -> tuple[str, ...]:
         if not isinstance(gap, dict):
             continue
         label = gap.get("risk_area")
-        if not isinstance(label, str):
-            label = gap.get("agent_name")
         if not isinstance(label, str):
             continue
         label = label.strip()

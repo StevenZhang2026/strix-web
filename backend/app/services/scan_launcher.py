@@ -410,10 +410,14 @@ def compose_resume_instruction(
     口令字段又已禁 `\n`，所以原文里不可能先出现这个标记。
     不加尾随换行：Strix 读文件时 `.strip()`，读回的必须就是写下的，否则下一次剥离对不上。
 
-    `gaps` 是 `read_coverage_gaps` 提取的**受控词表面标签**（`risk_area`／`agent_name`，
-    绝无 `detail` 散文）。非空就把它们排成编号任务清单，让 root 更可能"每个缺口派一个新
-    子 agent"而不是自己一把梭 —— 这是可靠性改善、不是保证（最终由 LLM 决定）。空（旧产物
-    或读坏）就退回"自己 list_coverage"那句，绝不编造清单。
+    `gaps` 是 `read_coverage_gaps` 提取的 `risk_area`（= 技能名的空格形式，绝无 `detail`
+    散文）。非空就排成编号清单，每项倒回下划线 —— 那正是 `create_agent(skills=[…])` 收的
+    字面量，root 照抄即可。空（旧产物或读坏）就退回"自己 list_coverage"那句，绝不编造清单。
+
+    **作废图里的 `stopped` agent 那两句是承重的，不是修辞**：`create_agent` 的文档要求 root
+    "先 `view_agent_graph` 确认没有现存 agent 覆盖此范围"，而被强停的那几个 agent 正顶着这些
+    范围的名字。不正面顶掉那条去重指引，root 会把清单读成"都有人管了"然后收尾（2026-09-25
+    实测：0 个新 agent）。这仍是提高概率、不是保证 —— 派不派最终由模型决定。
     """
     base = original.partition(_RESUME_MARKER)[0]
     head = (
@@ -427,13 +431,19 @@ def compose_resume_instruction(
         "Do NOT call finish_scan yet."
     )
     if gaps:
-        checklist = "\n".join(f"{index}. {label}" for index, label in enumerate(gaps, start=1))
+        checklist = "\n".join(
+            f"{index}. {label.replace(' ', '_')}" for index, label in enumerate(gaps, start=1)
+        )
         tail = (
-            " The coverage report flags these surfaces as still untested or under-covered."
-            " Spawn ONE dedicated sub-agent for EACH of them and wait for it to finish:\n"
+            " Every sub-agent shown as stopped in view_agent_graph is DEAD: it will never run"
+            " again and covers nothing, whatever its name says. A new agent for the same scope is"
+            " NOT a duplicate — spawning it is required.\n"
+            "The coverage report shows these risk classes were never tested. For EACH one, call"
+            " create_agent with skills=[<that name>] and a task naming the target, then call"
+            " wait_for_agents:\n"
             f"{checklist}\n"
-            "Only call finish_scan once the remaining budget is nearly exhausted or every"
-            " surface above is covered."
+            "Only call finish_scan once every class above has a completed agent or the remaining"
+            " budget is nearly exhausted."
         )
     else:
         tail = (

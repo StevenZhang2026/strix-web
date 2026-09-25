@@ -618,18 +618,41 @@ def test_resume_instruction_survives_strix_strip() -> None:
     assert text == text.strip()
 
 
-def test_resume_instruction_inlines_gaps_as_a_numbered_checklist() -> None:
-    """有 gap 清单时，指令里出现每个面的编号任务行，且仍能剥回口令、无尾随空白。"""
+def test_resume_instruction_inlines_gaps_as_a_create_agent_checklist() -> None:
+    """清单项是**技能名**（下划线形式）且点名 `create_agent`。
+
+    `risk_area` 是 `skill.replace("_", " ")` 生成的（`report/coverage.py:257`），倒回去就是
+    `create_agent(skills=[...])` 能直接收的字面量 —— 给它能直接照抄的形状，比给一个它还要
+    自己翻译一次的短语更可能真的被执行。
+    """
     original = _composed((_cred(),))
     text = scan_launcher.compose_resume_instruction(
         original, spent_usd=1.0, budget_usd=4.0, gaps=("sql injection", "xss", "ssrf")
     )
-    assert "1. sql injection" in text
+    assert "1. sql_injection" in text
     assert "2. xss" in text
     assert "3. ssrf" in text
+    assert "create_agent" in text
     assert scan_launcher.recover_test_credentials(text) == (_cred(),)
     assert text == text.strip()
     assert text.count("## Resumed scan") == 1
+
+
+def test_resume_instruction_voids_the_stopped_agents_in_the_graph() -> None:
+    """必须显式作废图里那些 `stopped` agent，否则 root 会判"已覆盖"然后收尾。
+
+    这是 2026-09-25 那次真跑的直接教训：`create_agent` 的文档要求它"先 `view_agent_graph`
+    确认没有现存 agent 覆盖此范围"，而被强停的 3 个 agent 正好顶着那些范围的名字。不把它们
+    作废，任何清单都只会被读成"这些都有人管了"。
+    """
+    text = scan_launcher.compose_resume_instruction(
+        _composed(()), spent_usd=1.0, budget_usd=4.0, gaps=("xss",)
+    )
+    section = text.partition("## Resumed scan")[2]
+    assert "view_agent_graph" in section
+    assert "stopped" in section
+    # 「同范围的新 agent 不算重复」这句话必须在场 —— 它正面顶掉那条去重指引。
+    assert "not a duplicate" in section.lower()
 
 
 def test_resume_instruction_without_gaps_has_no_checklist() -> None:

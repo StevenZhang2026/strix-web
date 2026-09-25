@@ -139,8 +139,12 @@ def test_coverage_complete_only_on_literal_true(
     assert read_coverage_complete(run_dir, PROFILE) is expected
 
 
-def test_coverage_gaps_extracts_safe_surface_labels(tmp_path: Path) -> None:
-    """两类 gap 的受控词表字段都取，去重、保序。"""
+def test_coverage_gaps_takes_only_the_risk_area_vocabulary(tmp_path: Path) -> None:
+    """只取 `risk_area`（= Strix 技能名，`report/coverage.py:257` 由 `skill.replace("_"," ")` 生成），
+    去重保序。**`agent_name` 一律不取**：那是已被停掉的 agent 的名字，把它塞进续跑清单等于叫
+    root 去建一个"同名 agent 已存在"的 agent —— `create_agent` 的文档要求它先查图去重，于是
+    它会判定"已覆盖"然后直接收尾（2026-09-25 实测：9 项清单换来 0 个新 agent）。
+    """
     run_dir = make_run_dir(tmp_path)
     make_coverage_json(
         run_dir,
@@ -152,7 +156,7 @@ def test_coverage_gaps_extracts_safe_surface_labels(tmp_path: Path) -> None:
             {"kind": "unrecorded_risk_class", "risk_area": "sql injection", "detail": "dup"},
         ],
     )
-    assert read_coverage_gaps(run_dir, PROFILE) == ("sql injection", "xss", "idor-tester")
+    assert read_coverage_gaps(run_dir, PROFILE) == ("sql injection", "xss")
 
 
 def test_coverage_gaps_never_leak_the_detail_prose(tmp_path: Path) -> None:
@@ -183,6 +187,11 @@ def test_coverage_gaps_never_leak_the_detail_prose(tmp_path: Path) -> None:
         ),
         pytest.param(
             [{"kind": "unrecorded_risk_class", "risk_area": 42}], (), id="non-string-skipped"
+        ),
+        pytest.param(
+            [{"kind": "agent_recorded_no_coverage", "agent_name": "XSS Agent"}],
+            (),
+            id="agent-name-gap-skipped",
         ),
     ],
 )
