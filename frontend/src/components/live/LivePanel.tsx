@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ErrorNotice } from "@/components/errors/ErrorNotice";
+import { ReportPanel } from "@/components/report/ReportPanel";
 import { StatusDot, type DotTone } from "@/components/ui/StatusDot";
 import { ApiError, fetchScan, stopScan } from "@/lib/api/client";
 import { t, type MessageKey } from "@/lib/messages";
@@ -70,6 +71,7 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
     queryFn: ({ signal }) => fetchScan(scanId, signal),
   });
   const [stop, setStop] = useState<StopState>({ kind: "idle" });
+  const [tab, setTab] = useState<"live" | "report">("live");
 
   if (live.connection === "not_found") {
     return <ErrorNotice code="not_found" />;
@@ -99,6 +101,7 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
     scan.error_code !== null &&
     RESUMABLE_ERROR_CODES.has(scan.error_code) &&
     !canStop;
+  const canReport = scan !== undefined && FINISHED_STATUSES.has(scan.status) && !canStop;
 
   async function onStop() {
     setStop({ kind: "pending" });
@@ -113,60 +116,80 @@ export function LivePanel({ scanId }: { readonly scanId: string }) {
   return (
     <div className={styles.root}>
       <div className={styles.tabs} role="tablist">
-        <span className={styles.tabActive} role="tab" aria-selected="true">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "live"}
+          className={tab === "live" ? `${styles.tab} ${styles.active}` : styles.tab}
+          onClick={() => setTab("live")}
+        >
           {t("scan.tabLive")}
-        </span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "report"}
+          className={tab === "report" ? `${styles.tab} ${styles.active}` : styles.tab}
+          disabled={!canReport}
+          onClick={() => setTab("report")}
+        >
+          {t("scan.tabReport")}
+        </button>
       </div>
 
-      <p className={styles.connection}>
-        <StatusDot tone={CONNECTION_TONE[live.connection]} />
-        {t(CONNECTION_LABEL[live.connection])}
-      </p>
+      {tab === "report" && canReport ? (
+        <ReportPanel scanId={scanId} />
+      ) : (
+        <>
+          <p className={styles.connection}>
+            <StatusDot tone={CONNECTION_TONE[live.connection]} />
+            {t(CONNECTION_LABEL[live.connection])}
+          </p>
 
-      <NoticeBar notices={live.notices} />
+          <NoticeBar notices={live.notices} />
 
-      <ScanHeader
-        scanId={scanId}
-        scan={scan}
-        stop={stop}
-        canStop={canStop}
-        onStop={() => void onStop()}
-      />
+          <ScanHeader
+            scanId={scanId}
+            scan={scan}
+            stop={stop}
+            canStop={canStop}
+            onStop={() => void onStop()}
+          />
 
-      {!canResume ? null : (
-        // `key`：续跑后换代，本地 state（展开、总额、失败）一起重置。
-        <ResumePanel
-          key={generation}
-          scan={scan}
-          onResumed={() => {
-            setStop({ kind: "idle" });
-            setGeneration((g) => g + 1);
-            void queryClient.invalidateQueries({ queryKey: ["scan", scanId] });
-          }}
-        />
+          {!canResume ? null : (
+            // `key`：续跑后换代，本地 state（展开、总额、失败）一起重置。
+            <ResumePanel
+              key={generation}
+              scan={scan}
+              onResumed={() => {
+                setStop({ kind: "idle" });
+                setGeneration((g) => g + 1);
+                void queryClient.invalidateQueries({ queryKey: ["scan", scanId] });
+              }}
+            />
+          )}
+          {canReport ? <DownloadBar scanId={scanId} /> : null}
+
+          <div className={styles.grid}>
+            <AgentTree agents={agents} />
+            <CostMeter
+              cost={cost}
+              maxBudgetUsd={scan?.max_budget_usd ?? null}
+              canStop={canStop}
+              stopPending={stop.kind === "pending"}
+              onStop={() => void onStop()}
+            />
+          </div>
+
+          <div className={styles.grid}>
+            <EventFeed events={live.events} />
+            <div className={styles.column}>
+              <Terminal events={live.events} />
+              <ScreenshotGallery events={live.events} scanId={scanId} />
+            </div>
+          </div>
+        </>
       )}
-      {scan !== undefined && FINISHED_STATUSES.has(scan.status) && !canStop ? (
-        <DownloadBar scanId={scanId} />
-      ) : null}
-
-      <div className={styles.grid}>
-        <AgentTree agents={agents} />
-        <CostMeter
-          cost={cost}
-          maxBudgetUsd={scan?.max_budget_usd ?? null}
-          canStop={canStop}
-          stopPending={stop.kind === "pending"}
-          onStop={() => void onStop()}
-        />
-      </div>
-
-      <div className={styles.grid}>
-        <EventFeed events={live.events} />
-        <div className={styles.column}>
-          <Terminal events={live.events} />
-          <ScreenshotGallery events={live.events} scanId={scanId} />
-        </div>
-      </div>
     </div>
   );
 }

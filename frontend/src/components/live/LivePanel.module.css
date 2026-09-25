@@ -1,14 +1,19 @@
 /* 实时面板骨架。只用 token，零 `box-shadow`。 */
 .root { display: flex; flex-direction: column; gap: var(--s5); }
 .tabs { display: flex; gap: var(--s4); border-bottom: 1px solid var(--rule); }
-.tabActive {
+.tab {
   padding: var(--s2) 0;
   margin-bottom: -1px;
-  border-bottom: 2px solid var(--ink);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font: inherit;
   font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--ink);
+  color: var(--ink-2);
+  cursor: pointer;
 }
+.tab.active { border-bottom-color: var(--ink); font-weight: 600; color: var(--ink); }
+.tab:disabled { color: var(--ink-mute); cursor: default; }
 .connection {
   display: flex;
   align-items: center;

@@ -760,3 +760,44 @@ export function resumeScan(scanId: string, request: ResumeScanRequest): Promise<
   const path = `/api/scans/${encodeURIComponent(scanId)}/resume`;
   return apiFetch<ScanAcceptedResponse>(path, { body: request });
 }
+
+export type ReportJobStatus = "idle" | "running" | "done" | "failed";
+
+export interface TranslateResultView {
+  readonly translated_findings: number;
+  readonly cached_findings: number;
+  readonly failed_findings: number;
+  readonly executive: "translated" | "cached" | "failed";
+  /** `null` = 至少一次算不出，不是 0。 */
+  readonly cost_usd: number | null;
+}
+
+export interface ReportZhResponse {
+  readonly status: ReportJobStatus;
+  /** 只有 `done` 时非空。 */
+  readonly result: TranslateResultView | null;
+  readonly findings_zh: readonly Readonly<Record<string, unknown>>[];
+  readonly executive_zh: Readonly<Record<string, unknown>> | null;
+}
+
+export function fetchReportZh(scanId: string, signal?: AbortSignal): Promise<ReportZhResponse> {
+  const path = `/api/scans/${encodeURIComponent(scanId)}/report/zh`;
+  return apiFetch<ReportZhResponse>(path, signal === undefined ? {} : { signal });
+}
+
+/**
+ * `POST /api/scans/{id}/report/zh` → `202`。**会真的调模型花钱**：调用点手写 `async`，
+ * 不包 `useMutation`（照 `resumeScan`）。
+ */
+export function startReportZh(
+  scanId: string,
+  request: { readonly vault_handle: string; readonly force: boolean },
+): Promise<{ readonly status: "running" }> {
+  const path = `/api/scans/${encodeURIComponent(scanId)}/report/zh`;
+  return apiFetch<{ readonly status: "running" }>(path, { body: request });
+}
+
+/** 打印版报告的同源路径：iframe 与「新标签页打开」共用。 */
+export function reportPrintPath(scanId: string): string {
+  return `/api/scans/${encodeURIComponent(scanId)}/report/print`;
+}

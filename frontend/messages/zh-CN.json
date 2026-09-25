@@ -557,6 +557,28 @@
     "submit": "继续这次扫描"
   },
 
+  "report": {
+    "generate": "生成中文报告",
+    "fill": "补全中文报告",
+    "regenerate": "全部重新生成",
+    "regenerateHint": "会把所有条目重新译一遍，全部重新计费。",
+    "running": "正在生成…",
+    "openPrint": "新标签页打开（可存 PDF）",
+    "printHint": "新标签页打开后按 ⌘P／Ctrl+P 存为 PDF。",
+    "credentialsNote": "生成中文报告需要一份模型凭据（任选一家，与扫描用的无关）。",
+    "modelNote": "报告用这份凭据的模型生成。",
+    "resultTranslated": "新译",
+    "resultCached": "沿用",
+    "resultFailed": "未译成",
+    "resultCost": "本轮费用",
+    "costUnknown": "算不出（该模型没有价目）",
+    "partialFailed": "有条目没译成，报告里这些条目显示原文；可再点一次补全。",
+    "jobFailed": "这次生成中途失败了，已经译好的条目会保留，再点一次「补全」只补剩下的。",
+    "loading": "正在读取中文报告…",
+    "generating": "中文报告生成中，完成后会自动显示。",
+    "frameTitle": "中文报告"
+  },
+
   "resumeRefusal": {
     "not_resumable": "只有因费用或轮次用完、被手动停止、或控制台重启而中断，且当前没在运行的扫描才能继续。",
     "strix_version_changed": "Strix 升级过，上次留下的产物不保证与新版本兼容，请重新发起扫描。",
