@@ -4,7 +4,10 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-25 夜）：**T29、T23＋T24 并发派发并收货提交；T22 方案用户拍板（照推荐），下一步写 T22a 交底**
+### 最新（2026-09-25 夜）：**T29、T23＋T24 并发派发并收货提交；T22 方案用户拍板（照推荐），T22a 已收货提交；下一步写 T22b 交底**
+
+- **T22a 交底** `~/Documents/claude/dispatch/T22a/prompt.md`（模板 2，2 个新文件，≈420 行；预算 ≤30 次调用、峰值 <90k、0 压缩、第 5 次调用前开写）。交底时定的：入参是 `ReportScan`／`ReportFinding`（`raw`＝解析后的 `raw_json`、`zh: FindingZh | None`）＋ `ExecutiveZh | None` ＋ `report_cost_usd: float | None`；**属性里只出现固定常量**（severity 走固定映射表，未知值 `sev-other`）→ I1 只剩文本节点转义；证据块多带 `poc_description`（它也不进模型，否则在报告里彻底丢失）；结论 `complete = completed 且 error_code is None`，其余一律「结论不完整」+ 状态/原因码，空列表文案「没有记录到发现条目」。T22b 负责：按 `GET report/zh` 同一"最新有效译文"查询填 `zh`，`report_cost_usd` 任一行 NULL 就传 None。**收货 mutation**：M1 某一字段（如 `endpoint`）绕过 `_e`（只红 I1 那一格）、M2 有 zh 就不附证据块（红 I2 zh 那格）、M3 evidence 截断 `[:10000]`（红 I2 两格）、M4 `complete` 不看 error_code（红 `coverage_incomplete` 那格）、M5 空状态文案改"没有发现漏洞"（红 I3 各格）；自选至少一处。
+- **✅ 2026-09-25 T22a 收货**：`exporter_html.py` 234 行＋`test_exporter_html.py` 265 行／50 用例；`make lint` 绿、`make test` **1494 passed / 0 skipped**。子 agent **9 次调用、≈61k、0 压缩**。整读无缺陷。**两处由主会话修**：① 交底自相矛盾（不完整正文「没有完整跑完」含禁用短语「完整跑完」），子 agent 把测试的禁用短语收窄成「扫描完整跑完」→ 改回严格版、正文改「没有跑完」；② **自选 M8「未知 severity 拼进 class 属性」0 红**：PAYLOAD 的 `"` 在末尾，整段困在属性值里 → PAYLOAD 改以 `"'>` 开头，复跑红 1。mutation 8 处全对：M1 红 1、M2 红 5（四个证据字段的 I1 格用 zh=FZH 构造，一并红，合理）、M3 红 2、M4 红 2（多红的 `scan.error_code` 格：completed＋有码时状态行不出现，合理）、M5 红 6、M6 红 1、M7 红 1、M8 红 1。**T22b 交底要贴**：`ReportScan`／`ReportFinding` 定义与 `render_report_html` 签名（`exporter_html.py:27-49,210-215`）、`GET report/zh` 的取数（`routes/report.py:257-297`，提成共用函数）、`downloads.py::_finished_scan`（`:62-76`）；`report_cost_usd` 任一行 NULL 传 None。
 
 - **T22 方案** `~/Documents/claude/dispatch/T22/plan.md`（用户确认）：后端单一渲染器 `exporter_html.render_report_html` → 自包含零 JS HTML（CSP `default-src 'none'`）；报告 tab = `<iframe sandbox>` 嵌 `GET /api/scans/{id}/report/print`，导出 PDF = 新标签页 ⌘P；截图 v1 不放。拆 **T22a**（纯函数，TDD，I1 转义／I2 证据原样只取 raw／I3 结论不越权）→ **T22b**（路由＋CSP＋取数，复用 GET report/zh 的"最新译文"查询）→ **T22c**（前端 tab，模板 3 已由本方案覆盖，确认即派实现）。前置判定复用 `routes/downloads.py::_finished_scan`。
 - **记下不追**：`_db`／`_settings` getter 已在 `report.py`、`downloads.py` 各抄一份（T22b 若再要就提到 `routes/_context.py`）。
