@@ -361,6 +361,35 @@ def insert_scan(
     )
 
 
+# 合格的模型输出样本：`test_translator` 与 `test_routes_report` 共用。
+FINDING_OK = json.dumps(
+    {
+        "title_zh": "订单接口可越权查看他人订单",
+        "what_zh": "登录用户改地址里的编号就能看别人的订单。",
+        "impact_zh": "客户姓名与地址外泄。",
+        "fix_zh": "服务端校验订单归属。",
+        "severity_zh_label": "高危",
+        "severity_reason_zh": "CVSS 7.5，已复现。",
+        "effort_zh": "半天",
+        "who_fixes_zh": "后端开发",
+        "confidence_zh": "已确认",
+        "layman_analogy_zh": "",
+    },
+    ensure_ascii=False,
+)
+EXEC_OK = json.dumps(
+    {
+        "summary_zh": "发现一处高危越权。",
+        "risk_verdict_zh": "高",
+        "top3_actions_zh": ["修复订单越权"],
+        "scope_zh": "juice-shop",
+        "coverage_zh": "部分覆盖",
+        "not_tested_zh": ["文件上传未测"],
+    },
+    ensure_ascii=False,
+)
+
+
 # =============================================================================
 # docker 替身（`test_docker_probe.py` 与 `test_reaper.py` 共用）
 # =============================================================================

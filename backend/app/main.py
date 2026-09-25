@@ -93,11 +93,13 @@ from app.routes import auth as auth_routes
 from app.routes import health as health_routes
 from app.routes import keys as keys_routes
 from app.routes import providers as providers_routes
+from app.routes import report as report_routes
 from app.routes import scans as scans_routes
 from app.routes import stream as stream_routes
 from app.routes import system as system_routes
 from app.routes import targets as targets_routes
 from app.routes import templates as templates_routes
+from app.routes.report import ReportJob
 from app.services import dns_resolver, llm_client
 from app.services.allowlist import AllowlistStore
 from app.services.audit import iso_utc
@@ -447,6 +449,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # T7b。`POST /api/keys` 的验活器。与上面那个 resolver 同一条理由：单测必须能
         # 换掉它（真实验活会拿凭据往模型端点发一次请求）。
         app.state.llm_verifier = llm_client.verify
+        # T21c。中文报告的模型调用，理由同上：单测必须能换掉它。
+        app.state.llm_completer = llm_client.complete
         # T10。**必须在本轮就接进 lifespan**：否则 `shutdown()` 没有调用方，那就是一段
         # 没人跑过的代码。路由是 T12 的事，这里只让它有主。
         # T11a。两者互相要一个东西，所以 reaper 先建：它拿的是"到时候去问在册 id"的
@@ -477,6 +481,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # GC 掉（标准库明写这一点），而它正是唯一会写终态列的地方。
         scan_tasks: set[asyncio.Task[None]] = set()
         app.state.scan_tasks = scan_tasks
+        report_jobs: dict[str, ReportJob] = {}
+        app.state.report_jobs = report_jobs
         # T28。破坏性操作，**默认关**：天数为 0 时 `run_forever` 自己就立刻返回，所以
         # 这里刻意不写 `if resolved.console_retention_days > 0` —— 开关有两个落点就
         # 一定会有一天不一致。路径一律用 `Settings` 上已有的 property，不自己拼。
@@ -516,6 +522,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # （表现是一句 ProgrammingError，以及一行永远卡在 running 的扫描）。
             # `return_exceptions=True`：一个任务的异常不许挡住其它任务的收尾。
             await asyncio.gather(*tuple(scan_tasks), return_exceptions=True)
+            # T21c。在翻的中文报告**cancel 而不是等**：一次翻译可能要几分钟；被 cancel 的
+            # 任务在 `finally` 里照样 release 凭据；排在 `db.close()` 之前，理由同上面那条 drain。
+            report_tasks = [job.task for job in report_jobs.values() if job.task is not None]
+            for task in report_tasks:
+                task.cancel()
+            await asyncio.gather(*report_tasks, return_exceptions=True)
             # W2c。**排在 gather 之后**：正常结束的扫描由 `_run_to_completion` 的 finally
             # 自己关掉 channel，这里收的是"那个后台任务被 cancel 掉／死得不正常，没走到
             # finally"留下的残留。**也必须排在 `db.close()` 之前**：`finish()` 的最后一次
@@ -590,6 +602,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 目标。挡住"任意网页跨域打它"的是「没有 CORS」+「只把 application/json 喂给 Pydantic」，
     # 所以这条路由的安全性也依赖于**永远不装 CORSMiddleware**（CLAUDE.md §安全不变式）。
     app.include_router(scans_routes.router)
+    app.include_router(report_routes.router)
     # T16b。`/ws/scans/{id}`（扫描帧的直播出口）同样刻意**不在** `/api/scans` 前缀下 ——
     # 挂到上面那个 router 上会静默变成 `/api/scans/ws/scans/{id}`，而 nginx 的四条 WS
     # upgrade 指令在 `location /ws/` 下。见 `routes/stream.py` 里 `ws_router` 的注释。

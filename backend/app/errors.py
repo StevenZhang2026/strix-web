@@ -315,6 +315,23 @@ class OriginMismatchError(ConsoleError):
     status = 403
 
 
+# =============================================================================
+# 中文报告（T21c：routes/report）
+# =============================================================================
+class ScanNotFinishedError(ConsoleError):
+    """扫描还没到终态：结论随时会变，现在翻就是给一份会过期的报告付钱。"""
+
+    code = "scan_not_finished"
+    status = 409
+
+
+class ReportInProgressError(ConsoleError):
+    """同一个扫描已有一次翻译在跑。进程内判定（`app.state.report_jobs`），同时再来一次只会重复付费。"""
+
+    code = "report_in_progress"
+    status = 409
+
+
 # 手写扁平登记表。见模块 docstring「刻意不做的事」第 1 条。
 # 顺序与上方定义顺序一致，方便对读。
 ALL_ERRORS: tuple[type[ConsoleError], ...] = (
@@ -340,6 +357,8 @@ ALL_ERRORS: tuple[type[ConsoleError], ...] = (
     InvalidCredentialsError,
     AuthLockedError,
     OriginMismatchError,
+    ScanNotFinishedError,
+    ReportInProgressError,
 )
 
 
