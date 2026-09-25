@@ -89,16 +89,106 @@ _SEVERITY: Final = MappingProxyType(
     }
 )
 
-_EVIDENCE_KEYS: Final = ("poc_description", "poc_script_code", "evidence", "code_locations")
+EVIDENCE_KEYS: Final = ("poc_description", "poc_script_code", "evidence", "code_locations")
 
 _VERDICT_FOUND: Final = "扫描完整跑完，发现了漏洞，逐条见下文。"
 _VERDICT_CLEAN: Final = "扫描完整跑完，没有发现漏洞。"
-_INCOMPLETE_TITLE: Final = "结论不完整"
-_INCOMPLETE_BODY: Final = (
+INCOMPLETE_TITLE: Final = "结论不完整"
+INCOMPLETE_BODY: Final = (
     "这次扫描没有跑完，或它的覆盖记录显示有部分没测完。已经找到的问题都还在，"
     "但没测到的部分无从判断 —— 这次结果不能当作「目标没有问题」。"
 )
-_EMPTY_FINDINGS: Final = "这次扫描没有记录到发现条目。"
+EMPTY_FINDINGS: Final = "这次扫描没有记录到发现条目。"
+NO_ZH_TAG: Final = "未生成中文版"
+TECH_HEADING: Final = "技术细节（原文，未翻译）"
+
+# 总述的小标题：HTML 与 Word 两个渲染器共用，措辞只有这一份源头。
+EXEC_TITLE: Final = "总述"
+EXEC_MISSING: Final = "尚未生成中文总述。"
+EXEC_SUMMARY: Final = "总述"
+EXEC_RISK: Final = "风险判断"
+EXEC_TOP3: Final = "优先做的三件事"
+EXEC_SCOPE: Final = "测试范围"
+EXEC_COVERAGE: Final = "覆盖情况"
+EXEC_NOT_TESTED: Final = "未测试／需跟进"
+EXEC_NOT_LISTED: Final = "（未列出）"
+
+
+def verdict_sentence(scan: ReportScan) -> str | None:
+    """完整跑完才给结论句；返回 None 时调用方必须渲染「结论不完整」。"""
+    # 必须同时看 status 与 error_code：coverage_incomplete 是 status=completed 但覆盖记录显示没测完，
+    # 只看 status 会把它说成「完整跑完、没有发现漏洞」—— 这是把没测到的部分当成没问题（发布阻断）。
+    complete = scan.status == "completed" and scan.error_code is None
+    if complete and scan.exit_meaning == "vulnerabilities_found":
+        return _VERDICT_FOUND
+    if complete and scan.exit_meaning == "no_vulnerabilities_found":
+        return _VERDICT_CLEAN
+    return None
+
+
+def severity_label(severity: str) -> str:
+    entry = _SEVERITY.get(severity)
+    return entry[1] if entry is not None else ""
+
+
+def _sort_key(f: ReportFinding) -> tuple[int, tuple[int, float], str]:
+    rank = (
+        SEVERITY_BUCKETS.index(f.severity)
+        if f.severity in SEVERITY_BUCKETS
+        else len(SEVERITY_BUCKETS)
+    )
+    cvss = (0, -f.cvss) if f.cvss is not None else (1, 0.0)
+    return (rank, cvss, f.finding_id)
+
+
+def sorted_findings(findings: Sequence[ReportFinding]) -> list[ReportFinding]:
+    return sorted(findings, key=_sort_key)
+
+
+def finding_sections(f: ReportFinding) -> list[tuple[str, str]]:
+    """每条发现的 (小标题, 正文)：有译文用译文，没有就用原文里非空的那几项。"""
+    zh = f.zh
+    if zh is not None:
+        sections = [
+            ("问题是什么", zh.what_zh),
+            ("影响", zh.impact_zh),
+            ("怎么修", zh.fix_zh),
+            ("严重度依据", zh.severity_reason_zh),
+            ("修复工作量", zh.effort_zh),
+            ("谁来修", zh.who_fixes_zh),
+            ("可信度", zh.confidence_zh),
+        ]
+        if zh.layman_analogy_zh:
+            sections.append(("打个比方", zh.layman_analogy_zh))
+        return sections
+    sections = []
+    for key, heading in (
+        ("description", "描述"),
+        ("impact", "影响"),
+        ("remediation_steps", "修复"),
+    ):
+        value = f.raw.get(key)
+        if isinstance(value, str) and value:
+            sections.append((heading, value))
+    return sections
+
+
+def evidence_blocks(f: ReportFinding) -> list[tuple[str, str]]:
+    """证据只从 raw 取、全文不截断；非字符串（如 code_locations）按 JSON 缩进展开。"""
+    blocks = []
+    for key in EVIDENCE_KEYS:
+        value = f.raw.get(key)
+        if value is None or value == "":
+            continue
+        body = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
+        blocks.append((key, body))
+    return blocks
+
+
+def cost_line(report_cost_usd: float | None) -> str:
+    if report_cost_usd is None:
+        return "报告生成费用：无法计算（有调用没有返回计费信息）"
+    return f"报告生成费用：${report_cost_usd:.4f}"
 
 
 def _e(value: object) -> str:
@@ -124,85 +214,53 @@ def _render_header(scan: ReportScan, out: list[str]) -> None:
 
 
 def _render_verdict(scan: ReportScan, out: list[str]) -> None:
-    # 必须同时看 status 与 error_code：coverage_incomplete 是 status=completed 但覆盖记录显示没测完，
-    # 只看 status 会把它说成「完整跑完、没有发现漏洞」—— 这是把没测到的部分当成没问题（发布阻断）。
-    complete = scan.status == "completed" and scan.error_code is None
-    if complete and scan.exit_meaning == "vulnerabilities_found":
-        out.append(f'<div class="verdict"><h2>结论</h2><p>{_VERDICT_FOUND}</p></div>')
-    elif complete and scan.exit_meaning == "no_vulnerabilities_found":
-        out.append(f'<div class="verdict"><h2>结论</h2><p>{_VERDICT_CLEAN}</p></div>')
+    sentence = verdict_sentence(scan)
+    if sentence is not None:
+        out.append(f'<div class="verdict"><h2>结论</h2><p>{sentence}</p></div>')
     else:
         status_line = f"状态：{_e(scan.status)}；原因码：{_or_dash(scan.error_code)}"
         out.append(
-            f'<div class="verdict incomplete"><h2>{_INCOMPLETE_TITLE}</h2>'
-            f"<p>{_INCOMPLETE_BODY}</p><p>{status_line}</p></div>"
+            f'<div class="verdict incomplete"><h2>{INCOMPLETE_TITLE}</h2>'
+            f"<p>{INCOMPLETE_BODY}</p><p>{status_line}</p></div>"
         )
 
 
 def _render_executive(executive: ExecutiveZh | None, out: list[str]) -> None:
-    out.append("<h2>总述</h2>")
+    out.append(f"<h2>{EXEC_TITLE}</h2>")
     if executive is None:
-        out.append("<p>尚未生成中文总述。</p>")
+        out.append(f"<p>{EXEC_MISSING}</p>")
         return
-    _text(out, "总述", executive.summary_zh)
-    _text(out, "风险判断", executive.risk_verdict_zh)
+    _text(out, EXEC_SUMMARY, executive.summary_zh)
+    _text(out, EXEC_RISK, executive.risk_verdict_zh)
     actions = "".join(f"<li>{_e(a)}</li>" for a in executive.top3_actions_zh)
-    out.append(f"<h4>优先做的三件事</h4><ol>{actions}</ol>")
-    _text(out, "测试范围", executive.scope_zh)
-    _text(out, "覆盖情况", executive.coverage_zh)
+    out.append(f"<h4>{EXEC_TOP3}</h4><ol>{actions}</ol>")
+    _text(out, EXEC_SCOPE, executive.scope_zh)
+    _text(out, EXEC_COVERAGE, executive.coverage_zh)
     not_tested = "".join(f"<li>{_e(n)}</li>" for n in executive.not_tested_zh)
-    out.append(f"<h4>未测试／需跟进</h4><ul>{not_tested or '<li>（未列出）</li>'}</ul>")
-
-
-def _sort_key(f: ReportFinding) -> tuple[int, tuple[int, float], str]:
-    rank = (
-        SEVERITY_BUCKETS.index(f.severity)
-        if f.severity in SEVERITY_BUCKETS
-        else len(SEVERITY_BUCKETS)
-    )
-    cvss = (0, -f.cvss) if f.cvss is not None else (1, 0.0)
-    return (rank, cvss, f.finding_id)
+    out.append(f"<h4>{EXEC_NOT_TESTED}</h4><ul>{not_tested or f'<li>{EXEC_NOT_LISTED}</li>'}</ul>")
 
 
 def _render_finding(f: ReportFinding, out: list[str]) -> None:
     sev_class, sev_label = _SEVERITY.get(f.severity, ("sev-other", ""))
     out.append(f'<section class="finding {sev_class}">')
     if f.zh is not None:
-        zh = f.zh
-        out.append(f'<h3>{_e(zh.title_zh)}<span class="tag">{_e(zh.severity_zh_label)}</span></h3>')
-        _text(out, "问题是什么", zh.what_zh)
-        _text(out, "影响", zh.impact_zh)
-        _text(out, "怎么修", zh.fix_zh)
-        _text(out, "严重度依据", zh.severity_reason_zh)
-        _text(out, "修复工作量", zh.effort_zh)
-        _text(out, "谁来修", zh.who_fixes_zh)
-        _text(out, "可信度", zh.confidence_zh)
-        if zh.layman_analogy_zh:
-            _text(out, "打个比方", zh.layman_analogy_zh)
+        out.append(
+            f'<h3>{_e(f.zh.title_zh)}<span class="tag">{_e(f.zh.severity_zh_label)}</span></h3>'
+        )
     else:
         label = sev_label or _e(f.severity)
         out.append(
             f'<h3>{_e(f.title)}<span class="tag">{label}</span>'
-            '<span class="tag">未生成中文版</span></h3>'
+            f'<span class="tag">{NO_ZH_TAG}</span></h3>'
         )
-        for key, heading in (
-            ("description", "描述"),
-            ("impact", "影响"),
-            ("remediation_steps", "修复"),
-        ):
-            value = f.raw.get(key)
-            if isinstance(value, str) and value:
-                _text(out, heading, value)
-    out.append('<div class="tech"><h4>技术细节（原文，未翻译）</h4>')
+    for heading, body in finding_sections(f):
+        _text(out, heading, body)
+    out.append(f'<div class="tech"><h4>{TECH_HEADING}</h4>')
     out.append(
         f'<p class="kv">endpoint：{_or_dash(f.endpoint)}　method：{_or_dash(f.method)}　'
         f"CWE：{_or_dash(f.cwe)}　CVSS：{_or_dash(f.cvss)}</p>"
     )
-    for key in _EVIDENCE_KEYS:
-        value = f.raw.get(key)
-        if value is None or value == "":
-            continue
-        body = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
+    for key, body in evidence_blocks(f):
         out.append(f"<h5>{key}</h5><pre>{_e(body)}</pre>")
     out.append("</div></section>")
 
@@ -223,12 +281,8 @@ def render_report_html(
     _render_executive(executive, out)
     out.append("<h2>发现列表</h2>")
     if not findings:
-        out.append(f"<p>{_EMPTY_FINDINGS}</p>")
-    for f in sorted(findings, key=_sort_key):
+        out.append(f"<p>{EMPTY_FINDINGS}</p>")
+    for f in sorted_findings(findings):
         _render_finding(f, out)
-    if report_cost_usd is None:
-        cost = "报告生成费用：无法计算（有调用没有返回计费信息）"
-    else:
-        cost = f"报告生成费用：${report_cost_usd:.4f}"
-    out.append(f"<footer><p>{cost}</p></footer></body></html>")
+    out.append(f"<footer><p>{cost_line(report_cost_usd)}</p></footer></body></html>")
     return "".join(out)
