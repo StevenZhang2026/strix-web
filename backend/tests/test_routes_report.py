@@ -338,3 +338,4 @@ def test_shutdown_cancels_running_translation(app: FastAPI, settings: Settings) 
         assert c.post(URL, json={"vault_handle": handle}).status_code == 202
         started = time.monotonic()
     assert time.monotonic() - started < 5
+    assert [d["outcome"] for d in _audit_details(settings)] == ["cancelled"]

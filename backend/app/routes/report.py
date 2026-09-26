@@ -12,6 +12,7 @@ POST 的顺序（即代码顺序）：
 6. 返回 202 `{"status": "running"}`。
 
 后台任务的 `finally` 里 release 凭据；异常只记**类名**（正文可能带模型输出）。
+成功／异常／停机 cancel 三种结局都写一条 `report.translated`（`outcome` = done／error／cancelled）。
 GET 只读、不写审计；只返回 `input_hash` 与当前 `scan_findings` 一致的译文。
 任务状态只在进程内（`app.state.report_jobs`）：api 重启后一律是 `idle`，译文仍从库里读。
 """
@@ -160,10 +161,16 @@ async def _translate(
     ctx: _AuditContext,
 ) -> None:
     detail: dict[str, audit.AuditDetailValue]
+    cancelled = False
     try:
         result = await translate_scan(
             db, scan_id, run_dir, profile, credentials, completer, force=force
         )
+    except asyncio.CancelledError:
+        # 停机 cancel（`CancelledError` 不是 `Exception`）：审计照记再把取消传下去。
+        # 写得进库是因为 `main.py` 在 `db.close()` 之前 gather 了这些任务。
+        cancelled = True
+        detail = {"outcome": "cancelled", "model": credentials.strix_llm, "force": force}
     except Exception as exc:  # 含 TaskGroup 冒出来的 ExceptionGroup（它是 Exception 的子类）
         job.status = "failed"
         # 只记类名：异常正文可能带模型输出（模型会复述口令）。不许 exc_info、不许 str(exc)。
@@ -195,6 +202,8 @@ async def _translate(
             scan_id=scan_id,
         ),
     )
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 @router.post("/{scan_id}/report/zh", status_code=202)
