@@ -43,6 +43,7 @@
   mutation 2 处：去掉 raw_zip 那条 → 只红 `[raw.zip-raw_zip]`；export 审计挪到 `is_file` 前 → 只红 `missing_file_is_404`。
   **T30b2b 交底里 19 写成 PASS 断言**（见验收 19 ★）。
 - **api 镜像里没有 `ps`／`strings`／`pgrep`**（只有 `grep`）→ 验收 8 只能 `python` 读 `/proc/*/cmdline`。
+- **下一步：写 T30b2b 交底**（`~/Documents/claude/dispatch/T30b2b/prompt.md`）—— 已核实的接口事实与每条设计在同目录 `facts.md`（未跟踪），先读它再动笔。
 - 之后：T30b2b → T30b3（压缩韧性 14）→ T30c（`make reap`）；15、16 是人工核对清单。
 
 ### 上一段（2026-09-26 第三段）：**T30a 收货提交（`9ff3491`）；T19 收货提交（人眼通过）**
