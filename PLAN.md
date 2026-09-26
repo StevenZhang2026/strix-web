@@ -4,13 +4,30 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-26 第四段）：**T30b 拆法用户拍板（见派发清单 T30b 行）；T30b1 已派发**
+### 最新（2026-09-26 第四／五段）：**T30b1 已收货提交；T30b2 再拆成 b2a／b2b，b2a 交底已写、待派**
 
 - 交底 `~/Documents/claude/dispatch/T30b1/prompt.md`（模板 2；12 条：1–5、21–24、27、28；预算 ≤30 次、峰值 <90k）。交底时定的：5 的"真 Key + 全盘 grep"挪到 T30b2（b1 全程无真 Key，检查 4 用 `verify:false` 假 Key 拿 handle）；split_horizon 与"原本无白名单文件时的 enforce"输出 `MANUAL` 不算 PASS；27 的路由清单从运行中 app 枚举 + 数量下限；21 只在 `TEARDOWN=1`/`ONLY` 显式含 21 时跑。**唯一不变式：不许假绿**（每个 0 命中断言配阳性对照、4xx 同时断言 `code`）。**收货 mutation 3 处**：M1 库名改 `console.db` → 28 FAIL；M2 无 cacert 那次加上 cacert → 24 FAIL；M3 路由枚举只取 3 条 → 数量下限那条 FAIL。登录部分要用户本人跑（口令只有用户有）。
 - **✅ T30b1 收货提交（2026-09-26；用户全量跑：1/2/22/23/24/27/28 PASS，3 仅 split_horizon 一格 MANUAL；随后按用户拍板改两处复跑 `ONLY="4 5"` 全 PASS —— ① 5 的门槛 2s → 后端 `VERIFY_TIMEOUT_SECONDS`（验收 5 原文已改）；② 无白名单文件时 4 临时 PUT 一份 enforce 清单、测完删文件并断言 `file_present:false`）**：`scripts/verify_e2e.sh` 524 行（超 500 线，子 agent 事后才发现）+ `Makefile` +7/−2。`make lint` 绿、`make test` **1543 passed / 0 skipped**；无登录子集 `1 22 23 24 27` 全 PASS（27 枚举 26 条需鉴权路由＋2 条 WS，全 401）；M2 只红 24（5 次复跑基线稳定）、M3 只红 27；M1 要登录，机制已单独实测（库名写错 → `[ -f ]` 拦住，`mode=ro` 不建库）。子 agent 偏离全认（27 豁免多一条 `/api/auth/logout`＝`EXEMPT_PATHS`；4 在有白名单文件时先切 advisory 测 typed_confirmation 再切 enforce，因为 enforce 下白名单先拦）。**主会话改了两处**：① 4 的 NULL INSERT 与 28 的 `.dump` 从宿主 `sqlite3` 挪进 api 容器的 python（库是 WAL，`-shm` 跨不过 Docker Desktop VM 边界，宿主写容器正开着的库有损坏风险；`mode=rw`／`mode=ro` 不建库；INSERT 一律 ROLLBACK）；② 登录体从临时文件改成进程替换 `< <(...)`（不落盘；不用管道是因为子 shell 带不回 `HTTP_STATUS`）。**预算**：31 次、峰值 ≈96k（超 90k 预算、未到 120k 真闸）、0 压缩；**②首写第 24 次 ❌** —— 前 23 次都在探活栈拿响应形状（providers／scan-templates／EXEMPT_PATHS 等），**T30b2 交底要把这些响应样例直接贴进去**。
 - 未实测的一支：**已有**白名单文件时 4 的"切 advisory → 切 enforce → 原样 PUT 回去"往返（本机无文件，走的是临时文件那支）。
 - **`!` 前缀跑不了要登录的检查**（无 TTY，`read` 读不到）→ 让用户在自己的终端里跑；脚本已加 `[ -t 0 ]` 提示。
-- 之后：T30b2、T30b3、T30c（`make reap`）。
+- **T30b2 按用户拍板又拆成两条**（b1 的脚本已 577 行，一条塞不下 14 个检查）：**T30b2a**＝一次扫描的前半生
+  （5b 真凭据、6 发起、7 实时流、26 SSE、8 argv、9 沙箱、10 Caido、11 全盘卫生、12 优雅停止、25 空闲长连接），
+  **T30b2b**＝17 Key 生命周期、18 续跑、13 自然结束、19 审计、20 重启恢复（复用 b2a 的 helper）。
+  **钱**：两次扫描、最坏 ≈$5 —— 扫描 A（b2a）预算 `$1` 手动停；扫描 B（b2b）`$0.3` 撞预算停→续跑到总额 `$4`
+  试自然结束，仍没跑完则 13 报 MANUAL。金额全参数化，只收 `bedrock_sigv4`。
+- **T30b2a 交底已写** `~/Documents/claude/dispatch/T30b2a/prompt.md`（模板 2，164 行；预算 ≤35 次、峰值 <100k）。
+  交底时定的：录帧器跑在 api 容器里（宿主 py3.9 没有 `websockets`，容器里有 15.0.1），走 `wss://nginx/...`、
+  cookie 从 stdin、`ping_interval=None`；`sweep_all` 五个面各配一个阳性对照 token；真凭据 handle 用新变量
+  `REAL_HANDLE`（别复用 b1 检查 4 的 `VAULT_HANDLE`）；`TARGET` 默认 `http://localhost:13000`（PLAN 原文那条
+  loopback 改写路径，**从没在真扫描里验过**），备选 `http://juice-shop:3000`，`typed_confirmation` 由 validate
+  响应自动导出所以换 target 不必改代码。**收货 mutation 3 处**：M1 把 `sweep_all` 的模式换成确实存在的字符串
+  → 11 FAIL；M2 录帧器截到 3 帧 → 7 FAIL；M3 检查 9 的筛选去掉 `strix-run-id` 一半 → 9 FAIL（会命中 m0 靶场）。
+- **本轮顺手改了 6 条验收原文**（都是"代码里没有那个值"，一律改验收不改代码）：11 的 containment 在 `bedrock_sigv4`
+  下是 0 命中（条 25）、12 的 `exit_meaning: stopped`、13 的 `completed_with_findings`、20 的 `orphaned_running`、
+  25 改用 `/ws/system`、19 的 `report.exported` **T23 根本没实现**（四个下载路由零审计）→ 该格报 MANUAL，
+  补不补审计**待你定**。
+- **api 镜像里没有 `ps`／`strings`／`pgrep`**（只有 `grep`）→ 验收 8 只能 `python` 读 `/proc/*/cmdline`。
+- 之后：T30b2a → T30b2b → T30b3（压缩韧性 14）→ T30c（`make reap`）；15、16 是人工核对清单。
 
 ### 上一段（2026-09-26 第三段）：**T30a 收货提交（`9ff3491`）；T19 收货提交（人眼通过）**
 
@@ -1843,7 +1860,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T32d | **真跑验收**：bearer 小预算 juice-shop → `coverage_incomplete`/`scan_incomplete` → 续跑 → root **新派**子 agent 并发出探测（验 N3：completed 的 root 续跑会动） | T32c | — | **自** ✅ 2026-09-24 **部分通过 + 得出限制**：sigv4 access key、$2 首段（3 子 agent 全在 90% reserve 线被掐、0 探测）→ 判定「结论不完整」页面文案正确（T32a 通）→ 续跑抬到 $4/$6、日志确认 `injected new instruction`（T32b 通）→ **但 root 两次续跑（原措辞 + 加强措辞）都直接 `finish_scan`、不新派子 agent**（N3 = 否，Strix 续跑语义所致）。加强措辞反而让第二次 root 跳过 `list_coverage` 直接总结。**用户拍板（2026-09-24）接受此限制、如实文档**（见 T30a 行 `docs/SECURITY-zh.md` 清单 ④）；`compose_resume_instruction` 的强指令措辞保留（干净起点下可能略好、无害）。**预算软提示（T32c）真跑页面已见** **⚠️ 2026-09-25 推翻**：其中「子 agent 不可复活、续跑不会补测」只对不动盘上状态成立 —— 改 `agents.json` 状态字符串即可复活，见 §交接 与 `pitfalls` 条 42。 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效<br>**✅ 2026-09-25 收货**：**未引 import-linter**（不在 dev 锁里），改为 `test_strix_contract.py` 第二部分 AST 扫 `app/`；契约 A–M 共 33 格。**M 在 1.6.2 上本来就红**：两个允许模块传递 import `strix.core.paths`（纯常量）→ 用户拍板精确放行 `{strix.core, strix.core.paths}` + 断言 `core/paths.py` 无 `environ`。J 字面量实为 `url.startswith("data:image/")`（接受）；I 的默认 3 在 `config/settings.py`。11 次调用、0 压缩。mutation：app 内加 `from strix.core import paths` → 只红边界格；上游加 `"--model"` → 只红该格；上游 paths 碰 environ → 只红 stateless 格。 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索；③ **测试账号口令明文留在 `run.json` 的 `instruction` 字段**（Strix 为续跑写的，2026-09-24 用户拍板接受）—— 要写清：它在 `${DATA}` 上活到该扫描被留存清理为止，而清理默认关闭 |<br>**④ 续跑的能力边界（2026-09-26 用户拍板按 09-25 的推翻改写；09-24 那版"root 不会重新派子 agent、续跑不会补测"作废）**：续跑能抬预算、带记忆恢复 root、注入新指令，且**会复活被强停的子 agent**（`agent_checkpoint.revive_checkpoint` 在 Strix 启动前把非根 `stopped`／`budget_paused` 翻成 `running` 并清过期预算 flag，2026-09-25 实测三个子 agent 全部复活并真的在探测；机制见 `pitfalls` 条 42）。**尚未实测证明的一环要如实写成"未验证"**：复活且 root 不掐死它们之后，是否真的把缺口记进 coverage、让结论变完整。文档与 UI **不得承诺"续跑能补全覆盖"**，只许说"会让停掉的子任务接着跑，补没补齐看这次的覆盖记录"（`zh-CN.json` 的 `coverage_incomplete.action` 已于 2026-09-26 按此改）。另写明：复活依赖直接改写 Strix 的 `.state/agents.json`（非公开接口），升级 `strix-agent` 时 `test_agent_checkpoint.py` 末四条是预警线 |
-| T30b | `make verify-e2e`（**28 条**）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论**。<br>**2026-09-26 用户拍板拆法**：**T30b1** 不花钱的（1–5、21–24、27、28）→ **T30b2** 一次扫描的整个生命周期（6–13、17–20、25、26）→ **T30b3** 压缩韧性（14）；15、16 做成人工核对清单（脚本只打印步骤）。要花钱的段**只收 `bedrock_sigv4` 凭据、预算默认 $4**（参数可改）。**`make reap`（T30c）：`api` 在跑时只许 `--dry-run`**，要删得先停 api（T11a 交代的安全问题）。**Key 绝不进任何进程的 argv**：`grep "$TEST_KEY"` 在宿主 `ps` 上可见 → 一律 `grep -F -f -` 从 stdin 喂 |
+| T30b | `make verify-e2e`（**28 条**）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论**。<br>**2026-09-26 用户拍板拆法**：**T30b1 ✅**（不花钱的 1–5、21–24、27、28）→ **T30b2a**（5b、6–12、25、26）→ **T30b2b**（17–20、13、19）→ **T30b3** 压缩韧性（14）；15、16 做成人工核对清单（脚本只打印步骤）。b2 再拆成两条的理由与钱怎么花见 §交接。要花钱的段**只收 `bedrock_sigv4` 凭据、预算默认 $4**（参数可改）。**`make reap`（T30c）：`api` 在跑时只许 `--dry-run`**，要删得先停 api（T11a 交代的安全问题）。**Key 绝不进任何进程的 argv**：`grep "$TEST_KEY"` 在宿主 `ps` 上可见 → 一律 `grep -F -f -` 从 stdin 喂 |
 
 **可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。
 **⚠️ 2026-09-16 砍范围后新增一处文件撞车**：T24 的 `raw.zip` 端点也落在 `routes/reports.py`，与 T23 同文件
@@ -1971,15 +1988,24 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
     `grep -rI "$TEST_KEY" $DATA/`（含 run 目录、`strix.log`、`run.json`、审计 NDJSON）；
     `strings $DATA/console.sqlite`（含 `-wal`）；`docker compose logs api web nginx`；
     `docker inspect` 两个容器；仓库目录内 grep（compose/.env 卫生）。
-    **且应恰好有一处命中以证明containment 生效**：
-    `docker compose exec api grep -rl "$TEST_KEY" /run/strix/` → 只有那个预置的 `--config` 文件
+    **containment 那一格（2026-09-26 改，原文对 `bedrock_sigv4` 是错的）**：原写"应恰好有一处命中：
+    `/run/strix/` 下那个预置的 `--config` 文件"—— 但 `persist_current()` 只写自己 settings 字段的 alias，
+    `AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` **不是**任何 alias（`pitfalls` 条 25 的实测表），
+    该文件里根本没有它们。改成：`/run/strix/` 下**也是 0 命中**，阳性对照 = `cli-config.json` 比预置的
+    `{"env":{}}`（11 字节）变大了且含 `STRIX_LLM`（证明 `persist_current()` 跑过、看的是对的文件）。
+    **`single` 形状（`LLM_API_KEY`）下仍会明文落盘**，所以那三道防线一条都不许撤
 12. **优雅停止 + 回收**：45 秒内 WS 收 `done`（**纯信号、不带结论**）**且** `GET /api/scans/{id}` 给
-    `exit_meaning: stopped`（2026-09-23 改：原文写的 `done{exit_meaning:stopped}` 与 W2 方案 ②
-    「`done` 帧不带结论、结论唯一出处是 `GET /api/scans/{id}`」直接冲突，照字面写断言会永远失败）；
+    `status: stopped` + `error_code: stopped_by_operator` + `exit_meaning ∈ EXIT_MEANINGS`
+    （2026-09-23 改：原文写的 `done{exit_meaning:stopped}` 与 W2 方案 ②「`done` 帧不带结论、结论唯一
+    出处是 `GET /api/scans/{id}`」直接冲突，照字面写断言会永远失败。**2026-09-26 再改**：`stopped`
+    根本不是 `exit_meaning` 的合法值 —— `EXIT_MEANINGS` 只有 `vulnerabilities_found` /
+    `no_vulnerabilities_found` / `failed` 三个（`scan_supervisor.py:73`），"停了"这件事在 `status`
+    与 `error_code` 上。**改验收不改代码**：那套词汇已经落盘成数据，改它要迁移 + 动前端）；
     `run.json.status ∈ {stopped,interrupted}`；
     `docker ps -a --filter label=strix-run-id=<id>` → 空；容器内 `/run/strix/<该任务目录>` → 已删；
     `orphan_sandboxes: 0`
-13. **跑到自然结束**：退出码 `2`、`exit_meaning: completed_with_findings`（juice-shop 必有发现）；
+13. **跑到自然结束**：退出码 `2`、`status: completed` + `exit_meaning: vulnerabilities_found`
+    （**2026-09-26 改**：原文的 `completed_with_findings` 不是代码里的值，同 12 的理由）（juice-shop 必有发现）；
     `vulnerabilities.json` 非空；`findings.sarif` 合法 JSON；`severity_counts` 与 `scan_findings` 行数一致
 14. **压缩韧性（R3 验收）**：注入 `STRIX_MAX_CONTEXT_IMAGES=1` + `STRIX_CONTEXT_BUFFER_TOKENS=1` 重跑。
     **两个 env 各驱动一件不同的事，所以分开断言**（2026-09-17 随 §实时流设计 那处修正改）：
@@ -1999,15 +2025,23 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
     `run.json` 的 `llm_usage.cost` 接着上次累计而非归零；发现列表保留上次的；`strix.log` 是**追加**（老行还在）；
     续跑的帧落在**新 epoch**（`scan_events` 无主键冲突）
 19. **审计**：CSV 含 `authorization.affirmed`（**detail 里含本次被用上的 opt-in**）/`scan.launched`/
-    `scan.stopped`/`report.exported`（T23 提供）/`key.registered`（掩码）/`key.dropped`；
+    `scan.stopped`/`key.registered`（掩码）/`key.dropped`；
     对 CSV `grep -c "$TEST_KEY"` → **0**
+    ★ **`report.exported` 这一格 2026-09-26 起输出 `MANUAL`，不算 PASS**：T23 没有实现它 —— 四个下载路由
+    （`report/print`、`report/docx`、`export/{kind}`、`raw.zip`）一条审计都不写，`services/audit.py:51-63`
+    的常量表里也没有这个名字（有的是 `report.translated`）。**要么补一条小任务加导出审计，要么删掉这项要求**，
+    待定；在那之前脚本必须如实报 MANUAL 而不是悄悄跳过
     （**2026-09-17 用户拍板改了两处措辞**，T25 收货时对出来的：① 原先点的 `override.loopback_used`
     改成"查 `authorization.affirmed` 的 detail" —— 代码里刻意不发那个事件，理由见 `services/audit.py`
     常量块与本文件 §护栏 那条 ③：放行后 `GuardVerdict.required_opt_in` 必为空，要说出"哪个勾选被用上"
     就得写 `target_guard` 判定逻辑的第二份副本，两份必然漂移；② `key.forgotten` 改成代码里实际的
     `key.dropped` —— 事件名是**已经落盘的数据**（`audit_log` 行 + NDJSON 镜像 + 现有测试），
     改代码会让老行新行两个名字并存，日后 grep 审计要永远查两个名字。**这两处只改文案、不改代码。**）
-20. **重启恢复**：扫描中 `docker compose restart api` → 标 `orphaned_running`、WS 重连并从镜像续流、
+20. **重启恢复**：扫描中 `docker compose restart api` → 那行被标成 `status: interrupted` +
+    `error_code: interrupted_by_restart`（**2026-09-26 改**：原文的 `orphaned_running` 在代码里不存在 ——
+    `_reconcile_interrupted_scans()`（`main.py:174`）把 `starting`/`running` 残行翻成 `interrupted`，
+    `exit_code`/`exit_meaning` 留 NULL（"根本没有进程退出过，编一个值是撒谎"）；沙箱由 reaper 回收，
+    那行随后可续跑（`interrupted_by_restart ∈ RESUMABLE_ERROR_CODES`））、WS 重连并从镜像续流、
     `run.json` 到终态后正常收尾
 21. **拆除**：`docker compose down` → `docker ps -a --filter label=strix-run-type=console` 里**没有带非空 `strix-run-id` 的容器**（不是"为空"—— M0 靶场带着同一个 `strix-run-type`，它在跑的时候这条永远不可能为空，2026-09-11 T3 实测）；
     `$DATA` 仍保有 DB 与 run 目录（持久化正常）；`/run/strix` 随容器消失（tmpfs 生效）
@@ -2018,8 +2052,12 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
     `api` 与 `web` 的 `PORTS` 列为空
 24. **TLS 生效且未退化成"随便信任"**：`curl --cacert $DATA/tls/cert.pem https://localhost/api/system/status`
     → `200`；**不带** `--cacert` 时 curl 报证书校验失败（若这条通过了，说明信任链被放宽了，是缺陷）
-25. **wss 与长连接（发布阻断）**：实时流走 `wss://localhost/ws`；启动一次扫描后**空闲 90 秒不发任何消息**，
-    连接仍存活（证明 `proxy_read_timeout` 已改，默认 60s 会掐断）；`ws://` 明文端点不存在
+25. **wss 与长连接（发布阻断）**：实时流走 `wss://localhost/ws`；**空闲 90 秒不发任何消息**，
+    连接仍存活（证明 `proxy_read_timeout` 已改，默认 60s 会掐断）；`ws://` 明文端点不存在（由 23 覆盖）。
+    **2026-09-26 改：用 `/ws/system` 而不是 `/ws/scans/{id}`** —— 扫描流每个 tick 都在推帧，结构上证明不了
+    "空闲不掉线"；`/ws/system` 是"一帧快照 + 只在变化时推"（`routes/system.py:149-151`），正是要的形状。
+    ⚠️ 客户端**必须关掉自动 ping**（`websockets` 默认 20s 一次）：pong 会一直重置 nginx 的读超时，
+    不关的话这条断言永远通过 = 等于没测
 26. **SSE 未被缓冲**：关掉 WS 走 SSE 兜底，首字节延迟 < 2s（证明 `proxy_buffering off` 生效；
     默认缓冲下这里会挂到超时）
 27. **登录真的是门，不是装饰（发布阻断）**：不带 cookie 请求 `/api/scans`、`/api/keys`、`/api/audit`、
