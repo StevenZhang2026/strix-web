@@ -25,12 +25,25 @@
 - **本轮顺手改了 6 条验收原文**（都是"代码里没有那个值"，一律改验收不改代码）：11 的 containment 在 `bedrock_sigv4`
   下是 0 命中（条 25）、12 的 `exit_meaning: stopped`、13 的 `completed_with_findings`、20 的 `orphaned_running`、
   25 改用 `/ws/system`、19 的 `report.exported` T23 没实现 → **用户拍板补，T23c 已做**（见下条）。
+- **✅ T30b2a 收货提交（2026-09-26）**：`verify_e2e.sh` +585 → 约 1170 行。用户真跑全量：5b/6/8/10/12/25 PASS，
+  7 仅截图格 MANUAL（agent 当次没截图，预期）；**默认 `TARGET=http://localhost:13000` 的 loopback 改写路径真扫描跑通**
+  （exec_command 有、Caido 172.19.0.4）。主会话修了 5 处，全是交底／脚本写错、产品没错：① 26 无本次扫描时退测旧扫描（假绿）
+  → FAIL；② 加 `MODEL` 参数（目录第一个 `us.anthropic.claude-opus-5` 账号没开通 → 403；能用的是 `us.anthropic.claude-sonnet-4-6`）；
+  ③ `resolved_ips_seen` 要 `list[str]`，validate 给的是对象 → 取 `.address`（原 422）；④ 26 对照改为首行 `: connected`
+  （`stream.py:377`；刚发起 3 秒内没帧，而那十几字节出得来本身就证明 nginx 没缓冲）；⑤ 9/11 inspect 对照 `STRIX_RUN_ID`
+  → `strix-run-id` label（它是子进程 env、不在容器上），11 的 cli-config 路径是 `home/.strix/cli-config.json`
+  （**交底 §6 写错**）。另：收尾强停 404 = 扫描已自行结束（预算用完），改为如实提示，其他码记 `cleanup|FAIL`。
+  修后复跑 `5b 6 26 9 11 12` 全 PASS。**mutation**：M1 → 5b 红（DATA/库/仓库三面命中；logs 与 inspect 两面 `STRIX_LLM`
+  本不在其中，同款 `grep -c -F -f <(…)` 管道主会话用 `uvicorn` 实测命中 82/16）；M2+M3 → 7、9 红、6 绿。
+  预算：21 次、**峰值 118.7k（超 100k，贴 120k 真闸）**、0 压缩、②首写第 11 次 ❌。
+  **b2b 交底要把 b2a 的 helper 签名贴进去**（`ensure_scan`／`wait_frame PRED TIMEOUT`／`frames_jq`／`sweep_all TOKEN [ids]`／
+  `run_dir`），别让它再整读 1170 行；`BUDGET_A=0.3` 实测花 $0.36 后 `stopped`/`scan_incomplete`（18 的续跑前半段可直接用）。
 - **✅ T23c（2026-09-26，主会话直接做，与 T30b2a 并行、文件不重叠）**：`EVENT_REPORT_EXPORTED`＋`downloads._audit_exported`，
   四个路由在成功下发前各记一条（`export` 记在 `is_file` 之后）；`test_routes_downloads.py` 参数化 6 格 + 404 不记。
   mutation 2 处：去掉 raw_zip 那条 → 只红 `[raw.zip-raw_zip]`；export 审计挪到 `is_file` 前 → 只红 `missing_file_is_404`。
   **T30b2b 交底里 19 写成 PASS 断言**（见验收 19 ★）。
 - **api 镜像里没有 `ps`／`strings`／`pgrep`**（只有 `grep`）→ 验收 8 只能 `python` 读 `/proc/*/cmdline`。
-- 之后：T30b2a → T30b2b → T30b3（压缩韧性 14）→ T30c（`make reap`）；15、16 是人工核对清单。
+- 之后：T30b2b → T30b3（压缩韧性 14）→ T30c（`make reap`）；15、16 是人工核对清单。
 
 ### 上一段（2026-09-26 第三段）：**T30a 收货提交（`9ff3491`）；T19 收货提交（人眼通过）**
 

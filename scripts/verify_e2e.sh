@@ -5,6 +5,11 @@
 #   make verify-e2e                      —— 跑本段全部（不含 21）
 #   ONLY="22 23 27" ./scripts/verify_e2e.sh   —— 只跑列出的几条
 #   TEARDOWN=1 make verify-e2e           —— 额外跑 21（会 `compose down` 拆掉栈，永远最后跑）
+#   PAID=1 make verify-e2e               —— 再加第二段：真凭据 + 一次真扫描（5b 6 26 7–12 25）
+#   PAID=1 ONLY="5b 6 7" ./scripts/verify_e2e.sh —— 要花钱的那几条不带 PAID=1 直接拒跑
+#     可调：TARGET（缺省 http://localhost:13000；连不上就试 http://juice-shop:3000）、
+#     BUDGET_A（缺省 1 美元）、EXEC_WAIT（等 exec_command 的秒数，缺省 300）、
+#     MODEL（缺省 = 目录里 bedrock 的第一个；账号没开那个模型时 Bedrock 回 403 = key_verify_failed）
 #
 # 前提：栈已由你起好（`docker compose -p strix-console up -d api web nginx`）。
 # 本脚本不跑 setup.sh、不 build、不起栈 —— 没起就直接报错退出。
@@ -61,10 +66,43 @@ ALLOWLIST_CREATED="" # 非空 = 检查 4 临时建了清单文件，cleanup 要�
 ALLOWLIST_MADE_DIR=""
 STACK_DOWN=""
 
+# ---- 第二段（PAID=1）的状态 -------------------------------------------------------
+TARGET="${TARGET:-http://localhost:13000}"
+BUDGET_A="${BUDGET_A:-1}"
+MODEL="${MODEL:-}"
+EXEC_WAIT="${EXEC_WAIT:-300}"
+IDLE_SECONDS=90
+REAL_HANDLE=""  # 真凭据（bedrock_sigv4）。与检查 4 的假凭据 VAULT_HANDLE 分开：两条都可能被选中
+REAL_TRIED=""   # 非空 = 已经问过凭据（失败也不再问）
+REAL_META=""    # {provider, auth_shape, strix_llm, names:[两个 secret env 名], params}
+REAL_STATUS=""
+REAL_BODY=""
+SEC1=""         # 两个秘密只在 shell 变量里，经 secrets_stdin 喂给 stdin，绝不进 argv
+SEC2=""
+SCAN_ID=""
+SCAN_TRIED=""   # 非空 = 已经尝试过发起（失败不重试，免得重复花钱）
+SCAN_ENDED=""   # 非空 = 已经停过（检查 12 或 cleanup），cleanup 不再强停
+LAUNCH_BODY=""
+LAUNCH_TS=0
+NORM_URL=""
+ALLOWLIST_ENTRY="" # 非空 = enforce 模式下临时加过的条目 label，cleanup 要删
+WS_INSTALLED=""
+REC_PID=""
+REC_OUT=""
+WS_SCRIPT="/tmp/verify_e2e_ws.py"
+
 # ---- 选择要跑的检查 ----------------------------------------------------------
-SELECTED="${ONLY:-${DEFAULT_CHECKS}}"
+PAID_CHECKS="5b 6 7 8 9 10 11 12" # 要真凭据、花真钱
+if [ -n "${ONLY:-}" ]; then SELECTED="${ONLY}"
+elif [ "${PAID:-}" = "1" ]; then SELECTED="${DEFAULT_CHECKS} ${PAID_CHECKS} 26 25"
+else SELECTED="${DEFAULT_CHECKS}"; fi
 if [ "${TEARDOWN:-}" = "1" ]; then SELECTED="${SELECTED} 21"; fi
 selected() { case " ${SELECTED} " in *" $1 "*) return 0 ;; esac; return 1; }
+if [ "${PAID:-}" != "1" ]; then
+    for n in ${PAID_CHECKS}; do
+        selected "${n}" && { rm -rf "${TMP}"; die "检查 ${n} 要真凭据、会花钱：请加 PAID=1"; }
+    done
+fi
 
 # ---- 结果记录 -----------------------------------------------------------------
 CUR=""
@@ -159,9 +197,273 @@ remove_temp_allowlist() {
     else bad "临时清单删了但 api 仍报 file_present=$(jq -r .file_present <<<"${BODY}")"; fi
 }
 
+# ---- 第二段 helper：真凭据、全盘卫生、一次真扫描、录帧 ------------------------------
+# 两个真秘密，一行一个。只经管道 / 进程替换交给 grep -f 或 python 的 stdin（printf 是内建，
+# 不产生进程）。任一为空时 grep -f 会匹配每一行 → 命中数暴涨 → FAIL，不会假绿。
+secrets_stdin() { printf '%s\n%s\n' "${SEC1}" "${SEC2}"; }
+sid_of_jar() { awk '$6 == "sid" {print $7}' "${JAR}"; }
+
+ensure_real_handle() {
+    [ -n "${REAL_HANDLE}" ] && return 0
+    [ -z "${REAL_TRIED}" ] || return 1
+    REAL_TRIED=1
+    ensure_login
+    [ -t 0 ] || die "要真凭据的检查必须在交互终端里跑"
+    api GET /api/providers
+    REAL_META="$(jq -c --arg m "${MODEL}" '.providers[] | select(.provider == "bedrock") as $p
+        | $p.shapes[] | select(.auth_shape == "bedrock_sigv4")
+        | {provider: $p.provider, auth_shape, strix_llm: (if $m == "" then $p.models[0] else $m end),
+           names: .secret_keys, param_keys}' <<<"${BODY}")"
+    [ -n "${REAL_META}" ] || { bad "GET /api/providers 里没有 bedrock/bedrock_sigv4"; return 1; }
+    [ "$(jq '.names | length' <<<"${REAL_META}")" = "2" ] ||
+        { bad "bedrock_sigv4 的 secret_keys 不是 2 个：${REAL_META}"; return 1; }
+    local region
+    printf '\n接下来要一份真的 Bedrock 凭据（不回显，不进 argv、不落盘，跑完即从 vault 删除）。\n'
+    read -r -s -p "请粘贴 $(jq -r '.names[0]' <<<"${REAL_META}"): " SEC1 || die "读不到输入"
+    printf '\n'
+    read -r -s -p "请粘贴 $(jq -r '.names[1]' <<<"${REAL_META}"): " SEC2 || die "读不到输入"
+    printf '\n'
+    read -r -p "区域（直接回车 = us-east-1）: " region || die "读不到输入"
+    [ -n "${SEC1}" ] && [ -n "${SEC2}" ] || die "凭据不能为空"
+    REAL_META="$(jq -c --arg r "${region:-us-east-1}" \
+        '.params = (reduce .param_keys[] as $k ({}; .[$k] = $r)) | del(.param_keys)' <<<"${REAL_META}")"
+    api POST /api/keys --data-binary @- < <(printf '%s\n%s\n%s' "${REAL_META}" "${SEC1}" "${SEC2}" | python3 -c '
+import json, sys
+meta, first, second = sys.stdin.read().split("\n", 2)
+body = json.loads(meta)
+names = body.pop("names")
+body["secrets"] = {names[0]: first, names[1]: second}
+body["verify"] = True
+sys.stdout.write(json.dumps(body))
+')
+    REAL_STATUS="${HTTP_STATUS}"
+    REAL_BODY="${BODY}"
+    REAL_HANDLE="$(jq -r '.vault_handle // empty' <<<"${BODY}" 2>/dev/null)"
+    [ "${HTTP_STATUS}" = "201" ] && [ -n "${REAL_HANDLE}" ] || {
+        bad "登记真凭据失败：${HTTP_STATUS} $(code_of)（模型 $(jq -r .strix_llm <<<"${REAL_META}")；key_verify_failed 多半是账号没开这个模型 → 换 MODEL=）"
+        return 1
+    }
+}
+
+# face NAME HITS CTRL —— 全盘卫生的一个面。对照 0 命中 = 这一面根本没扫到东西 → FAIL。
+SWEEP_HITS=0
+SWEEP_BAD=""
+face() {
+    local name="$1" hits="${2:-}" ctrl="${3:-}"
+    case "${hits}:${ctrl}" in
+        *[!0-9:]* | :* | *:) bad "${name}：计数取不到（hits=${hits} ctrl=${ctrl}）"; SWEEP_BAD="${SWEEP_BAD} ${name}"; return ;;
+    esac
+    SWEEP_HITS=$((SWEEP_HITS + hits))
+    if [ "${ctrl}" -eq 0 ]; then bad "${name}：阳性对照 0 命中 —— 这一面没扫到东西"; SWEEP_BAD="${SWEEP_BAD} ${name}"
+    elif [ "${hits}" -eq 0 ]; then ok "${name}：0 处明文（对照命中 ${ctrl}）"
+    else bad "${name}：${hits} 处明文"; SWEEP_BAD="${SWEEP_BAD} ${name}"; fi
+}
+
+# sweep_all TOKEN [沙箱容器 id…] → SWEEP_HITS（五面命中总数）/ SWEEP_BAD（失败的面）。
+# TOKEN 是 DATA 树与 compose 日志两面的阳性对照（扫描中给 scan_id，扫描前给审计事件名）。
+sweep_all() {
+    local token="$1" db="${DATA}/${DB_NAME}" ctrl_tok="CONSOLE_DATA_DIR"
+    shift
+    [ "$#" -gt 0 ] && ctrl_tok="strix-run-id"  # 沙箱的 label；api 容器上没有
+    SWEEP_HITS=0
+    SWEEP_BAD=""
+    face "DATA 全树" "$(grep -rl -a -F -f <(secrets_stdin) "${DATA}" 2>/dev/null | grep -c .)" \
+        "$(grep -rl -a -F -e "${token}" "${DATA}" 2>/dev/null | grep -c .)"
+    # 在容器里 grep（同检查 4：宿主跨 VM 边界读正开着的 WAL 库不可靠）
+    face "console.sqlite + wal" \
+        "$(secrets_stdin | dc exec -T api sh -c 'grep -h -c -a -F -f - -- "$1" "$1-wal" 2>/dev/null' _ "${db}" | awk '{s += $1} END {print s + 0}')" \
+        "$(dc exec -T api sh -c 'grep -h -c -a -F -e "CREATE TABLE scans" -- "$1" "$1-wal" 2>/dev/null' _ "${db}" | awk '{s += $1} END {print s + 0}')"
+    face "compose logs api web nginx" "$(dc logs --no-color api web nginx 2>&1 | grep -c -a -F -f <(secrets_stdin))" \
+        "$(dc logs --no-color api web nginx 2>&1 | grep -c -a -F -e "${token}")"
+    local ids
+    ids="$(dc ps -q api) $*"
+    # shellcheck disable=SC2086 # ids 是空格分隔的容器 id，要按词拆
+    face "docker inspect api + 沙箱" "$(docker inspect ${ids} 2>/dev/null | grep -c -F -f <(secrets_stdin))" \
+        "$(docker inspect ${ids} 2>/dev/null | grep -c -F -e "${ctrl_tok}")"
+    face "仓库目录" \
+        "$(grep -rl -a -F -f <(secrets_stdin) . --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null | grep -c .)" \
+        "$(grep -rl -a -F -e "${PROJECT}" . --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null | grep -c .)"
+    printf '  五面命中合计 %s%s\n' "${SWEEP_HITS}" "${SWEEP_BAD:+；失败的面：${SWEEP_BAD}}"
+}
+
+# 录帧 / 空闲探活脚本，跑在 api 容器里（宿主 python 3.9 没有 websockets，容器里有 15.x）。
+# 用法：record URI CERT SECONDS OUT ｜ idle URI CERT SECONDS；会话 sid 从 stdin 读，不进 argv。
+install_ws_script() {
+    [ -n "${WS_INSTALLED}" ] && return 0
+    dc exec -T api sh -c "cat > ${WS_SCRIPT} && grep -q ^MAX_FRAMES ${WS_SCRIPT} && echo installed" > "${TMP}/ws_install.out" 2>&1 <<'EOF'
+import asyncio, json, ssl, sys
+from websockets.asyncio.client import connect
+
+MAX_FRAMES = 100000  # 收货 mutation M2 把它截到 3
+
+print("inner-ok", flush=True)
+mode, uri, cert, seconds = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+sid = sys.stdin.readline().strip()
+ctx = ssl.create_default_context(cafile=cert)
+ctx.check_hostname = False  # SAN 只有 localhost，这里按服务名连；信任链由验收 24 覆盖
+
+
+def dial():
+    # ping_interval=None：默认每 20 秒自动 ping，pong 会一直重置 nginx 的读超时，检查 25 就等于没测
+    return connect(uri, ssl=ctx, origin="https://nginx", additional_headers={"Cookie": f"sid={sid}"},
+                   ping_interval=None, open_timeout=10, max_size=None)
+
+
+async def record(out):
+    async with dial() as ws:
+        await ws.send(json.dumps({"type": "hello"}))
+        with open(out, "a") as f:
+            for _ in range(MAX_FRAMES):
+                msg = await ws.recv()
+                f.write(msg.rstrip("\n") + "\n")
+                f.flush()
+                if json.loads(msg).get("type") == "done":
+                    print("done", flush=True)
+                    return
+            print("max-frames", flush=True)
+
+
+async def idle():
+    async with dial() as ws:
+        await asyncio.wait_for(ws.recv(), 10)
+        print("snapshot", flush=True)
+        await asyncio.sleep(seconds)
+        extra = 0
+        while True:
+            try:
+                await asyncio.wait_for(ws.recv(), 0.2)
+            except TimeoutError:
+                break
+            extra += 1
+        pong = await ws.ping()
+        await asyncio.wait_for(pong, 10)
+        print("alive", extra, flush=True)
+
+
+try:
+    if mode == "record":
+        asyncio.run(asyncio.wait_for(record(sys.argv[5]), seconds))
+    else:
+        asyncio.run(idle())
+except TimeoutError:
+    print("timeout", flush=True)
+EOF
+    [ "$(cat "${TMP}/ws_install.out")" = "installed" ] ||
+        { bad "录帧脚本没写进容器：$(cat "${TMP}/ws_install.out")"; return 1; }
+    WS_INSTALLED=1
+}
+
+start_recorder() {
+    install_ws_script || return 1
+    REC_OUT="/tmp/verify_e2e_frames_${SCAN_ID}.jsonl"
+    dc exec -T api python "${WS_SCRIPT}" record "wss://nginx/ws/scans/${SCAN_ID}" "${CERT}" 1800 "${REC_OUT}" \
+        < <(sid_of_jar) > "${TMP}/rec.log" 2>&1 &
+    REC_PID=$!
+}
+
+# frames_jq FILTER —— 对录到的帧（数组）跑 jq；写到一半的末行由 fromjson? 丢掉
+frames_jq() {
+    dc exec -T api cat "${REC_OUT}" > "${TMP}/frames.jsonl" 2>/dev/null
+    jq -n -R "[inputs | fromjson? // empty] | $1" "${TMP}/frames.jsonl"
+}
+# wait_frame PRED TIMEOUT —— 每秒轮询，任一帧满足 jq 谓词 PRED 即返回 0，超时返回 1
+wait_frame() {
+    local deadline=$(($(date +%s) + $2))
+    while :; do
+        frames_jq "any(.[]; $1)" 2>/dev/null | grep -q '^true$' && return 0
+        [ "$(date +%s)" -ge "${deadline}" ] && return 1
+        sleep 1
+    done
+}
+
+# 发起那一次真扫描（6 断言它的响应；7–12 都挂在它上面）。失败不重试。
+ensure_scan() {
+    [ -n "${SCAN_ID}" ] && return 0
+    [ -z "${SCAN_TRIED}" ] || return 1
+    SCAN_TRIED=1
+    ensure_real_handle || return 1
+    [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:13000/ 2>/dev/null)" = "200" ] ||
+        die "靶场 http://127.0.0.1:13000/ 不是 200 —— m0-juice-shop 没在跑？"
+    api GET /api/scans
+    [ "${HTTP_STATUS}" = "200" ] || { bad "GET /api/scans → ${HTTP_STATUS} $(code_of)"; return 1; }
+    local busy
+    busy="$(jq -r '[.scans[] | select(.status == "starting" or .status == "running") | .id] | join(" ")' <<<"${BODY}")"
+    [ -z "${busy}" ] || { bad "已有扫描在跑（${busy}），并发上限 1 —— 等它结束再跑"; return 1; }
+    api GET /api/scan-templates
+    local tpl
+    tpl="$(jq -c '[.templates[] | select(.scan_mode == "quick")] | first // empty' <<<"${BODY}")"
+    [ -n "${tpl}" ] || { bad "没有 scan_mode=quick 的模板：${BODY:0:200}"; return 1; }
+    # 先不放行地验一次，按 required_opt_in 补上 overrides 再验；typed_confirmation 与
+    # resolved_ips_seen 都从第二次的响应导出（自己编会得 dns_changed）
+    jq -n --arg t "${TARGET}" '{raw: [$t], overrides: {allow_loopback: false, allow_private: false}}' > "${TMP}/v1.json"
+    api POST /api/targets/validate --data-binary @- < "${TMP}/v1.json"
+    local ov target
+    ov="$(jq -c '.targets[0].required_opt_in // [] | {allow_loopback: (index("loopback") != null), allow_private: (index("private") != null)}' <<<"${BODY}")"
+    jq -n --arg t "${TARGET}" --argjson o "${ov}" '{raw: [$t], overrides: $o}' > "${TMP}/v2.json"
+    api POST /api/targets/validate --data-binary @- < "${TMP}/v2.json"
+    target="$(jq -c '.targets[0]' <<<"${BODY}")"
+    [ "$(jq -r .ok <<<"${target}")" = "true" ] || { bad "目标 ${TARGET} 放行后仍不通过：${target}"; return 1; }
+    NORM_URL="$(jq -r .normalized.url <<<"${target}")"
+    api GET /api/allowlist
+    if [ "$(jq -r .effective_mode <<<"${BODY}")" = "enforce" ]; then
+        jq -n --arg h "$(jq -r .normalized.host <<<"${target}")" --argjson o "${ov}" \
+            '{label: "verify-e2e", owner: "verify-e2e", authorization_ref: "verify-e2e", hosts: [$h]} + $o' > "${TMP}/entry.json"
+        api POST /api/allowlist/entries --data-binary @- < "${TMP}/entry.json"
+        case "${HTTP_STATUS}" in 2??) ALLOWLIST_ENTRY="verify-e2e" ;;
+            *) bad "enforce 模式下加临时白名单条目失败：${HTTP_STATUS} $(code_of)"; return 1 ;; esac
+    fi
+    jq -n --arg h "${REAL_HANDLE}" --arg raw "${TARGET}" --arg b "${BUDGET_A}" \
+        --argjson tpl "${tpl}" --argjson t "${target}" --argjson o "${ov}" '{
+        vault_handle: $h, template_id: $tpl.template_id, targets: [$raw], overrides: $o,
+        max_budget_usd: ($b | tonumber), max_turns: $tpl.default_max_turns, credentials: [],
+        authorization: {operator_name: "verify-e2e", authorization_ref: "verify-e2e",
+            typed_confirmation: $t.normalized.host,
+            affirmed: ["owns_or_authorized", "not_third_party_production", "understands_real_attacks"],
+            multi_target_affirmed: false, resolved_ips_seen: {($t.normalized.host): [$t.resolved_ips[].address]}}}' > "${TMP}/scan_real.json"
+    api POST /api/scans --data-binary @- < "${TMP}/scan_real.json"
+    [ "${HTTP_STATUS}" = "202" ] || { bad "发起扫描：期望 202，实得 ${HTTP_STATUS} $(code_of)"; return 1; }
+    LAUNCH_BODY="${BODY}"
+    LAUNCH_TS="$(date +%s)"
+    SCAN_ID="$(jq -r '.scan_id // empty' <<<"${BODY}")"
+    [ -n "${SCAN_ID}" ] || { bad "202 但响应里没有 scan_id"; return 1; }
+    printf '  已发起扫描 %s（目标 %s，预算 %s 美元）\n' "${SCAN_ID}" "${TARGET}" "${BUDGET_A}"
+    start_recorder
+}
+
 cleanup_api() {
     [ -n "${LOGGED_IN}" ] && [ -z "${STACK_DOWN}" ] || return 0
     [ -n "${ALLOWLIST_CREATED}" ] && remove_temp_allowlist
+    if [ -n "${SCAN_ID}" ] && [ -z "${SCAN_ENDED}" ]; then
+        jq -n '{mode: "force"}' > "${TMP}/stop_force.json"
+        api POST "/api/scans/${SCAN_ID}/stop" --data-binary @- < "${TMP}/stop_force.json"
+        case "${HTTP_STATUS}" in
+            202) printf '⚠ 扫描 %s 没走到检查 12 的优雅停止，已强停\n' "${SCAN_ID}" >&2 ;;
+            # 已结束的扫描回 404（scans.py stop_scan：未知与已结束同一回答），例如预算先用完
+            404) printf '扫描 %s 已自行结束（stop → 404），无需强停\n' "${SCAN_ID}" >&2 ;;
+            *) printf '⚠ 强停扫描 %s 失败：%s —— 请到控制台手工停止\n' "${SCAN_ID}" "${HTTP_STATUS}" >&2
+               printf 'cleanup|FAIL\n' >> "${RESULTS}" ;;
+        esac
+        SCAN_ENDED=1
+    fi
+    [ -n "${REC_PID}" ] && kill "${REC_PID}" 2>/dev/null
+    REC_PID=""
+    if [ -n "${WS_INSTALLED}" ]; then
+        dc exec -T api rm -f "${WS_SCRIPT}" ${REC_OUT:+"${REC_OUT}"}
+        WS_INSTALLED=""
+    fi
+    if [ -n "${ALLOWLIST_ENTRY}" ]; then
+        api DELETE "/api/allowlist/entries/${ALLOWLIST_ENTRY}"
+        [ "${HTTP_STATUS}" = "200" ] || printf '⚠ 临时白名单条目 %s 没删掉（%s），请手工删\n' "${ALLOWLIST_ENTRY}" "${HTTP_STATUS}" >&2
+        ALLOWLIST_ENTRY=""
+    fi
+    if [ -n "${REAL_HANDLE}" ]; then
+        api DELETE "/api/keys/${REAL_HANDLE}"
+        if [ "${HTTP_STATUS}" != "204" ]; then
+            printf '⚠ 删除真凭据失败：%s —— 请到控制台手工删除\n' "${HTTP_STATUS}" >&2
+            printf 'cleanup|FAIL\n' >> "${RESULTS}"
+        fi
+        REAL_HANDLE=""
+    fi
     if [ -n "${VAULT_HANDLE}" ]; then
         api DELETE "/api/keys/${VAULT_HANDLE}"
         [ "${HTTP_STATUS}" = "204" ] || printf '⚠ 删除假 Key 失败：%s\n' "${HTTP_STATUS}" >&2
@@ -179,6 +481,9 @@ cleanup_api() {
 on_exit() {
     cleanup_api
     PW=""
+    SEC1=""
+    SEC2=""
+    [ -n "${REC_PID}" ] && kill "${REC_PID}" 2>/dev/null
     # 白名单没恢复成功时保留备份，其余一律删
     if [ -n "${ALLOWLIST_BACKUP}" ]; then rm -f "${JAR}" "${TMP}/dump.sql"; else rm -rf "${TMP}"; fi
 }
@@ -551,9 +856,296 @@ EOF
 }
 
 # =============================================================================
+# 第二段（PAID=1）：真凭据 + 一次真扫描的前半生。顺序即依赖：5b → 6 发起 → 26/7–11 扫描中 → 12 停止
+# =============================================================================
+check_5b() {
+    ensure_real_handle || { bad "没有真凭据 handle，本条无从断言"; return; }
+    if [ "${REAL_STATUS}" = "201" ]; then ok "POST /api/keys verify:true → 201"; else bad "POST /api/keys → ${REAL_STATUS}"; fi
+    if [ "$(jq -r .verified <<<"${REAL_BODY}")" = "true" ]; then ok "verified == true"; else bad "verified = $(jq -c .verified <<<"${REAL_BODY}")"; fi
+    # 阳性对照：labels 的键恰好是那两个 env 名（证明下面扫的是真 labels）
+    if jq -e --argjson n "$(jq -c .names <<<"${REAL_META}")" '(.labels | keys) == ($n | sort)' >/dev/null <<<"${REAL_BODY}"; then
+        ok "labels 的键恰好是 $(jq -r '.names | join(" / ")' <<<"${REAL_META}")"
+    else bad "labels 的键不对：$(jq -c '.labels | keys' <<<"${REAL_BODY}")"; fi
+    local hits
+    hits="$(jq -r '.labels[]' <<<"${REAL_BODY}" | grep -c -F -f <(secrets_stdin))"
+    if [ "${hits}" = "0" ]; then ok "labels 的值里 0 处明文"; else bad "labels 的值里 ${hits} 处明文"; fi
+    api GET "/api/keys/${REAL_HANDLE}"
+    [ "${HTTP_STATUS}" = "200" ] || { bad "GET /api/keys/{h} → ${HTTP_STATUS} $(code_of)"; return; }
+    if grep -q -F -e "$(jq -r '.names[0]' <<<"${REAL_META}")" <<<"${BODY}"; then ok "GET /api/keys/{h} 含 env 名（对照）"
+    else bad "GET /api/keys/{h} 里没有 env 名 —— 对照失败"; fi
+    hits="$(printf '%s' "${BODY}" | grep -c -F -f <(secrets_stdin))"
+    if [ "${hits}" = "0" ]; then ok "GET /api/keys/{h} 0 处明文"; else bad "GET /api/keys/{h} 有 ${hits} 行明文"; fi
+    sweep_all "key.registered"
+}
+
+# argv_ok LABEL BUDGET JQ_EXPR —— 对 argv_preview（jq 变量 a）断言；adj(k; v) = k 后面紧跟 v
+argv_ok() {
+    if jq -e --arg t "${TARGET}" --arg u "${NORM_URL}" --arg b "$2" '.argv_preview as $a
+        | def adj($k; $v): any(range(0; ($a | length) - 1); $a[.] == $k and $a[. + 1] == $v);
+        '"$3" >/dev/null 2>&1 <<<"${LAUNCH_BODY}"; then ok "$1"; else bad "$1 不成立"; fi
+}
+
+check_6() {
+    ensure_scan || { bad "扫描没发起成功"; return; }
+    ok "POST /api/scans → 202（${SCAN_ID}）"
+    printf '  argv_preview: %s\n' "$(jq -c .argv_preview <<<"${LAUNCH_BODY}")"
+    # 与 scan_launcher._format_usd 同一规则：保留 4 位再去掉尾 0 与小数点（1 → "1"，1.5 → "1.5"）
+    local want hits
+    want="$(awk -v v="${BUDGET_A}" 'BEGIN { s = sprintf("%.4f", v); sub(/0+$/, "", s); sub(/\.$/, "", s); print s }')"
+    argv_ok "-n 存在" "${want}" 'any($a[]; . == "-n")'
+    argv_ok "-t 后紧跟目标" "${want}" 'adj("-t"; $t) or adj("-t"; $u)'
+    argv_ok "-m quick 相邻" "${want}" 'adj("-m"; "quick")'
+    argv_ok "--max-budget-usd ${want} 相邻" "${want}" 'adj("--max-budget-usd"; $b)'
+    hits="$(jq -r '.argv_preview[]' <<<"${LAUNCH_BODY}" | grep -c -F -e --max-budget-usd)"
+    [ "${hits}" -ge 1 ] 2>/dev/null || bad "argv_preview 里扫不到 --max-budget-usd —— 对照失败"
+    hits="$(jq -r '.argv_preview[]' <<<"${LAUNCH_BODY}" | grep -c -F -f <(secrets_stdin))"
+    if [ "${hits}" = "0" ]; then ok "argv_preview 0 处明文"; else bad "argv_preview 有 ${hits} 处明文"; fi
+}
+
+# frame_ok LABEL PRED WINDOW —— 发起后 WINDOW 秒内要有一帧满足 PRED
+frame_ok() {
+    if wait_frame "$2" $((LAUNCH_TS + $3 - $(date +%s))); then ok "$1"; else bad "$1：发起后 $3 秒内没等到"; fi
+}
+
+check_7() {
+    ensure_scan || { bad "没有扫描可看"; return; }
+    if ! wait_frame 'true' $((LAUNCH_TS + 90 - $(date +%s))); then
+        bad "录帧文件是空的（录帧器输出：$(tr '\n' ' ' < "${TMP}/rec.log")）"; return
+    fi
+    frame_ok "agents 里有 Root Agent（parent_id=null）" \
+        '.type == "agents" and any(.payload.agents[]; .parent_id == null and .name == "Root Agent")' 90
+    frame_ok "event.add kind=chat" '.type == "event.add" and .payload.kind == "chat"' 90
+    frame_ok "event.add kind=tool" '.type == "event.add" and .payload.kind == "tool"' 90
+    frame_ok "log 帧" '.type == "log"' 90
+    frame_ok "summary 帧" '.type == "summary"' 90
+    frame_ok "summary.cost_usd > 0" '.type == "summary" and (.payload.cost_usd // 0) > 0' 90
+    local costs n
+    costs="$(frames_jq '[.[] | select(.type == "summary") | .payload.cost_usd | numbers]')"
+    n="$(jq length <<<"${costs}")"
+    if [ "${n:-0}" -ge 2 ]; then
+        if jq -e '. as $c | all(range(1; length); $c[.] >= $c[. - 1]) and $c[-1] > $c[0]' >/dev/null <<<"${costs}"; then
+            ok "cost_usd 单调不减且末值 > 首值（${n} 帧：$(jq -c '[first, last]' <<<"${costs}")）"
+        else bad "cost_usd 不单调或没涨：${costs}"; fi
+    elif [ "${n:-0}" = "1" ]; then manual "窗口内只拿到 1 帧非 null 的 cost_usd，判不了单调"
+    else bad "没有任何非 null 的 cost_usd"; fi
+    frame_ok "event.add 里出现 exec_command" \
+        '.type == "event.add" and (.payload.data | objects | .tool_name) == "exec_command"' "${EXEC_WAIT}"
+    local url code magic
+    url="$(grep -o -E "/api/scans/${SCAN_ID}/media/[0-9a-f]{64}\.png" "${TMP}/frames.jsonl" | head -1)"
+    if [ -z "${url}" ]; then
+        manual "窗口内没出现截图（取决于 agent 选了哪些工具）—— 截图落地请人看"
+        return
+    fi
+    code="$(curl -sS --cacert "${CERT}" -b "${JAR}" -o "${TMP}/shot.png" -w '%{http_code}' --max-time 30 "${BASE}${url}" 2>/dev/null)"
+    magic="$(head -c 8 "${TMP}/shot.png" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    if [ "${code}" = "200" ] && [ "${magic}" = "89504e470d0a1a0a" ]; then ok "截图 ${url##*/} → 200 且是 PNG"
+    else bad "截图 ${url} → ${code}，魔数 ${magic:-<空>}"; fi
+}
+
+check_26() {
+    ensure_login
+    local id="${SCAN_ID}" w t
+    # 不许退回去测库里的旧扫描：已结束的流很短、立刻收尾，nginx 缓冲了照样 < 2s —— 假绿
+    [ -n "${id}" ] || { bad "没有正在跑的扫描：26 要与 6 一起在 PAID=1 下跑"; return; }
+    # 超时退出码 28 是预期的（流不会自己结束）；-w 照样写出
+    w="$(curl -sS -N --cacert "${CERT}" -b "${JAR}" --max-time 3 -H 'Accept: text/event-stream' \
+        -o "${TMP}/sse.txt" -w '%{http_code} %{time_starttransfer}' "${BASE}/api/scans/${id}/stream" 2>/dev/null)"
+    t="${w##* }"
+    if [ "${w%% *}" = "200" ]; then ok "GET /api/scans/${id}/stream → 200"; else bad "stream → ${w%% *}"; fi
+    if awk -v t="${t}" 'BEGIN { exit !(t > 0 && t < 2) }'; then ok "首字节 ${t}s < 2s"; else bad "首字节 ${t:-<无>}s，应 < 2s"; fi
+    # 首行是路由自己发的 SSE 注释（stream.py:377）：只有十几字节，nginx 若缓冲就出不来
+    if [ "$(head -n 1 "${TMP}/sse.txt" 2>/dev/null)" = ": connected" ]; then ok "3 秒内收到首行 : connected（对照：是本路由的真 SSE）"
+    else bad "首行不是 : connected：$(head -c 200 "${TMP}/sse.txt" 2>/dev/null)"; fi
+}
+
+check_8() {
+    ensure_scan || { bad "没有扫描"; return; }
+    local out
+    # 镜像里没有 ps/pgrep/strings：直接读 /proc/*/cmdline（\0 分隔）。秘密从 stdin 进
+    out="$(secrets_stdin | dc exec -T api python -c '
+import os, sys
+secrets = [line for line in sys.stdin.read().split("\n") if line]
+print("inner-ok", end=" ")
+procs = hits = budget = 0
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        continue
+    procs += 1
+    hits += any(s in cmd for s in secrets)
+    budget += "--max-budget-usd" in cmd
+print(len(secrets), procs, hits, budget)
+' 2>&1)"
+    local tag nsec procs hits budget
+    read -r tag nsec procs hits budget <<<"${out}"
+    [ "${tag}" = "inner-ok" ] && [ "${nsec}" = "2" ] || { bad "容器内脚本没跑起来或没收到两个秘密：${out:0:200}"; return; }
+    if [ "${budget}" -ge 1 ] 2>/dev/null; then ok "${procs} 个进程里 ${budget} 条 cmdline 含 --max-budget-usd（对照：strix 子进程还活着）"
+    else bad "没有一条 cmdline 含 --max-budget-usd —— 对照失败（子进程已退出？）"; fi
+    if [ "${hits}" = "0" ]; then ok "所有 cmdline 0 处明文"; else bad "${hits} 个进程的 cmdline 含明文"; fi
+}
+
+# sandbox_ids —— 本次扫描的沙箱容器。**必须按 run-id 精确过滤**：只按 type label 会连带
+# 命中 m0-juice-shop 靶场（收货 mutation M3 就是删掉这一半）
+sandbox_ids() { docker ps -q --filter "label=strix-run-id=${SCAN_ID}"; }
+
+check_9() {
+    ensure_scan || { bad "没有扫描"; return; }
+    local ids="" i
+    for i in $(seq 1 60); do
+        ids="$(sandbox_ids)"
+        [ -n "${ids}" ] && break
+        sleep 1
+    done
+    [ -n "${ids}" ] || { bad "按 strix-run-id=${SCAN_ID} 取不到沙箱容器（等了 60 秒）"; return; }
+    # shellcheck disable=SC2086
+    docker inspect ${ids} > "${TMP}/sandbox.json" 2>/dev/null || { bad "docker inspect 失败"; return; }
+    ok "沙箱容器 $(jq length "${TMP}/sandbox.json") 个"
+    local pred
+    for pred in \
+        'CapAdd 含 NET_ADMIN 与 NET_RAW|(.HostConfig.CapAdd // []) as $c | any($c[]; . == "NET_ADMIN" or . == "CAP_NET_ADMIN") and any($c[]; . == "NET_RAW" or . == "CAP_NET_RAW")' \
+        'Networks 含 strix_sandbox|.NetworkSettings.Networks | has("strix_sandbox")' \
+        'NetworkSettings.Ports 没有任何宿主绑定|[(.NetworkSettings.Ports // {})[] | select(. != null)] | length == 0' \
+        'HostConfig.PortBindings 为空|(.HostConfig.PortBindings // {}) | length == 0'; do
+        if jq -e "all(.[]; ${pred#*|})" >/dev/null "${TMP}/sandbox.json"; then ok "${pred%%|*}"
+        else bad "${pred%%|*} 不成立"; fi
+    done
+    if grep -q -F -e strix-run-id "${TMP}/sandbox.json"; then ok "inspect 含 strix-run-id label（对照）"; else bad "inspect 里没有 strix-run-id —— 对照失败"; fi
+    local hits
+    hits="$(grep -c -F -f <(secrets_stdin) "${TMP}/sandbox.json")"
+    if [ "${hits}" = "0" ]; then ok "inspect 0 处明文"; else bad "inspect 有 ${hits} 行明文"; fi
+    rm -f "${TMP}/sandbox.json"
+}
+
+# run_dir → RUN_DIR。自动名不可预测，用 glob；0 个或多于 1 个都是 FAIL
+run_dir() {
+    local d n=0
+    RUN_DIR=""
+    for d in "${DATA}/scans/${SCAN_ID}/strix_runs/"*/; do
+        [ -d "${d}" ] && { n=$((n + 1)); RUN_DIR="${d%/}"; }
+    done
+    [ "${n}" = "1" ] || { bad "run 目录应恰好 1 个，实得 ${n}"; RUN_DIR=""; return 1; }
+}
+
+check_10() {
+    ensure_scan || { bad "没有扫描"; return; }
+    run_dir || return
+    local line addr
+    line="$(grep -a 'Caido host endpoint resolved' "${RUN_DIR}/strix.log" 2>/dev/null | tail -1)"
+    [ -n "${line}" ] || { bad "strix.log 里没有 Caido host endpoint resolved"; return; }
+    addr="$(printf '%s' "${line}" | grep -o -E 'https?://[0-9.]+' | tail -1)"
+    addr="${addr#*://}"
+    case "${addr}" in
+        172.* | 10.* | 192.168.*) ok "Caido 解析到容器 IP ${addr}" ;;
+        *) bad "Caido 解析到 ${addr:-<取不到>}，应为容器 IP：${line}" ;;
+    esac
+}
+
+check_11() {
+    ensure_scan || { bad "没有扫描"; return; }
+    local ids
+    ids="$(sandbox_ids)"
+    [ -n "${ids}" ] || bad "取不到沙箱容器 —— inspect 面只剩 api 一半"
+    # shellcheck disable=SC2086
+    sweep_all "${SCAN_ID}" ${ids}
+    # containment：bedrock_sigv4 下 persist_current() 不写 AWS_* → /run/strix 下应 0 命中；
+    # 对照 = cli-config.json 比预置的 {"env":{}}（11 字节）变大了且含 STRIX_LLM
+    local out tag nsec hits size llm
+    out="$(secrets_stdin | dc exec -T api python -c '
+import os, sys
+secrets = [line for line in sys.stdin.read().split("\n") if line]
+hits = 0
+for root, _, files in os.walk("/run/strix"):
+    for name in files:
+        try:
+            data = open(os.path.join(root, name), "rb").read()
+        except OSError:
+            continue
+        hits += any(s.encode() in data for s in secrets)
+cfg = f"/run/strix/scan-{sys.argv[1]}/home/.strix/cli-config.json"
+try:
+    body = open(cfg, "rb").read()
+except OSError:
+    body = b""
+print("inner-ok", len(secrets), hits, len(body), int(b"STRIX_LLM" in body))
+' "${SCAN_ID}" 2>&1)"
+    read -r tag nsec hits size llm <<<"${out}"
+    [ "${tag}" = "inner-ok" ] && [ "${nsec}" = "2" ] || { bad "容器内脚本没跑起来：${out:0:200}"; return; }
+    if [ "${size}" -gt 11 ] && [ "${llm}" = "1" ]; then ok "cli-config.json ${size} 字节且含 STRIX_LLM（对照：persist_current 跑过）"
+    else bad "cli-config.json ${size} 字节、含 STRIX_LLM=${llm} —— 对照失败"; fi
+    if [ "${hits}" = "0" ]; then ok "/run/strix 下 0 个文件含明文"; else bad "/run/strix 下 ${hits} 个文件含明文"; fi
+}
+
+tmpfs_state() { dc exec -T api sh -c 'if [ -e "$1" ]; then echo present; else echo gone; fi' _ "/run/strix/scan-${SCAN_ID}"; }
+
+check_12() {
+    ensure_scan || { bad "没有扫描"; return; }
+    # 对照：停之前沙箱与 tmpfs 目录都在，否则"已消失"证明不了回收
+    if [ -n "$(sandbox_ids)" ]; then ok "停止前沙箱容器在（对照）"; else bad "停止前就没有沙箱容器 —— 回收断言无从证明"; fi
+    if [ "$(tmpfs_state)" = "present" ]; then ok "停止前 /run/strix/scan-${SCAN_ID} 在（对照）"; else bad "停止前 tmpfs 目录就不在"; fi
+    jq -n '{mode: "graceful"}' > "${TMP}/stop.json"
+    api POST "/api/scans/${SCAN_ID}/stop" --data-binary @- < "${TMP}/stop.json"
+    [ "${HTTP_STATUS}" = "202" ] || { bad "graceful stop → ${HTTP_STATUS} $(code_of)"; return; }
+    SCAN_ENDED=1
+    ok "graceful stop → 202"
+    if wait_frame '.type == "done"' 45; then ok "45 秒内收到 done 帧"; else bad "45 秒内没收到 done 帧"; fi
+    local i scan
+    for i in $(seq 1 15); do
+        api GET "/api/scans/${SCAN_ID}"
+        scan="$(jq -c '.scan' <<<"${BODY}" 2>/dev/null)"
+        case "$(jq -r .status <<<"${scan}" 2>/dev/null)" in starting | running) sleep 1 ;; *) break ;; esac
+    done
+    if [ "$(jq -r .status <<<"${scan}")" = "stopped" ]; then ok "scan.status == stopped"; else bad "scan.status = $(jq -r .status <<<"${scan}")"; fi
+    if [ "$(jq -r .error_code <<<"${scan}")" = "stopped_by_operator" ]; then ok "error_code == stopped_by_operator"
+    else bad "error_code = $(jq -r .error_code <<<"${scan}")"; fi
+    case "$(jq -r .exit_meaning <<<"${scan}")" in
+        vulnerabilities_found | no_vulnerabilities_found | failed) ok "exit_meaning = $(jq -r .exit_meaning <<<"${scan}")" ;;
+        *) bad "exit_meaning = $(jq -r .exit_meaning <<<"${scan}")，不在合法值里" ;;
+    esac
+    if run_dir; then
+        case "$(jq -r .status "${RUN_DIR}/run.json" 2>/dev/null)" in
+            stopped | interrupted) ok "run.json status = $(jq -r .status "${RUN_DIR}/run.json")" ;;
+            *) bad "run.json status = $(jq -r .status "${RUN_DIR}/run.json" 2>/dev/null)" ;;
+        esac
+    fi
+    local left=""
+    for i in $(seq 1 30); do
+        left="$(docker ps -a -q --filter "label=strix-run-id=${SCAN_ID}")"
+        [ -z "${left}" ] && [ "$(tmpfs_state)" = "gone" ] && break
+        sleep 1
+    done
+    if [ -z "${left}" ]; then ok "沙箱容器已回收"; else bad "沙箱容器残留：${left}"; fi
+    if [ "$(tmpfs_state)" = "gone" ]; then ok "/run/strix/scan-${SCAN_ID} 已删"; else bad "/run/strix/scan-${SCAN_ID} 仍在"; fi
+    api GET /api/system/status
+    if [ "$(jq -r '.orphan_sandboxes.count' <<<"${BODY}")" = "0" ]; then ok "orphan_sandboxes.count == 0"
+    else bad "orphan_sandboxes = $(jq -c .orphan_sandboxes <<<"${BODY}")"; fi
+}
+
+check_25() {
+    ensure_login
+    install_ws_script || return
+    local out extra
+    printf '  经 nginx 连 wss /ws/system，空闲 %s 秒…\n' "${IDLE_SECONDS}"
+    out="$(dc exec -T api python "${WS_SCRIPT}" idle "wss://nginx/ws/system" "${CERT}" "${IDLE_SECONDS}" \
+        < <(sid_of_jar) 2>&1)"
+    case "${out}" in inner-ok*) ;; *) bad "容器内脚本没跑起来：${out:0:300}"; return ;; esac
+    case "${out}" in *snapshot*) ok "收到全量快照帧（对照：连上的是真 /ws/system）" ;;
+        *) bad "没收到快照帧：${out:0:300}"; return ;; esac
+    case "${out}" in
+        *"alive "*)
+            extra="${out##*alive }"
+            ok "空闲 ${IDLE_SECONDS} 秒后 ping 10 秒内有 pong"
+            [ "${extra}" = "0" ] || manual "空闲期间服务端推了 ${extra} 帧，「空闲不掉线」的证明力不足" ;;
+        *) bad "空闲 ${IDLE_SECONDS} 秒后连接不再存活：${out:0:300}" ;;
+    esac
+}
+
+# =============================================================================
 # 执行：按编号跑；21 永远最后，且在它之前把 API 侧的临时改动收拾干净
 # =============================================================================
-for n in 1 2 3 4 5 22 23 24 27 28; do
+for n in 1 2 3 4 5 22 23 24 27 28 5b 6 26 7 8 9 10 11 12 25; do
     if selected "${n}"; then begin "${n}"; "check_${n}"; finish
     else printf '%s|SKIP\n' "${n}" >> "${RESULTS}"; fi
 done
