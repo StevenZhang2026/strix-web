@@ -1,12 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ErrorNotice } from "@/components/errors/ErrorNotice";
 import { Button } from "@/components/ui/Button";
 import { ButtonLink } from "@/components/ui/ButtonLink";
-import { ApiError, createScan, type ScanAcceptedResponse } from "@/lib/api/client";
+import {
+  ApiError,
+  createScan,
+  fetchScanTemplates,
+  type ScanAcceptedResponse,
+} from "@/lib/api/client";
 import { formatUsd } from "@/lib/format";
 import { t, type MessageKey } from "@/lib/messages";
 import { useKeysStore } from "@/lib/stores/keys";
@@ -35,6 +41,15 @@ export function SubmitPanel() {
 
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<Error | null>(null);
+  // 与 `StepTemplate` 同 key，命中缓存。**必须在下面的早退之前**（hook 顺序）。
+  // 目录还没到时按 `false` 处理 —— 后端 422 兜底。
+  const { data: templates } = useQuery({
+    queryKey: ["scanTemplates"],
+    queryFn: ({ signal }) => fetchScanTemplates(signal),
+  });
+  const requiresNotes =
+    templates?.templates.find((item) => item.template_id === state.templateId)?.requires_notes ??
+    false;
 
   // 成功之后整块换成成功块：同一份工单按第二次就是第二次扫描，而并发上限默认 1，
   // 第二次也只会拿到 `concurrency_limit` —— 让它按不下去更诚实。
@@ -44,7 +59,7 @@ export function SubmitPanel() {
     return <Accepted response={state.accepted} />;
   }
 
-  const blockers = submitBlockers(state, handle);
+  const blockers = submitBlockers(state, handle, requiresNotes);
 
   async function handleSubmit(): Promise<void> {
     const snapshot = state.validation;

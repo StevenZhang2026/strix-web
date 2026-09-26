@@ -39,6 +39,11 @@ def test_exactly_one_template_is_recommended() -> None:
     assert [t.template_id for t in TEMPLATES if t.recommended] == ["full_review"]
 
 
+def test_only_the_recheck_template_requires_notes() -> None:
+    """前端按这一位决定"补充说明"是不是提交闸里的一项；后端 launcher 按同一位拒。"""
+    assert [t.template_id for t in TEMPLATES if t.requires_notes] == ["pre_release_recheck"]
+
+
 def test_template_for_returns_none_for_unknown_id() -> None:
     """返回 `None` 而不是抛异常：调用方（launcher）才知道该抛哪个码。"""
     assert template_for("no_such_template") is None

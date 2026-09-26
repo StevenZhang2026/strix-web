@@ -32,6 +32,7 @@ class ScanTemplateView(BoundaryModel):
     default_budget_usd: float
     default_max_turns: int
     recommended: bool
+    requires_notes: bool
 
 
 class ScanTemplatesResponse(BoundaryModel):
@@ -47,6 +48,7 @@ def _template_view(template: ScanTemplate) -> ScanTemplateView:
         default_budget_usd=template.default_budget_usd,
         default_max_turns=template.default_max_turns,
         recommended=template.recommended,
+        requires_notes=template.requires_notes,
     )
 
 

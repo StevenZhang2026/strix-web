@@ -5,6 +5,7 @@ import { create } from "zustand";
 import type {
   CreateScanRequest,
   ScanAcceptedResponse,
+  ScanCredentialInput,
   TargetValidation,
 } from "@/lib/api/client";
 
@@ -34,6 +35,21 @@ export interface Affirmations {
 }
 
 export type AffirmationId = keyof Affirmations;
+
+/** 测试账号的一行草稿。三格都存输入框原文。 */
+export interface TestAccountDraft {
+  readonly role: string;
+  readonly username: string;
+  readonly password: string;
+}
+
+export type TestAccountField = keyof TestAccountDraft;
+
+/** 测试账号最多几行。 */
+export const MAX_TEST_ACCOUNTS = 5;
+
+/** 口令下限，与后端 `ScanCredentialInput.password` 的 `min_length=8` 一致。 */
+export const MIN_ACCOUNT_PASSWORD_LENGTH = 8;
 
 /**
  * 三条声明的 id 与**渲染顺序**。后端只认这三个字面量。
@@ -86,6 +102,17 @@ export interface WizardState {
    */
   readonly accepted: ScanAcceptedResponse | null;
 
+  /**
+   * 第 4／5 步的附加项。**不随目标变化作废**（不进 `CLEARED_DECLARATION`）：它们说的是
+   * "这次想怎么扫"，不是"这批目标签过字没有"。
+   */
+  readonly extraInstruction: string;
+  readonly testAccounts: readonly TestAccountDraft[];
+  /** `null` = 跟随模板。 */
+  readonly scanModeOverride: string | null;
+  /** `null` = 不设置，跟随模型默认。 */
+  readonly reasoningEffort: string | null;
+
   readonly setStep: (step: number) => void;
   readonly setRawTargets: (raw: string) => void;
   readonly setAllowLoopback: (allow: boolean) => void;
@@ -105,6 +132,12 @@ export interface WizardState {
   readonly setAffirmation: (id: AffirmationId, checked: boolean) => void;
   readonly setMultiTargetAffirmed: (affirmed: boolean) => void;
   readonly setAccepted: (response: ScanAcceptedResponse) => void;
+  readonly setExtraInstruction: (text: string) => void;
+  readonly addTestAccount: () => void;
+  readonly removeTestAccount: (index: number) => void;
+  readonly updateTestAccount: (index: number, field: TestAccountField, value: string) => void;
+  readonly setScanModeOverride: (mode: string | null) => void;
+  readonly setReasoningEffort: (effort: string | null) => void;
 }
 
 const NO_AFFIRMATIONS: Affirmations = {
@@ -148,6 +181,10 @@ export const useWizardStore = create<WizardState>((set) => ({
   affirmations: NO_AFFIRMATIONS,
   multiTargetAffirmed: false,
   accepted: null,
+  extraInstruction: "",
+  testAccounts: [],
+  scanModeOverride: null,
+  reasoningEffort: null,
 
   setStep: (step: number) => {
     set({ step });
@@ -166,7 +203,13 @@ export const useWizardStore = create<WizardState>((set) => ({
     set({ allowPrivate, ...CLEARED_DECLARATION });
   },
   chooseTemplate: (templateId: string, budgetUsd: number, maxTurns: number) => {
-    set({ templateId, budgetUsd: String(budgetUsd), maxTurns: String(maxTurns) });
+    // 扫描深度的覆盖也回到"跟随模板"：它是相对上一个模板做的选择。
+    set({
+      templateId,
+      budgetUsd: String(budgetUsd),
+      maxTurns: String(maxTurns),
+      scanModeOverride: null,
+    });
   },
   setBudgetUsd: (budgetUsd: string) => {
     set({ budgetUsd });
@@ -193,8 +236,35 @@ export const useWizardStore = create<WizardState>((set) => ({
     set({ multiTargetAffirmed });
   },
   // 只有 202 会调它，所以没有"置回 null"这一路 —— 一次已经发起的扫描收不回来。
+  // 顺手清掉测试账号：口令不该在提交之后还躺在内存里。回执保留。
   setAccepted: (accepted: ScanAcceptedResponse) => {
-    set({ accepted });
+    set({ accepted, testAccounts: [] });
+  },
+  setExtraInstruction: (extraInstruction: string) => {
+    set({ extraInstruction });
+  },
+  addTestAccount: () => {
+    set((state) =>
+      state.testAccounts.length >= MAX_TEST_ACCOUNTS
+        ? {}
+        : { testAccounts: [...state.testAccounts, { role: "", username: "", password: "" }] },
+    );
+  },
+  removeTestAccount: (index: number) => {
+    set((state) => ({ testAccounts: state.testAccounts.filter((_, i) => i !== index) }));
+  },
+  updateTestAccount: (index: number, field: TestAccountField, value: string) => {
+    set((state) => ({
+      testAccounts: state.testAccounts.map((row, i) =>
+        i === index ? { ...row, [field]: value } : row,
+      ),
+    }));
+  },
+  setScanModeOverride: (scanModeOverride: string | null) => {
+    set({ scanModeOverride });
+  },
+  setReasoningEffort: (reasoningEffort: string | null) => {
+    set({ reasoningEffort });
   },
 }));
 
@@ -238,6 +308,25 @@ export function isBudgetTooLow(budgetUsd: string): boolean {
 export function isTurnsTooLow(maxTurns: string): boolean {
   const value = Number(maxTurns);
   return maxTurns.trim() === "" || !Number.isFinite(value) || value < MIN_TURNS;
+}
+
+/** 一行全空（`trim()` 后三格都是空串）= 用户没打算填这一行。 */
+function isBlankAccountRow(row: TestAccountDraft): boolean {
+  return row.role.trim() === "" && row.username.trim() === "" && row.password === "";
+}
+
+/**
+ * 测试账号一行的问题。纯函数，就地提示与提交闸共用它。
+ * 全空 = `null`（和预算框同一个规矩：没填的不骂人）。口令不 `trim()`，与请求体一致。
+ */
+export function accountRowProblem(row: TestAccountDraft): "incomplete" | "too_short" | null {
+  if (isBlankAccountRow(row)) {
+    return null;
+  }
+  if (row.role.trim() === "" || row.username.trim() === "" || row.password === "") {
+    return "incomplete";
+  }
+  return row.password.length < MIN_ACCOUNT_PASSWORD_LENGTH ? "too_short" : null;
 }
 
 /**
@@ -286,6 +375,8 @@ export type BlockerCode =
   | "multi_target"
   | "operator_name"
   | "template"
+  | "extra_instruction"
+  | "test_accounts"
   | "budget"
   | "turns"
   | "vault_handle";
@@ -294,11 +385,13 @@ export type BlockerCode =
  * 提交闸。**无 IO 的纯函数**，返回稳定机器码数组（空数组 = 可以提交）。
  *
  * 顺序就是用户填写的顺序 —— 读起来是"从前往后还差什么"。
- * `vault_handle` 在另一个 store 里，所以它是独立参数。
+ * `vault_handle` 在另一个 store 里，所以它是独立参数；`requiresNotes` 来自模板目录
+ * （目录还没到时调用方传 `false`，后端 422 兜底）。
  */
 export function submitBlockers(
   state: WizardState,
   vaultHandle: string | null,
+  requiresNotes: boolean,
 ): readonly BlockerCode[] {
   const snapshot = state.validation;
   const blockers: BlockerCode[] = [];
@@ -325,6 +418,12 @@ export function submitBlockers(
   }
   if (state.templateId === null) {
     blockers.push("template");
+  }
+  if (requiresNotes && state.extraInstruction.trim() === "") {
+    blockers.push("extra_instruction");
+  }
+  if (state.testAccounts.some((row) => accountRowProblem(row) !== null)) {
+    blockers.push("test_accounts");
   }
   if (isBudgetTooLow(state.budgetUsd)) {
     blockers.push("budget");
@@ -357,6 +456,15 @@ export function buildCreateScanRequest(
   if (state.templateId === null) {
     throw new Error("template_required");
   }
+  const extraInstruction = state.extraInstruction.trim();
+  // `role`/`username` trim，**口令不 trim**：口令里的空格是口令的一部分。
+  const credentials: ScanCredentialInput[] = state.testAccounts
+    .filter((row) => !isBlankAccountRow(row))
+    .map((row) => ({
+      role: row.role.trim(),
+      username: row.username.trim(),
+      password: row.password,
+    }));
   return {
     vault_handle: vaultHandle,
     template_id: state.templateId,
@@ -367,6 +475,11 @@ export function buildCreateScanRequest(
     },
     max_budget_usd: Number(state.budgetUsd),
     max_turns: Number(state.maxTurns),
+    // 以下四项只在真有值时带：缺省 = 模板／模型的默认。
+    ...(state.scanModeOverride === null ? {} : { scan_mode: state.scanModeOverride }),
+    ...(state.reasoningEffort === null ? {} : { reasoning_effort: state.reasoningEffort }),
+    ...(extraInstruction === "" ? {} : { extra_instruction: extraInstruction }),
+    ...(credentials.length === 0 ? {} : { credentials }),
     authorization: {
       operator_name: state.operatorName.trim(),
       authorization_ref: state.authorizationRef.trim(),

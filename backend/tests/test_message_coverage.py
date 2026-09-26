@@ -55,6 +55,7 @@ from app.services.run_projector import (
     NOTICE_STREAM_RESYNCED,
 )
 from app.services.scan_resume import RESUME_REFUSAL_REASONS
+from app.services.scan_templates import TEMPLATES
 from app.services.system_status import ALL_BLOCKER_CODES
 from app.services.target_guard import (
     GuardRequirement,
@@ -334,6 +335,19 @@ def test_every_resume_refusal_reason_has_copy(messages: dict[str, Any]) -> None:
 def test_no_orphan_resume_refusal_copy(messages: dict[str, Any]) -> None:
     orphans = set(messages["resumeRefusal"]) - set(RESUME_REFUSAL_REASONS)
     assert not orphans, f"resumeRefusal 里这些 reason 后端已经不存在了：{sorted(orphans)}"
+
+
+# 模板的中文名与说明（`templates.*`／`templateNotes.*`）：后端只回 `template_id`，
+# 加了模板忘了文案，向导上就是一行裸机器码。
+@pytest.mark.parametrize("tree", ["templates", "templateNotes"])
+def test_every_template_has_copy_and_no_orphans(messages: dict[str, Any], tree: str) -> None:
+    ids = {template.template_id for template in TEMPLATES}
+    copy = messages[tree]
+    assert set(copy) == ids, (
+        f"{tree} 与后端模板不一致：缺 {sorted(ids - set(copy))}，多 {sorted(set(copy) - ids)}"
+    )
+    for template_id, value in copy.items():
+        assert isinstance(value, str) and value.strip(), f"{tree}.{template_id} 缺失或为空"
 
 
 # =============================================================================

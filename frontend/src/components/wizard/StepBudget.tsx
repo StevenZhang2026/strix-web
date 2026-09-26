@@ -1,8 +1,11 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { useId } from "react";
 
+import { fetchKeyState } from "@/lib/api/client";
 import { t } from "@/lib/messages";
+import { useKeysStore } from "@/lib/stores/keys";
 import {
   isBudgetTooLow,
   isTurnsTooLow,
@@ -10,8 +13,21 @@ import {
   useWizardStore,
 } from "@/lib/stores/wizard";
 
+import { AdvancedPanel } from "./AdvancedPanel";
 import steps from "./Steps.module.css";
 import { SubmitPanel } from "./SubmitPanel";
+
+/**
+ * bearer 形状下"这个上限在 SigV4 下大约相当于花多少"：上限 ÷ 6 ～ 上限 ÷ 4（实测倍数 4～6）。
+ * 上限不是正数就回 `null`，不出区间那一截。
+ */
+function sigv4Equivalent(budgetUsd: string): string | null {
+  const ceiling = Number(budgetUsd);
+  if (budgetUsd.trim() === "" || !Number.isFinite(ceiling) || ceiling <= 0) {
+    return null;
+  }
+  return `$${(ceiling / 6).toFixed(1)}～$${(ceiling / 4).toFixed(1)}`;
+}
 
 /**
  * 第 5 步：费用上限与轮数。
@@ -30,6 +46,15 @@ export function StepBudget() {
   const setMaxTurns = useWizardStore((s) => s.setMaxTurns);
 
   const uid = useId();
+  const handle = useKeysStore((s) => s.handle);
+  // 只用来判断凭据形状。handle 为空、查询中、查询失败 → 什么都不出（不猜）。
+  const { data: keyState } = useQuery({
+    queryKey: ["keyState", handle],
+    queryFn: ({ signal }) => fetchKeyState(handle ?? "", signal),
+    enabled: handle !== null,
+  });
+  const bearer = keyState?.auth_shape === "bedrock_bearer";
+  const equivalent = sigv4Equivalent(budgetUsd);
 
   return (
     <div>
@@ -66,6 +91,16 @@ export function StepBudget() {
         {!isBudgetTooLow(budgetUsd) && Number(budgetUsd) < SUGGESTED_MIN_BUDGET_USD ? (
           <p className={steps.hint}>{t("wizard.budgetBelowSuggested")}</p>
         ) : null}
+        {/* 只提示、不改默认预算、不给"一键调高"（用户拍板）。 */}
+        {bearer ? (
+          <>
+            <p className={steps.warn}>
+              {t("wizard.costBearer")}
+              {equivalent === null ? null : <> {equivalent}</>}
+            </p>
+            <p className={steps.hint}>{t("wizard.costBearerAdvice")}</p>
+          </>
+        ) : null}
       </div>
 
       <div className={steps.row}>
@@ -90,6 +125,7 @@ export function StepBudget() {
 
       {/* 整份工单在这里提交。按钮在还差东西时是禁用的，但**旁边一定有一张"还差
           这几项"的清单** —— 一个只灰掉、不说原因的按钮才是会被反复去按的那种。 */}
+      <AdvancedPanel />
       <SubmitPanel />
     </div>
   );

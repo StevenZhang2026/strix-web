@@ -162,3 +162,38 @@
 .mono {
   font-family: var(--mono);
 }
+
+/* ------------------------------------------------------------------ 折叠区（测试账号、高级设置） */
+/* 原生 `<details>`，同 `system/ReadyRows.module.css`：`summary` 只借 `--gate` 表示"可点"。 */
+/* 不给 `<details>` 本身设 `display: flex`（部分浏览器对它的 flex 支持不全），
+   子元素之间的间距用相邻选择器给。 */
+.details {
+  max-width: var(--measure);
+  margin: 0 0 var(--s5);
+}
+
+.details > * + * {
+  margin-top: var(--s2);
+}
+
+.summary {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--gate);
+  cursor: pointer;
+}
+
+/* 测试账号的一行：三格竖排、与下一行之间一条点线。 */
+.accountRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding-top: var(--s3);
+  border-top: 1px dotted var(--rule);
+}
+
+.accountFields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}

@@ -47,6 +47,9 @@ class ScanTemplate:
     default_max_turns: int
     recommended: bool
     instruction_body: str
+    requires_notes: bool = False
+    """指令正文要靠操作者的补充说明才成立（"下面的说明写了改了什么"）。为 True 时
+    `extra_instruction` 为空就拒 —— 否则 agent 拿到的是一句指向空白的指令。"""
 
 
 TEMPLATES: tuple[ScanTemplate, ...] = (
@@ -178,6 +181,7 @@ escalation.
   one endpoint while a second endpoint still reaches the same code path.
 - Test the changed features for new issues too, but keep the scope to the change. Do
   not start a full review.""",
+        requires_notes=True,
     ),
 )
 

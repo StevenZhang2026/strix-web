@@ -4,7 +4,14 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-26）：**待派只剩 T19 与 T30a，可并行**（文件不重叠：`frontend/src/components/wizard/*`＋`routes/templates.py` ／ `README.md`＋`docs/*`）
+### 最新（2026-09-26 第三段）：**T30a 收货提交（`9ff3491`）；T19 收货提交（人眼通过）**
+
+- **T30a**：`SECURITY-zh.md` 由主会话写（用户定），其余三份子 agent 写；四份整读、引用名逐个 grep 过。T30a 行 ①–④ 全部落进 SECURITY 第 6／8／9／10 条。
+- **T19**（方案 `~/Documents/claude/dispatch/T19/plan.md`，用户已批；砍 skill 自选、bearer 只警示不加按钮）：T19a 后端 `requires_notes`（仅 `pre_release_recheck`）+ launcher 422 + `templates`／`templateNotes` 文案覆盖测试；T19b 前端（子 agent 17 次调用、峰值 ≈68k、0 压缩；②首写在第 11 次，差 1）。`make lint` 绿、`make test` **1543 passed / 0 skipped**；mutation 2 处全对（去 launcher 检查只红那条参数化 3 格；删 `templateNotes.api_surface` 只红 coverage 的 templateNotes 格）。主会话改了一处：测试账号折叠区 `open={needed \|\| rows.length > 0}`（换模板不收起已填的行）。人眼 2026-09-26 通过，已提交。
+- **记下的跟进（未做）**：① `CONSOLE_MAX_BUDGET_CEILING_USD` 没经 `docker-compose.yml` 透传，写进 `.env` 不生效；② CLAUDE.md 引用而仓库没有的名字（`make reap`／`make verify-e2e` 待 T30、`test_key_hygiene`、`make check-upstream`），错误形状应为 `{code, trace_id, params}`（`errors.py:65`）；③ 规划中的"启用了额外 CA"UI 警示不存在，文档暂指向 `GET /api/system/status`。
+- 之后：T30b；「自」：T15a、断点续扫靶场复跑。
+
+### 上一段（2026-09-26）：**待派只剩 T19 与 T30a，可并行**（文件不重叠：`frontend/src/components/wizard/*`＋`routes/templates.py` ／ `README.md`＋`docs/*`）
 
 - **T19**（模板 3）：下一步由主会话写方案 → 用户审 → 另起实现 agent。**T30a**（模板 1）可以在审 T19 方案的空档里先派，T19 落地后再补一两句。
 - 派发清单里 T25／T26／T31c 三行没打 ✅，但已提交（`bd7dbfc`／`6f8a6ea`＋`c9df371`）—— 不是待派项。

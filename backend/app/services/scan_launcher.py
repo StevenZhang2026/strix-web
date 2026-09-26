@@ -12,8 +12,10 @@
 - **env 是白名单不是 `os.environ.copy()`**：`_PASSTHROUGH_ENV` 之外的变量一律不传，
   所以 `STRIX_DEBUG`（把 `strix.log` 拉到 DEBUG，是泄漏面）就算被写进 compose 也到不了
   子进程。`environ` 从参数注入 —— 模块里不读 `os.environ`（CLAUDE.md §Python）。
-- **测试账号口令只落在 tmpfs 的 `instruction.txt`**：永远用 `--instruction-file`，
-  不用 `--instruction`（后者等于把口令送进 `ps`）。
+- **测试账号口令不进 argv／env／DB／日志，我方只写 tmpfs 的 `instruction.txt`**：永远用
+  `--instruction-file`，不用 `--instruction`（后者等于把口令送进 `ps`）。**但 Strix 自己会把
+  指令原文写进 `run.json` 的 `instruction` 字段**（续跑靠它读回），所以口令明文会留在
+  `${DATA}` 上直到留存清理删掉该扫描 —— 接受的残余风险，见 `docs/SECURITY-zh.md`。
 
 `--config` 指到 `$HOME/.strix/cli-config.json` 是**双保险**：`--config` 生效时读的是那个
 文件；万一它不生效、Strix 的 `persist_current()` 回落到 `$HOME/.strix/`，落点仍是同一个
@@ -164,6 +166,8 @@ def _validate(spec: LaunchSpec, budget_ceiling_usd: float) -> ScanTemplate:
     _validate_limits(spec, budget_ceiling_usd)
     # 否则续跑剥旧节时会从操作者这段开始剪，连 `SHARED_TAIL` 的安全规则一起剪掉。
     if spec.extra_instruction and _RESUME_HEADER in spec.extra_instruction:
+        raise InvalidRequestError(field="extra_instruction")
+    if template.requires_notes and not (spec.extra_instruction or "").strip():
         raise InvalidRequestError(field="extra_instruction")
     # 这是"续跑能把口令找回来"的结构性保证：续跑时脱敏只能靠从指令原文解析回来的口令，
     # 往返不成立的账号在首次就拒，而不是等续跑时才发现漏脱敏。

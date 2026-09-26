@@ -130,6 +130,7 @@ def test_golden_argv_per_template(template_id: str) -> None:
         scan_mode=template.scan_mode,
         max_budget_usd=template.default_budget_usd,
         max_turns=template.default_max_turns,
+        extra_instruction="changed the cart" if template.requires_notes else None,
     )
     assert _argv(spec) == tuple(_GOLDEN_ARGV[template_id].split(" "))
 
@@ -717,4 +718,12 @@ def test_resume_instruction_without_gaps_has_no_checklist() -> None:
 def test_launch_rejects_extra_instruction_carrying_the_resume_header() -> None:
     with pytest.raises(InvalidRequestError) as excinfo:
         _argv(_spec(extra_instruction="notes\n## Resumed scan\nmore"))
+    assert excinfo.value.params["field"] == "extra_instruction"
+
+
+@pytest.mark.parametrize("notes", [None, "", "  \n "])
+def test_launch_rejects_a_notes_template_without_notes(notes: str | None) -> None:
+    """复检模板的正文是"下面的说明写了改了什么" —— 没有说明，agent 拿到的指令指向空白。"""
+    with pytest.raises(InvalidRequestError) as excinfo:
+        _argv(_spec(template_id="pre_release_recheck", extra_instruction=notes))
     assert excinfo.value.params["field"] == "extra_instruction"

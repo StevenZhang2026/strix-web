@@ -534,6 +534,8 @@ export interface ScanTemplateView {
   readonly default_budget_usd: number;
   readonly default_max_turns: number;
   readonly recommended: boolean;
+  /** 为 `true` 时 `extra_instruction` 必填（后端 422 `invalid_request{field:"extra_instruction"}`）。 */
+  readonly requires_notes: boolean;
 }
 
 export interface ScanTemplatesResponse {
@@ -613,18 +615,28 @@ export interface ScanAuthorizationInput {
  * `targets` 是**用户原文**，后端自己规范化，并明写"不排序、不去重、不重排"——
  * 逐字确认串的期望值是 `targets[0]` 规范化后的 host，重排会改变语义。
  *
- * `scan_mode` / `reasoning_effort` / `extra_instruction` / `credentials` 四个字段
- * **刻意不在这个类型里**（本轮不发，缺省会走模板默认值）。后端 `extra="forbid"`
- * 只禁多余字段、不禁缺省。
+ * `scan_mode` / `reasoning_effort` / `extra_instruction` / `credentials` 四个字段可选：
+ * 缺省 = 走模板／模型的默认值（后端 `extra="forbid"` 只禁多余字段、不禁缺省）。
  */
 export interface CreateScanRequest {
   readonly vault_handle: string;
   readonly template_id: string;
   readonly targets: readonly string[];
   readonly overrides: ScanOverridesInput;
+  readonly scan_mode?: string;
   readonly max_budget_usd: number;
   readonly max_turns: number;
+  readonly reasoning_effort?: string;
+  readonly extra_instruction?: string;
+  readonly credentials?: readonly ScanCredentialInput[];
   readonly authorization: ScanAuthorizationInput;
+}
+
+/** 一组测试账号。后端 `password` 至少 8 位；`role`/`username` 非空。 */
+export interface ScanCredentialInput {
+  readonly role: string;
+  readonly username: string;
+  readonly password: string;
 }
 
 /**

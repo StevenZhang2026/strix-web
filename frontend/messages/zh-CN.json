@@ -142,7 +142,9 @@
       "template": "第 4 步还没选测试范围。",
       "budget": "费用上限还没填，或者低于下限。",
       "turns": "轮数还没填，或者低于下限。",
-      "vault_handle": "还没登记模型凭据。凭据在后端内存里，重启过就要再登记一次。"
+      "vault_handle": "还没登记模型凭据。凭据在后端内存里，重启过就要再登记一次。",
+      "extra_instruction": "第 4 步选的是上线前复检，它要你在「补充说明」里写清改了什么、哪些问题说是修好了。",
+      "test_accounts": "第 4 步的测试账号有一行没填全，或者口令不足 8 位。"
     },
     "rejectedTargetLabel": "被拒的那一个目标",
     "acceptedTitle": "扫描已经开始",
@@ -150,7 +152,39 @@
     "acceptedStatus": "当前状态",
     "acceptedBudget": "生效的费用上限",
     "argvHeading": "实际执行的命令",
-    "argvHint": "这是真正交给 Strix 的参数。里面没有任何凭据 —— 凭据只经环境变量进子进程。"
+    "argvHint": "这是真正交给 Strix 的参数。里面没有任何凭据 —— 凭据只经环境变量进子进程。",
+    "notesLabel": "补充说明",
+    "notesHint": "写给扫描 agent 的话，会原样附在指令末尾。建议用英文写 —— Strix 的提示词是英文的。",
+    "notesRequired": "上线前复检必须填：改了什么、哪些已报告的问题说是修好了。没有这段，它不知道该复检什么。",
+    "accountsHeading": "测试账号（可选）",
+    "accountsHint": "给扫描用的、你自己建的账号。不要填真实用户的账号 —— 扫描会反复登录，可能把它锁住。",
+    "accountsNeededHint": "这个模板测的就是登录与权限，没有测试账号基本测不出东西。最好每种角色各给一个。",
+    "accountRole": "角色",
+    "accountRoleExample": "例如 普通用户、管理员",
+    "accountUsername": "用户名",
+    "accountPassword": "口令",
+    "accountAdd": "再加一个账号",
+    "accountRemove": "删掉这一行",
+    "accountIncomplete": "这一行没填全：角色、用户名、口令三项要么都填，要么都空着。",
+    "accountPasswordTooShort": "口令至少 8 位。",
+    "accountsResidual": "口令只写进这次扫描的指令文件，不进日志、不进数据库；但 Strix 会把指令原文留在这次扫描的产物里（续跑要靠它），直到这次扫描被清理为止 —— 而清理默认是关着的。",
+    "costBearer": "你登记的是 Bedrock bearer token。它用不了提示词缓存，同样的工作大约要花 SigV4（Access Key）形状的 4～6 倍。按现在这个上限，能做的事大约相当于 SigV4 下花这么多：",
+    "costBearerAdvice": "这不是估计出来的倍数，是实测。要继续用 bearer 就把上限相应调高；能拿到 Access Key 就回去换成那一种。",
+    "advancedHeading": "高级设置",
+    "scanModeLabel": "扫描深度",
+    "scanModeFollow": "跟随模板",
+    "reasoningLabel": "推理强度",
+    "reasoningFollow": "跟随模型默认（不设置）",
+    "reasoningHint": "不是每个模型都支持每一档；选了模型不支持的一档，扫描会在启动时失败。",
+    "reasoning": {
+      "none": "不推理",
+      "minimal": "极少",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "很高",
+      "max": "最高"
+    }
   },
 
   "templates": {
@@ -160,6 +194,15 @@
     "auth_and_access": "只测登录与权限",
     "api_surface": "API 接口测试",
     "pre_release_recheck": "上线前复检"
+  },
+
+  "templateNotes": {
+    "quick_triage": "预算很小的快速分诊：只测 6 类可直接利用的高危问题（绕过登录、越权、注入、XSS、SSRF、未授权泄露敏感数据），不做子域枚举和目录爆破。适合先摸个底。",
+    "full_review": "先把整个应用的页面、表单、接口和角色列清楚，再对每个入口逐项走 OWASP Top 10，边测边记覆盖情况。第一次测一个系统就选它。",
+    "deep_audit": "按功能域拆给多个子 agent 并行深挖，把零散的问题串成完整攻击链。最贵也最慢，适合重要系统上线前或定期深度审计。",
+    "auth_and_access": "只测登录、注册、找回密码、会话、令牌和越权，不花轮数在 XSS 与注入上。需要你在下面给测试账号。",
+    "api_surface": "从运行中的应用里找出接口（前端代码、流量、常见的规范路径），逐个测鉴权与输入校验，并单列「文档里有但访问不到」和「存在但没有文档」的接口。暂不支持上传接口规范文件。",
+    "pre_release_recheck": "针对这次改动做回归：已报告的问题逐个真的重放一遍，确认是否修好，也看看修补有没有把问题挪到别处。必须在「补充说明」里写清改了什么。"
   },
 
   "credentials": {
