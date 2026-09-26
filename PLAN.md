@@ -4,7 +4,15 @@
 
 > **这一节每次交接整段覆盖，不累积历史。**只写"新会话开工前必须知道、又不在别处的事"。
 
-### 最新（2026-09-26 第三段）：**T30a 收货提交（`9ff3491`）；T19 收货提交（人眼通过）**
+### 最新（2026-09-26 第四段）：**T30b 拆法用户拍板（见派发清单 T30b 行）；T30b1 已派发**
+
+- 交底 `~/Documents/claude/dispatch/T30b1/prompt.md`（模板 2；12 条：1–5、21–24、27、28；预算 ≤30 次、峰值 <90k）。交底时定的：5 的"真 Key + 全盘 grep"挪到 T30b2（b1 全程无真 Key，检查 4 用 `verify:false` 假 Key 拿 handle）；split_horizon 与"原本无白名单文件时的 enforce"输出 `MANUAL` 不算 PASS；27 的路由清单从运行中 app 枚举 + 数量下限；21 只在 `TEARDOWN=1`/`ONLY` 显式含 21 时跑。**唯一不变式：不许假绿**（每个 0 命中断言配阳性对照、4xx 同时断言 `code`）。**收货 mutation 3 处**：M1 库名改 `console.db` → 28 FAIL；M2 无 cacert 那次加上 cacert → 24 FAIL；M3 路由枚举只取 3 条 → 数量下限那条 FAIL。登录部分要用户本人跑（口令只有用户有）。
+- **✅ T30b1 收货提交（2026-09-26；用户全量跑：1/2/22/23/24/27/28 PASS，3 仅 split_horizon 一格 MANUAL；随后按用户拍板改两处复跑 `ONLY="4 5"` 全 PASS —— ① 5 的门槛 2s → 后端 `VERIFY_TIMEOUT_SECONDS`（验收 5 原文已改）；② 无白名单文件时 4 临时 PUT 一份 enforce 清单、测完删文件并断言 `file_present:false`）**：`scripts/verify_e2e.sh` 524 行（超 500 线，子 agent 事后才发现）+ `Makefile` +7/−2。`make lint` 绿、`make test` **1543 passed / 0 skipped**；无登录子集 `1 22 23 24 27` 全 PASS（27 枚举 26 条需鉴权路由＋2 条 WS，全 401）；M2 只红 24（5 次复跑基线稳定）、M3 只红 27；M1 要登录，机制已单独实测（库名写错 → `[ -f ]` 拦住，`mode=ro` 不建库）。子 agent 偏离全认（27 豁免多一条 `/api/auth/logout`＝`EXEMPT_PATHS`；4 在有白名单文件时先切 advisory 测 typed_confirmation 再切 enforce，因为 enforce 下白名单先拦）。**主会话改了两处**：① 4 的 NULL INSERT 与 28 的 `.dump` 从宿主 `sqlite3` 挪进 api 容器的 python（库是 WAL，`-shm` 跨不过 Docker Desktop VM 边界，宿主写容器正开着的库有损坏风险；`mode=rw`／`mode=ro` 不建库；INSERT 一律 ROLLBACK）；② 登录体从临时文件改成进程替换 `< <(...)`（不落盘；不用管道是因为子 shell 带不回 `HTTP_STATUS`）。**预算**：31 次、峰值 ≈96k（超 90k 预算、未到 120k 真闸）、0 压缩；**②首写第 24 次 ❌** —— 前 23 次都在探活栈拿响应形状（providers／scan-templates／EXEMPT_PATHS 等），**T30b2 交底要把这些响应样例直接贴进去**。
+- 未实测的一支：**已有**白名单文件时 4 的"切 advisory → 切 enforce → 原样 PUT 回去"往返（本机无文件，走的是临时文件那支）。
+- **`!` 前缀跑不了要登录的检查**（无 TTY，`read` 读不到）→ 让用户在自己的终端里跑；脚本已加 `[ -t 0 ]` 提示。
+- 之后：T30b2、T30b3、T30c（`make reap`）。
+
+### 上一段（2026-09-26 第三段）：**T30a 收货提交（`9ff3491`）；T19 收货提交（人眼通过）**
 
 - **T30a**：`SECURITY-zh.md` 由主会话写（用户定），其余三份子 agent 写；四份整读、引用名逐个 grep 过。T30a 行 ①–④ 全部落进 SECURITY 第 6／8／9／10 条。
 - **T19**（方案 `~/Documents/claude/dispatch/T19/plan.md`，用户已批；砍 skill 自选、bearer 只警示不加按钮）：T19a 后端 `requires_notes`（仅 `pre_release_recheck`）+ launcher 422 + `templates`／`templateNotes` 文案覆盖测试；T19b 前端（子 agent 17 次调用、峰值 ≈68k、0 压缩；②首写在第 11 次，差 1）。`make lint` 绿、`make test` **1543 passed / 0 skipped**；mutation 2 处全对（去 launcher 检查只红那条参数化 3 格；删 `templateNotes.api_surface` 只红 coverage 的 templateNotes 格）。主会话改了一处：测试账号折叠区 `open={needed \|\| rows.length > 0}`（换模板不收起已填的行）。人眼 2026-09-26 通过，已提交。
@@ -1835,7 +1843,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 | T32d | **真跑验收**：bearer 小预算 juice-shop → `coverage_incomplete`/`scan_incomplete` → 续跑 → root **新派**子 agent 并发出探测（验 N3：completed 的 root 续跑会动） | T32c | — | **自** ✅ 2026-09-24 **部分通过 + 得出限制**：sigv4 access key、$2 首段（3 子 agent 全在 90% reserve 线被掐、0 探测）→ 判定「结论不完整」页面文案正确（T32a 通）→ 续跑抬到 $4/$6、日志确认 `injected new instruction`（T32b 通）→ **但 root 两次续跑（原措辞 + 加强措辞）都直接 `finish_scan`、不新派子 agent**（N3 = 否，Strix 续跑语义所致）。加强措辞反而让第二次 root 跳过 `list_coverage` 直接总结。**用户拍板（2026-09-24）接受此限制、如实文档**（见 T30a 行 `docs/SECURITY-zh.md` 清单 ④）；`compose_resume_instruction` 的强指令措辞保留（干净起点下可能略好、无害）。**预算软提示（T32c）真跑页面已见** **⚠️ 2026-09-25 推翻**：其中「子 agent 不可复活、续跑不会补测」只对不动盘上状态成立 —— 改 `agents.json` 状态字符串即可复活，见 §交接 与 `pitfalls` 条 42。 |
 | T29 | `test_strix_contract.py`（升级预警线）+ `importlinter.ini` | T13 | `tests/test_strix_contract.py` `backend/importlinter.ini` | **1** —— 断言清单已被 §Strix 集成面 与 §import 边界 钉死，本任务是照着写。**prompt 必须写死"断言只许来自那两节，不许自己发明"** —— 发明的断言会让升级预警线失效<br>**✅ 2026-09-25 收货**：**未引 import-linter**（不在 dev 锁里），改为 `test_strix_contract.py` 第二部分 AST 扫 `app/`；契约 A–M 共 33 格。**M 在 1.6.2 上本来就红**：两个允许模块传递 import `strix.core.paths`（纯常量）→ 用户拍板精确放行 `{strix.core, strix.core.paths}` + 断言 `core/paths.py` 无 `environ`。J 字面量实为 `url.startswith("data:image/")`（接受）；I 的默认 3 在 `config/settings.py`。11 次调用、0 压缩。mutation：app 内加 `from strix.core import paths` → 只红边界格；上游加 `"--model"` → 只红该格；上游 paths 碰 environ → 只红 stateless 格。 |
 | T30a | `README.md` + `docs/` 四份文档 | 全部 | `README.md` `docs/*` | 1 —— **是改写现有的 `README.md`（2026-09-09 提前写的临时版，因为仓库 public 而合规声明不该等到 M8），不是新建；必须保留合规声明原文**（见 §合规声明），其中那张手工维护的状态表到时整段删掉。**两条残余风险必须落进 `docs/SECURITY-zh.md`**：① T5b 那行的口令同步；② `POST /api/targets/validate` 拒绝 `https://user:pass@host` 时会在 200 正文的 `raw` 字段**原样回显一次**（只有这一处，零日志调用，走 TLS 回给刚打出它的人）—— 如实记录，不靠"整理干净再回显"消除，那会擦掉用户唯一的线索；③ **测试账号口令明文留在 `run.json` 的 `instruction` 字段**（Strix 为续跑写的，2026-09-24 用户拍板接受）—— 要写清：它在 `${DATA}` 上活到该扫描被留存清理为止，而清理默认关闭 |<br>**④ 续跑的能力边界（2026-09-26 用户拍板按 09-25 的推翻改写；09-24 那版"root 不会重新派子 agent、续跑不会补测"作废）**：续跑能抬预算、带记忆恢复 root、注入新指令，且**会复活被强停的子 agent**（`agent_checkpoint.revive_checkpoint` 在 Strix 启动前把非根 `stopped`／`budget_paused` 翻成 `running` 并清过期预算 flag，2026-09-25 实测三个子 agent 全部复活并真的在探测；机制见 `pitfalls` 条 42）。**尚未实测证明的一环要如实写成"未验证"**：复活且 root 不掐死它们之后，是否真的把缺口记进 coverage、让结论变完整。文档与 UI **不得承诺"续跑能补全覆盖"**，只许说"会让停掉的子任务接着跑，补没补齐看这次的覆盖记录"（`zh-CN.json` 的 `coverage_incomplete.action` 已于 2026-09-26 按此改）。另写明：复活依赖直接改写 Strix 的 `.state/agents.json`（非公开接口），升级 `strix-agent` 时 `test_agent_checkpoint.py` 末四条是预警线 |
-| T30b | `make verify-e2e`（**28 条**）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论** |
+| T30b | `make verify-e2e`（**28 条**）| T30a | `Makefile` `scripts/verify_e2e.sh` | **2** —— 写 shell 断言是本项目**踩过坑**的地方：`pitfalls` 条 18、条 23 末段（"检查都通过" ≠ "被检查的事真发生了"，M0 就这么假绿过一次）。**安全门 6–11、22、25 由我逐条复跑复核，不采信子 agent 的结论**。<br>**2026-09-26 用户拍板拆法**：**T30b1** 不花钱的（1–5、21–24、27、28）→ **T30b2** 一次扫描的整个生命周期（6–13、17–20、25、26）→ **T30b3** 压缩韧性（14）；15、16 做成人工核对清单（脚本只打印步骤）。要花钱的段**只收 `bedrock_sigv4` 凭据、预算默认 $4**（参数可改）。**`make reap`（T30c）：`api` 在跑时只许 `--dry-run`**，要删得先停 api（T11a 交代的安全问题）。**Key 绝不进任何进程的 argv**：`grep "$TEST_KEY"` 在宿主 `ps` 上可见 → 一律 `grep -F -f -` 从 stdin 喂 |
 
 **可并行组**（不共享文件，同批发出）：`T3∥T4`、`T6∥T7`、`T15b∥T16`、`T19∥T20`、`T23∥T25`、`T27∥T28∥T29`。
 **⚠️ 2026-09-16 砍范围后新增一处文件撞车**：T24 的 `raw.zip` 端点也落在 `routes/reports.py`，与 T23 同文件
@@ -1945,7 +1953,7 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
    同时解析到公网与内网的主机名 → `split_horizon`
 4. **授权强制**：缺 `authorization` → 422；`typed_confirmation` 写错 → 409；只勾 2 项 → 422；
    `enforce` 下目标不在白名单 → 409；**直接 `INSERT` 一行 `authorization_id=NULL` → DB 拒绝**
-5. **Key 注册**：垃圾 Key → 400 且 2 秒内中文报错、无 DB 行；真 Key → 201 带掩码标签；
+5. **Key 注册**：垃圾 Key → 400 `key_verify_failed` 且在验活超时（`VERIFY_TIMEOUT_SECONDS`，现 8s）内返回、无 DB 行（**2026-09-26 用户拍板改**：原"2 秒内"取决于到 Bedrock 的网络，本机经防火墙实测 4.1s）；真 Key → 201 带掩码标签；
    `grep -r "$TEST_KEY" $DATA/` → **0 命中**
 6. **发起**：把 `localhost` 加入白名单（`allow_loopback:true`）后发起快速体检、预算 $3。
    `argv_preview` 含 `-n -t http://localhost:13000 -m quick --max-budget-usd 3 …` 且**无 Key**

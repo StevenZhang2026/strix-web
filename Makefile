@@ -1,6 +1,6 @@
 # Strix Web 控制台 —— T0 提供 lock 目标，T2 追加 lock-dev / test / lint。
-# verify-e2e / reap 由 T30 追加。
-.PHONY: lock lock-resolve lock-hash lock-check lock-dev build-test test lint
+# reap 由 T30 追加。
+.PHONY: lock lock-resolve lock-hash lock-check lock-dev build-test test lint verify-e2e
 
 # 基础镜像 digest 从 Dockerfile 抠出来，保持单一真源：
 # 解析环境与安装环境必须是同一个 Python patch 版本和同一个 pip。
@@ -161,3 +161,8 @@ lint-web:
 	  echo "frontend/node_modules 不存在。先跑：(cd frontend && npm ci --registry=https://registry.npmjs.org/)"; \
 	  exit 1; }
 	cd frontend && npm run lint && npm run typecheck
+
+# 端到端验收（PLAN.md §端到端验收）。由人在终端里跑：要登录的检查会用 read -rs 问口令。
+# ONLY="22 23" 只跑列出的几条；TEARDOWN=1 额外跑 21（compose down，拆栈）。
+verify-e2e:
+	./scripts/verify_e2e.sh
