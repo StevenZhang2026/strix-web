@@ -1,4 +1,4 @@
-"""`GET /api/scans/{id}/export/{kind}` 与 `/raw.zip` 的接线测试（T23＋T24）。
+"""`GET /api/scans/{id}/export/{kind}`、`/raw.zip`、`/report/{print,docx}` 的接线测试（T23＋T24＋T23c）。
 
 接线层：正路 + 错误形状。zip 的排除规则在 `test_raw_export.py`，这里不重复。
 """
@@ -19,6 +19,7 @@ from app.settings import Settings
 from tests.conftest import (
     EXEC_OK,
     FINDING_OK,
+    USERNAME,
     insert_authorization,
     insert_scan,
     make_run_dir,
@@ -82,6 +83,38 @@ def test_export_missing_file_is_404(client: TestClient, settings: Settings) -> N
     response = client.get("/api/scans/scan-1/export/csv")
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
+    assert _exported(settings) == []  # 什么都没带走就不记
+
+
+def _exported(settings: Settings) -> list[tuple[str | None, str | None, dict[str, object]]]:
+    with writable_conn(settings) as conn:
+        rows = conn.execute(
+            "SELECT actor, scan_id, detail_json FROM audit_log "
+            "WHERE event = 'report.exported' ORDER BY rowid"
+        ).fetchall()
+    return [(row[0], row[1], json.loads(row[2])) for row in rows]
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        ("export/md", "md"),
+        ("export/csv", "csv"),
+        ("export/sarif", "sarif"),
+        ("raw.zip", "raw_zip"),
+        ("report/print", "print"),
+        ("report/docx", "docx"),
+    ],
+)
+def test_download_records_report_exported(
+    client: TestClient, settings: Settings, path: str, kind: str
+) -> None:
+    run_path = _seed(settings)
+    for name in ("penetration_test_report.md", "vulnerabilities.csv", "findings.sarif"):
+        (run_path / name).write_text("x")
+
+    assert client.get(f"/api/scans/scan-1/{path}").status_code == 200
+    assert _exported(settings) == [(USERNAME, "scan-1", {"kind": kind})]
 
 
 @pytest.mark.parametrize(

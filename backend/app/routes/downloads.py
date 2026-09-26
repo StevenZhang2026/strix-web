@@ -5,6 +5,7 @@ export 把 Strix 在 run 目录根下写好的 md / csv / sarif 原样下发；r
 行不在 → 404；purged → `artifacts_purged`；未到终态 → `scan_not_finished`；无 run_dir → 404。
 report/print 是自包含 HTML 报告；CSP 只放行内联样式与 data: 图片，页面零 JS。
 report/docx 与它同一份取数、同一份措辞（`exporter_html` 的公共件），只是换成 Word 包下载。
+四个路由成功下发前各记一条 `report.exported`（理由见 `services/audit.py` 的事件名说明）。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from fastapi.responses import FileResponse, Response
 
 from app.db import Database
 from app.errors import ArtifactsPurgedError, NotFoundError, ScanNotFinishedError
+from app.routes._context import actor, client_ip
 from app.routes.report import LatestTranslations, latest_translations
 from app.services import audit, raw_export
 from app.services.exporter_docx import render_report_docx
@@ -32,6 +34,7 @@ from app.strix_profile import StrixProfile, profile_for
 router = APIRouter(prefix="/api/scans", tags=["downloads"])
 
 ExportKind = Literal["md", "csv", "sarif"]
+ExportedKind = Literal["md", "csv", "sarif", "raw_zip", "print", "docx"]
 
 REPORT_CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
@@ -51,6 +54,21 @@ def _settings(request: Request) -> Settings:
     if settings is None:
         raise RuntimeError("app.state.settings 不存在。本接口要求 lifespan 已经跑过。")
     return settings
+
+
+async def _audit_exported(request: Request, scan_id: str, kind: ExportedKind) -> None:
+    await audit.record(
+        db=_db(request),
+        audit_dir=_settings(request).audit_dir,
+        entry=audit.AuditEntry(
+            event=audit.EVENT_REPORT_EXPORTED,
+            actor=actor(request),
+            detail={"kind": kind},
+            client_ip=client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            scan_id=scan_id,
+        ),
+    )
 
 
 def _export_spec(profile: StrixProfile, kind: ExportKind, scan_id: str) -> tuple[str, str, str]:
@@ -96,6 +114,7 @@ async def export_file(scan_id: str, kind: ExportKind, request: Request) -> FileR
     path = Path(scan["run_dir"]) / name
     if not await asyncio.to_thread(path.is_file):
         raise NotFoundError()  # 例如没有发现时上游可能不写 csv
+    await _audit_exported(request, scan_id, kind)
     return FileResponse(path, media_type=media_type, filename=filename)
 
 
@@ -104,6 +123,7 @@ async def raw_zip(scan_id: str, request: Request) -> Response:
     await _finished_scan(request, scan_id)
     scan_dir = _settings(request).scans_dir / scan_id  # 即扫描的 cwd（scan_launcher.py:507）
     body = await asyncio.to_thread(raw_export.build_raw_zip, scan_dir)
+    await _audit_exported(request, scan_id, "raw_zip")
     return Response(
         content=body,
         media_type="application/zip",
@@ -177,8 +197,10 @@ async def _report_inputs(request: Request, scan_id: str) -> ReportInputs:
 @router.get("/{scan_id}/report/print")
 async def report_print(scan_id: str, request: Request) -> Response:
     inputs = await _report_inputs(request, scan_id)
+    body = render_report_html(*inputs)
+    await _audit_exported(request, scan_id, "print")
     return Response(
-        content=render_report_html(*inputs),
+        content=body,
         media_type="text/html; charset=utf-8",
         headers={"Content-Security-Policy": REPORT_CSP},
     )
@@ -188,6 +210,7 @@ async def report_print(scan_id: str, request: Request) -> Response:
 async def report_docx(scan_id: str, request: Request) -> Response:
     inputs = await _report_inputs(request, scan_id)
     body = await asyncio.to_thread(render_report_docx, *inputs)
+    await _audit_exported(request, scan_id, "docx")
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

@@ -24,8 +24,11 @@
   → 11 FAIL；M2 录帧器截到 3 帧 → 7 FAIL；M3 检查 9 的筛选去掉 `strix-run-id` 一半 → 9 FAIL（会命中 m0 靶场）。
 - **本轮顺手改了 6 条验收原文**（都是"代码里没有那个值"，一律改验收不改代码）：11 的 containment 在 `bedrock_sigv4`
   下是 0 命中（条 25）、12 的 `exit_meaning: stopped`、13 的 `completed_with_findings`、20 的 `orphaned_running`、
-  25 改用 `/ws/system`、19 的 `report.exported` **T23 根本没实现**（四个下载路由零审计）→ 该格报 MANUAL，
-  补不补审计**待你定**。
+  25 改用 `/ws/system`、19 的 `report.exported` T23 没实现 → **用户拍板补，T23c 已做**（见下条）。
+- **✅ T23c（2026-09-26，主会话直接做，与 T30b2a 并行、文件不重叠）**：`EVENT_REPORT_EXPORTED`＋`downloads._audit_exported`，
+  四个路由在成功下发前各记一条（`export` 记在 `is_file` 之后）；`test_routes_downloads.py` 参数化 6 格 + 404 不记。
+  mutation 2 处：去掉 raw_zip 那条 → 只红 `[raw.zip-raw_zip]`；export 审计挪到 `is_file` 前 → 只红 `missing_file_is_404`。
+  **T30b2b 交底里 19 写成 PASS 断言**（见验收 19 ★）。
 - **api 镜像里没有 `ps`／`strings`／`pgrep`**（只有 `grep`）→ 验收 8 只能 `python` 读 `/proc/*/cmdline`。
 - 之后：T30b2a → T30b2b → T30b3（压缩韧性 14）→ T30c（`make reap`）；15、16 是人工核对清单。
 
@@ -2027,10 +2030,9 @@ Key 只经 `LLM_API_KEY` 注入（已核实 `config/settings.py:27-31`，`valida
 19. **审计**：CSV 含 `authorization.affirmed`（**detail 里含本次被用上的 opt-in**）/`scan.launched`/
     `scan.stopped`/`key.registered`（掩码）/`key.dropped`；
     对 CSV `grep -c "$TEST_KEY"` → **0**
-    ★ **`report.exported` 这一格 2026-09-26 起输出 `MANUAL`，不算 PASS**：T23 没有实现它 —— 四个下载路由
-    （`report/print`、`report/docx`、`export/{kind}`、`raw.zip`）一条审计都不写，`services/audit.py:51-63`
-    的常量表里也没有这个名字（有的是 `report.translated`）。**要么补一条小任务加导出审计，要么删掉这项要求**，
-    待定；在那之前脚本必须如实报 MANUAL 而不是悄悄跳过
+    ★ **`report.exported`（2026-09-26 用户拍板补，T23c）**：脚本对一次已到终态的扫描下一次 `raw.zip`，断言 CSV 里多出恰好
+    一行 `report.exported`、`detail` 为 `{"kind":"raw_zip"}`、`scan_id` 对得上（阳性对照即这一行本身）。四个下载路由
+    成功下发时各记一条，`kind ∈ {md,csv,sarif,raw_zip,print,docx}`；被拒（4xx）不记
     （**2026-09-17 用户拍板改了两处措辞**，T25 收货时对出来的：① 原先点的 `override.loopback_used`
     改成"查 `authorization.affirmed` 的 detail" —— 代码里刻意不发那个事件，理由见 `services/audit.py`
     常量块与本文件 §护栏 那条 ③：放行后 `GuardVerdict.required_opt_in` 必为空，要说出"哪个勾选被用上"

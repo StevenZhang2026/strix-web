@@ -61,6 +61,7 @@ EVENT_SCAN_RESUMED = "scan.resumed"
 EVENT_IMAGE_PULL_STARTED = "image.pull_started"
 EVENT_SCAN_PURGED = "scan.purged"
 EVENT_REPORT_TRANSLATED = "report.translated"
+EVENT_REPORT_EXPORTED = "report.exported"
 """事件名。**字面串只出现在这里**，路由层 import 它们。
 
 集中在本模块而不是各自写在抛出方的路由里：这份名单就是"审计里会出现哪些事件"的全部
@@ -78,7 +79,11 @@ EVENT_REPORT_TRANSLATED = "report.translated"
 的 docstring 预留了这一种）；`detail` 只有 `retention_days` 与被清空的表名，**没有路径** ——
 留存清理删的是产物，而审计本身永不删，它就是"那次扫描曾经存在过"的唯一凭据。
 `report.translated` 是 T21c 加的：后台翻译结束时记一条（成功与异常都记，`outcome` 区分），
-`detail` 只有模型名、计数与费用，**没有译文**。"""
+`detail` 只有模型名、计数与费用，**没有译文**。
+`report.exported` 是 T23c 加的：四个下载路由成功下发时各记一条，`detail` 只有 `kind`
+（md／csv／sarif／raw_zip／print／docx）。它破了 `/api/targets/validate` 那条"只读不记"的例：
+`raw.zip` 里有测试账号口令，是唯一一条把凭据带出控制台的路径 —— "谁、何时带走的"正是
+审计要回答的；另外三种顺带记，口径统一。被拒的请求（4xx）不记：什么都没带走。"""
 
 AuditDetailValue = str | int | float | bool | None | list[str]
 """`detail` 里允许的值域。
