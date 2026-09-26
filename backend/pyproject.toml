@@ -1,6 +1,6 @@
 [project]
 name = "strix-console-backend"
-version = "0.1.0"
+version = "1.0.0"
 requires-python = ">=3.12"
 dependencies = [
     # 精确 pin，绝不放宽成 >= / ~=。理由见 PLAN.md R4：我们依赖

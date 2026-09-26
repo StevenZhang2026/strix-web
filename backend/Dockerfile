@@ -41,7 +41,7 @@ FROM docker:29.7.2-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f3
 #    `--target` 时构建的是 test 阶段。docker-compose.yml 的 api 服务**必须**写
 #    `build: target: runtime`，否则生产容器里会带上 pytest 与 ruff。
 #    这条不靠人记住 —— T30 的 verify-e2e 有一条断言：
-#      docker run --rm strix-console/api:0.1.0 python -c "import pytest"  必须失败
+#      docker run --rm strix-console/api:1.0.0 python -c "import pytest"  必须失败
 #
 # 为什么 Python 依赖是单阶段、不做 builder/venv 拆分：
 #   全部依赖走 --only-binary=:all:，构建期不需要任何编译器或 -dev 头文件，

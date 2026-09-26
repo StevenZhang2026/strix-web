@@ -106,7 +106,7 @@ services:
       # 跑测试是 `docker build --target test` + `docker run --rm`，不走 compose。
       target: runtime
     # 显式 image 名：让 `docker history` / `docker save` 的凭据审计有稳定 tag 可指。
-    image: strix-console/api:0.1.0
+    image: strix-console/api:1.0.0
 
     environment:
       <<: *console-env
@@ -205,7 +205,7 @@ services:
       # `deps` / `build` 阶段带着 node_modules 和全部源码，绝不能因为将来加了一个
       # 阶段就静默变成默认产物。
       target: runtime
-    image: strix-console/web:0.1.0
+    image: strix-console/web:1.0.0
 
     networks:
       # **只有 default**，刻意不加 strix_sandbox。

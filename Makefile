@@ -12,9 +12,9 @@ LOCK := backend/requirements.lock
 PINS_DEV := backend/pins-dev.txt
 LOCK_DEV := backend/requirements-dev.lock
 
-# test stage 的镜像 tag。刻意与生产镜像（strix-console/api:0.1.0）不同名 ——
+# test stage 的镜像 tag。刻意与生产镜像（strix-console/api:1.0.0）不同名 ——
 # 生产镜像里不许有 pytest/ruff，两者混用一个 tag 迟早把测试依赖发到生产。
-IMAGE_TEST := strix-console/api-test:0.1.0
+IMAGE_TEST := strix-console/api-test:1.0.0
 
 # =============================================================================
 # 生成 backend/requirements.lock —— 刻意分成"解析"和"算哈希"两步。
